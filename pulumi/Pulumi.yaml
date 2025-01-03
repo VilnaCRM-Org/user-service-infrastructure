@@ -1,0 +1,10 @@
+name: vilnacrm
+description: An infrastructure template for the AWS using Python
+runtime:
+  name: python
+  options:
+    toolchain: poetry
+config:
+  pulumi:tags:
+    value:
+      pulumi:template: aws-python

@@ -12,5 +12,5 @@ package-mode = false
   pulumi-aws = "^6.58"
   python = "^3.9"
   black = "^24.10.0"
-  flake8 = "^7.1.1"
+  flake8 = "^7.2.0"
   pre-commit = "^4.0.1"

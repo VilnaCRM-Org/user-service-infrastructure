@@ -1,0 +1,5 @@
+encryptionsalt: v1:3vlOB7dXrX8=:v1:WJo9S2jCg3wPkmLP:ZD4ueUU5WqPOTAntnh4dHERXsLUj7g==
+config:
+  vilnacrm:region: eu-central-1
+  vilnacrm:db_password:
+    secure: v1:nFFQTfiNLgtDoY4h:co8D/KmutU+XD9o5bj1lZTt2m/By9AZ//iIbFXGLhYU=

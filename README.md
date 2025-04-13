@@ -73,6 +73,31 @@ Details on how to configure and use a PAT for repository synchronization can be 
 
 For projects that prefer GitHub App authentication, please refer to the [TEMPLATE_SYNC_APP.md](.github/TEMPLATE_SYNC_APP.md) file in the `.github` directory for setup instructions and examples.
 
+## Project structure
+
+```
+project-root/
+├── Pulumi.yaml                # Project metadata for the overall repo
+├── requirements.txt           # All Python dependencies
+├── components/                # Reusable component resources (e.g., VPCs, compute, storage)
+│   ├── __init__.py
+│   ├── network.py             # Networking-related resources
+│   ├── compute.py             # EC2, ECS, or Lambda components
+│   └── storage.py             # S3, RDS, etc.
+├── stacks/                    # Environment-specific deployments
+│   ├── dev/
+│   │   ├── __main__.py        # Imports from ../components and assembles the dev stack
+│   │   ├── Pulumi.dev.yaml    # Dev configuration (secrets, region, etc.)
+│   │   └── config.py          # Optional: shared config for this stack
+│   └── prod/
+│       ├── __main__.py        # Imports from ../components and assembles the prod stack
+│       ├── Pulumi.prod.yaml   # Prod configuration file
+│       └── config.py          # Optional: prod-specific config and variables
+└── shared/                    # Optional directory for common utilities or secrets handling
+    └── common.py
+
+```
+
 ## Security
 Please disclose any vulnerabilities found responsibly – report security issues to the maintainers privately.
 

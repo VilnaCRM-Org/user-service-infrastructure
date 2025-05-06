@@ -1,6 +1,16 @@
 version: 2
 updates:
-  - package-ecosystem: "pip"
-    directory: "pulumi"
+  - package-ecosystem: 'pip'
+    directory: 'pulumi'
     schedule:
-      interval: "weekly"
+      interval: 'weekly'
+    reviewers:
+      - 'Kravalg'
+    groups:
+      all-deps:
+        patterns:
+          - '*'
+    commit-message:
+      prefix: 'feat'
+      prefix-development: 'chore'
+      include: 'scope'

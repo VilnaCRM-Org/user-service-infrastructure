@@ -1,45 +1,132 @@
-# syntax=docker/dockerfile:1
-FROM python:3.11-slim
+# Builder images
+FROM composer/composer:2-bin AS composer
 
-# Set build-time variables for UID and GID with defaults
-ARG UID=1000
-ARG GID=1000
-ARG USERNAME=appuser
+FROM mlocati/php-extension-installer:2.2 AS php_extension_installer
 
-# Install system dependencies as root
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    unzip \
-    gnupg \
-    && rm -rf /var/lib/apt/lists/*
+# Build Caddy with the Mercure and Vulcain modules
+FROM caddy:2.10-builder-alpine AS app_caddy_builder
 
-# Create home directory and set ownership
-RUN mkdir -p /home/${USERNAME} && chown ${UID}:${GID} /home/${USERNAME}
+RUN xcaddy build \
+	--with github.com/dunglas/mercure \
+	--with github.com/dunglas/mercure/caddy \
+	--with github.com/dunglas/vulcain \
+	--with github.com/dunglas/vulcain/caddy
 
-# Set environment variables
-ENV PATH="/home/${USERNAME}/.local/bin:/home/${USERNAME}/.pulumi/bin:${PATH}"
-ENV HOME=/home/${USERNAME}
-WORKDIR /home/${USERNAME}
+# Prod image
+FROM php:8.3.17-fpm-alpine3.20 AS app_php
 
-# Switch to the user with specified UID and GID
-USER ${UID}:${GID}
+# Allow to use development versions of Symfony
+ARG STABILITY="stable"
+ENV STABILITY ${STABILITY}
 
-# Install Pulumi
-RUN curl -fsSL https://get.pulumi.com | bash
+# Allow to select Symfony version
+ARG SYMFONY_VERSION=""
+ENV SYMFONY_VERSION ${SYMFONY_VERSION}
 
-# Install Poetry
-RUN curl -sSL https://install.python-poetry.org | python3 - && \
-    ~/.local/bin/poetry config virtualenvs.in-project true
+ENV APP_ENV=prod
 
-# Install AWS CLI
-RUN mkdir awscliv2 && \
-    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2/awscliv2.zip" && \
-    unzip awscliv2/awscliv2.zip -d awscliv2 && \
-    awscliv2/aws/install --install-dir /home/${USERNAME}/.aws-cli --bin-dir /home/${USERNAME}/.local/bin && \
-    rm -rf awscliv2
+WORKDIR /srv/app
 
-# Verify installations (optional)
-RUN pulumi version && poetry --version && aws --version
+COPY --from=php_extension_installer --link /usr/bin/install-php-extensions /usr/local/bin/
 
-# Set the default command
-CMD ["bash"]
+# persistent / runtime deps
+RUN apk add --no-cache \
+		acl \
+		fcgi \
+		file \
+		gettext \
+		git \
+	;
+
+RUN set -eux; \
+    install-php-extensions \
+        intl \
+        zip \
+        apcu \
+        opcache \
+        pdo_pgsql \
+        redis \
+        openssl \
+        xsl \
+    ;
+
+###> recipes ###
+###< recipes ###
+
+RUN mv "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
+COPY --link infrastructure/docker/php/conf.d/app.ini $PHP_INI_DIR/conf.d/
+COPY --link infrastructure/docker/php/conf.d/app.prod.ini $PHP_INI_DIR/conf.d/
+
+COPY --link infrastructure/docker/php/php-fpm.d/zz-docker.conf /usr/local/etc/php-fpm.d/zz-docker.conf
+RUN mkdir -p /var/run/php
+
+COPY --link infrastructure/docker/php/docker-healthcheck.sh /usr/local/bin/docker-healthcheck
+RUN chmod +x /usr/local/bin/docker-healthcheck
+
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD ["docker-healthcheck"]
+
+COPY --link infrastructure/docker/php/docker-entrypoint.sh /usr/local/bin/docker-entrypoint
+RUN chmod +x /usr/local/bin/docker-entrypoint
+
+ENTRYPOINT ["docker-entrypoint"]
+CMD ["php-fpm"]
+
+# https://getcomposer.org/doc/03-cli.md#composer-allow-superuser
+ENV COMPOSER_ALLOW_SUPERUSER=1
+ENV PATH="${PATH}:/root/.composer/vendor/bin"
+
+COPY --from=composer --link /composer /usr/bin/composer
+
+# prevent the reinstallation of vendors at every changes in the source code
+COPY --link composer.* symfony.* ./
+RUN set -eux; \
+    if [ -f composer.json ]; then \
+		composer install --prefer-dist --no-dev --no-autoloader --no-scripts --no-progress; \
+		composer clear-cache; \
+    fi
+
+# copy sources
+COPY --link  . ./
+RUN rm -Rf infrastructure/docker/
+
+RUN set -eux; \
+	mkdir -p var/cache var/log; \
+    if [ -f composer.json ]; then \
+		composer dump-autoload --classmap-authoritative --no-dev; \
+		composer dump-env prod; \
+		composer run-script --no-dev post-install-cmd; \
+		chmod +x bin/console; sync; \
+    fi
+
+# Dev image
+FROM app_php AS app_php_dev
+
+RUN apk add --no-cache bash
+RUN curl -1sLf 'https://dl.cloudsmith.io/public/symfony/stable/setup.alpine.sh' | bash
+RUN apk add symfony-cli
+RUN apk add --no-cache make
+
+ENV APP_ENV=dev XDEBUG_MODE=off
+VOLUME /srv/app/var/
+
+RUN rm "$PHP_INI_DIR/conf.d/app.prod.ini"; \
+	mv "$PHP_INI_DIR/php.ini" "$PHP_INI_DIR/php.ini-production"; \
+	mv "$PHP_INI_DIR/php.ini-development" "$PHP_INI_DIR/php.ini"
+
+COPY --link infrastructure/docker/php/conf.d/app.dev.ini $PHP_INI_DIR/conf.d/
+
+RUN set -eux; \
+	install-php-extensions xdebug
+
+RUN git config --global --add safe.directory /srv/app
+
+RUN rm -f .env.local.php
+
+# Caddy image
+FROM caddy:2.10-alpine AS app_caddy
+
+WORKDIR /srv/app
+
+COPY --from=app_caddy_builder --link /usr/bin/caddy /usr/bin/caddy
+COPY --from=app_php --link /srv/app/public public/
+COPY --link infrastructure/docker/caddy/Caddyfile /etc/caddy/Caddyfile

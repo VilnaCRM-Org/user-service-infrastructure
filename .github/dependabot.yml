@@ -3,7 +3,7 @@ updates:
   - package-ecosystem: 'pip'
     directory: '/pulumi'
     schedule:
-      interval: 'weekly'
+      interval: 'monthly'
     reviewers:
       - 'Kravalg'
     groups:

@@ -11,13 +11,15 @@ By configuring a GitHub App, you can automate repository synchronization while e
 ### Steps Overview
 
 1. **GitHub App Configuration**:
-    -  Create and configure the GitHub App with the required permissions (`Administration`, `Contents`, `Issues`, `Metadata`, and `Pull Requests`).
+
+   - Create and configure the GitHub App with the required permissions (`Administration`, `Contents`, `Issues`, `Metadata`, and `Pull Requests`).
 
 2. **Repository Secrets**:
-    - Configure secrets for the private key and App ID.
+
+   - Configure secrets for the private key and App ID.
 
 3. **Branch Protection Rules**:
-    - Set branch protection rules to allow force pushing by the GitHub App.
+   - Set branch protection rules to allow force pushing by the GitHub App.
 
 ### GitHub Action Configuration
 
@@ -28,7 +30,7 @@ name: Template Sync
 
 on:
   schedule:
-    - cron: "0 9 * * MON"
+    - cron: '0 9 * * MON'
   workflow_dispatch:
 
 jobs:

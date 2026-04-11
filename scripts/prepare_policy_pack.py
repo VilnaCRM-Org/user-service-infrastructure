@@ -18,7 +18,7 @@ def _link_policy_venv(policy_venv: Path, policy_link: Path) -> None:
         print(
             (
                 "hint: remove the existing path and rerun "
-                "python3 scripts/prepare_policy_pack.py"
+                "uv run python scripts/prepare_policy_pack.py"
             ),
             file=sys.stderr,
         )

@@ -10,6 +10,7 @@ from _script_support import (
     discover_stacks,
     ensure_empty_passphrase_for_file_backend,
     ensure_file_backend_directory,
+    find_uv_binary,
     repo_root,
     run,
 )
@@ -95,8 +96,14 @@ def main() -> int:
     env.setdefault("PULUMI_BACKEND_URL", backend_url)
     env = ensure_empty_passphrase_for_file_backend(env)
     ensure_file_backend_directory(backend_url)
+    uv_bin = find_uv_binary()
     run(
-        [sys.executable, str(root_dir / "scripts" / "prepare_policy_pack.py")],
+        [
+            uv_bin,
+            "run",
+            "python",
+            str(root_dir / "scripts" / "prepare_policy_pack.py"),
+        ],
         cwd=root_dir,
         env=env,
     )
@@ -148,7 +155,7 @@ def main() -> int:
 
         summary = run(
             [
-                "uv",
+                uv_bin,
                 "--project",
                 str(root_dir),
                 "run",

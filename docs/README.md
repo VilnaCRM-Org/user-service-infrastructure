@@ -191,7 +191,7 @@ Continuous integration runs automatically on every pull request. You can also va
   `GITHUB_TOKEN="$(gh auth token)"` explicitly to the preview-oriented target
   you are running instead of exporting it globally.
 - `make pulumi-preview` to review planned resources before applying.
-- `make pulumi-up` followed by `pulumi stack output` to inspect applied results.
+- `make pulumi-up` followed by `pulumi -C pulumi stack output` to inspect applied results.
 - GitHub Actions mirrors `make ci-pr` through the `Pulumi Local Test Battery` workflow, while mutation remains isolated in `pulumi-mutation.yml`.
 - `Pulumi PR Guardrails` and `Security Scans` also expose their focused Make entrypoints as dedicated CI checks.
 

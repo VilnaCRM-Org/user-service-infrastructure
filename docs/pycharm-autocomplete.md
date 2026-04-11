@@ -10,14 +10,16 @@ an interpreter on disk.
 
 1. Install the latest versions of Docker Desktop (or Docker Engine) and Docker
    Compose.
-2. From the repository root, build the container and start it in the background:
+2. From the repository root, use the shared bootstrap target to build the
+   container and start it in the background:
 
    ```bash
-   docker compose up --build -d
+   make start
    ```
 
    The compose file defines a single service named `pulumi`. It mounts the
-   repository into `/workspace` inside the container.
+   repository into `/workspace` inside the container, and `make start` mirrors
+   the same workspace preparation used by CI and other local workflows.
 
 3. (Optional) To drop into a shell inside the running container, use:
 

@@ -502,6 +502,7 @@ def test_run_pulumi_drift_check_main_handles_skip_and_success_paths(
     pulumi_dir.mkdir(parents=True)
     policy_dir = repo_dir / "policy"
     policy_dir.mkdir()
+    monkeypatch.setattr(module, "find_uv_binary", lambda: "uv")
     monkeypatch.setenv("PULUMI_BACKEND_URL", "file:///workspace/.pulumi-backend")
     assert module.main() == 0
     assert "Skipping drift detection" in capsys.readouterr().out
@@ -523,7 +524,8 @@ def test_run_pulumi_drift_check_main_handles_skip_and_success_paths(
     calls.clear()
     monkeypatch.setattr(module, "discover_stacks", lambda *args: ["dev"])
     assert module.main() == 0
-    assert calls[0][0] == sys.executable
+    assert calls[0][:3] == ["uv", "run", "python"]
+    assert "prepare_policy_pack.py" in calls[0][-1]
     assert calls[1][:5] == [
         "pulumi",
         "--cwd",
@@ -531,8 +533,7 @@ def test_run_pulumi_drift_check_main_handles_skip_and_success_paths(
         "login",
         "--non-interactive",
     ]
-    assert calls[2][3:6] == ["stack", "select", "dev"]
-    assert "--expect-no-changes" in calls[3]
+    assert "--expect-no-changes" in calls[2]
 
 
 def test_run_pulumi_preview_main_handles_empty_and_successful_runs(
@@ -550,6 +551,7 @@ def test_run_pulumi_preview_main_handles_empty_and_successful_runs(
     (preview_dir / "stale.json").write_text("{}", encoding="utf-8")
     (preview_dir / "summary.md").write_text("old summary\n", encoding="utf-8")
     monkeypatch.setattr(module, "repo_root", lambda _: repo_dir)
+    monkeypatch.setattr(module, "find_uv_binary", lambda: "uv")
     monkeypatch.delenv("PULUMI_BACKEND_URL", raising=False)
     monkeypatch.delenv("PULUMI_CONFIG_PASSPHRASE", raising=False)
 
@@ -605,7 +607,7 @@ def test_run_pulumi_preview_main_handles_empty_and_successful_runs(
         for _, env, _ in run_calls
     )
     assert any(
-        len(command) > 1 and "prepare_policy_pack.py" in str(command[1])
+        any("prepare_policy_pack.py" in str(part) for part in command)
         for command, _, _ in run_calls
     )
     assert any(

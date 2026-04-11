@@ -233,7 +233,7 @@ def test_prepare_docker_context_script_creates_expected_files(tmp_path: Path) ->
     )
 
     subprocess.run(
-        ["python3", str(PREPARE_SCRIPT)],
+        ["uv", "run", "python", str(PREPARE_SCRIPT)],
         check=True,
         cwd=repo_dir,
         env={**os.environ, "HOME": str(home_dir)},
@@ -263,7 +263,7 @@ def test_prepare_docker_context_script_preserves_existing_env_file(
     (repo_dir / ".env").write_text("LOCAL=value\n", encoding="utf-8")
 
     subprocess.run(
-        ["python3", str(PREPARE_SCRIPT)],
+        ["uv", "run", "python", str(PREPARE_SCRIPT)],
         check=True,
         cwd=repo_dir,
         env={**os.environ, "HOME": str(home_dir)},
@@ -288,7 +288,7 @@ def test_prepare_docker_context_script_rejects_non_regular_env_path(
     (repo_dir / ".env").symlink_to(target_file)
 
     result = subprocess.run(
-        ["python3", str(PREPARE_SCRIPT)],
+        ["uv", "run", "python", str(PREPARE_SCRIPT)],
         check=False,
         cwd=repo_dir,
         capture_output=True,
@@ -316,7 +316,7 @@ def test_prepare_docker_context_script_rejects_symlinked_backend_dir(
     (repo_dir / ".pulumi-backend").symlink_to(backend_target, target_is_directory=True)
 
     result = subprocess.run(
-        ["python3", str(PREPARE_SCRIPT)],
+        ["uv", "run", "python", str(PREPARE_SCRIPT)],
         check=False,
         cwd=repo_dir,
         capture_output=True,
@@ -337,7 +337,7 @@ def test_prepare_docker_context_script_requires_env_template(tmp_path: Path) -> 
     repo_dir.mkdir()
 
     result = subprocess.run(
-        ["python3", str(PREPARE_SCRIPT)],
+        ["uv", "run", "python", str(PREPARE_SCRIPT)],
         check=False,
         cwd=repo_dir,
         capture_output=True,

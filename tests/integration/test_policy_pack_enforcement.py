@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -71,7 +72,7 @@ def _preview_with_policy_pack(work_dir: Path) -> subprocess.CompletedProcess[str
     }
 
     subprocess.run(
-        ["python3", str(PREPARE_POLICY_PACK)],
+        [sys.executable, str(PREPARE_POLICY_PACK)],
         check=True,
         cwd=PROJECT_ROOT,
         env=env,

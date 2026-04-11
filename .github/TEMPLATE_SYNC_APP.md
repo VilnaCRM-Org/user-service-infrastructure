@@ -79,7 +79,7 @@ jobs:
         with:
           github_token: ${{ steps.generate_token.outputs.token }}
           source_repo_path: <owner/repo> # e.g., "VilnaCRM-Org/infrastructure-template"
-          upstream_branch: <target_branch> # defaults to main, e.g., "master"
+          upstream_branch: <target_branch> # defaults to main, e.g., "main"
           pr_labels: <label1>,<label2>[,...] # optional, e.g., "sync,automated"
           pr_title: "chore: sync with template repository" # optional, customize as needed
 

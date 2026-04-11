@@ -90,6 +90,6 @@ When you're finished with the changes, create a pull request, also known as a PR
 
 ### Your PR is merged
 
-Congratulations :tada::tada: The our team thanks you :sparkles:.
+Congratulations :tada::tada: Our team thanks you :sparkles:.
 
-Now that you are part of the php service template community.
+Now that you are part of the user service infrastructure community.

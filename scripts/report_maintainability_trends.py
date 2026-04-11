@@ -43,7 +43,7 @@ def main() -> int:
         )
         return 0
 
-    if wily_cache_dir.exists():
+    if wily_cache_dir.exists() or wily_cache_dir.is_symlink():
         if wily_cache_dir.is_symlink() or not wily_cache_dir.is_dir():
             wily_cache_dir.unlink()
         else:

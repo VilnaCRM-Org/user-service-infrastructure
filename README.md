@@ -1,4 +1,4 @@
-# Infrastructure Template for Modern DevOps applications
+# User Service Infrastructure
 
 [![SWUbanner](https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/banner2-direct.svg)](https://supportukrainenow.org/)
 
@@ -12,7 +12,9 @@
 [![Python Quality Checks](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/python-quality.yml/badge.svg)](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/python-quality.yml)
 [![Security Scans](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/security-scans.yml/badge.svg)](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/security-scans.yml)
 
-Production-ready scaffold for teams that want to ship infrastructure-as-code with Pulumi and Docker from day zero.
+Pulumi-based infrastructure repository for the VilnaCRM user service, with a
+Docker workspace, policy-pack guardrails, and CI checks aligned with the shared
+infrastructure template.
 
 ## Possibilities
 

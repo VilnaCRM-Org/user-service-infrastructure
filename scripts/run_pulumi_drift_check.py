@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from _script_support import discover_stacks, repo_root, run
+from _script_support import discover_stacks, find_uv_binary, repo_root, run
 
 
 def main() -> int:
@@ -26,13 +26,19 @@ def main() -> int:
         return 0
 
     env = os.environ.copy()
+    uv_bin = find_uv_binary()
     stacks = discover_stacks(pulumi_dir, env.get("PULUMI_DRIFT_STACKS"))
     if not stacks:
         print("error: no Pulumi stacks configured for drift detection", file=sys.stderr)
         return 1
 
     run(
-        [sys.executable, str(root_dir / "scripts" / "prepare_policy_pack.py")],
+        [
+            uv_bin,
+            "run",
+            "python",
+            str(root_dir / "scripts" / "prepare_policy_pack.py"),
+        ],
         cwd=root_dir,
         env=env,
     )
@@ -44,18 +50,6 @@ def main() -> int:
 
     for stack in stacks:
         print(f"Checking drift for stack {stack}")
-        run(
-            [
-                "pulumi",
-                "--cwd",
-                str(pulumi_dir),
-                "stack",
-                "select",
-                stack,
-                "--non-interactive",
-            ],
-            env=env,
-        )
         run(
             [
                 "pulumi",

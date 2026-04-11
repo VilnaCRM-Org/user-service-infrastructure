@@ -1,2 +1,2 @@
 ignored:
-  - DL3059
+  - DL3059  # The Dockerfile has many RUN instructions; we intentionally skip per-layer description metadata.

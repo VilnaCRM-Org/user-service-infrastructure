@@ -1,43 +1,53 @@
-# Autorelease action
+# Autorelease Action
 
 ## Overview
-Auto-release workflows automate the process of creating software releases in response to specific triggers like merging a pull request or pushing to a certain branch. This automation helps streamline the development process, reduce human error, and ensure consistent release practices.
 
----
-## Why You Might Need Auto-Release
-Consistency: Automating the release process ensures that every release adheres to predefined standards and procedures, reducing the risk of human error and inconsistency in the release quality.
+This repository publishes stable releases from Git tags instead of committing a
+version bump back to the protected default branch. The first stable release must
+be seeded manually. After that, the GitHub Actions autorelease workflow can tag
+the next version and create the matching GitHub release automatically.
 
-Efficiency: By automating the changelog generation and release process, teams can save time and focus on development and testing rather than on the operational details of creating a release.
+## Why This Flow Exists
 
-Integration: Auto-release workflows can be integrated with other tools and workflows, such as continuous integration (CI) systems, to ensure that releases are made only when all tests pass, maintaining the quality of the code in the production.
+The default branch is protected by pull-request, code-scanning, and code-quality
+rules. A release workflow that tries to commit `CHANGELOG.md` or a bumped
+version file directly to `main` will fail under those rules. Tag-only releases
+avoid rewriting protected history while still producing deterministic versioned
+artifacts.
 
-Traceability: Automated releases include detailed logs and changelogs, providing a clear audit trail for changes, which is beneficial for debugging and understanding the project’s history.
+## Release Model
 
-Speed: Automation speeds up the process of releasing and deploying software, which is especially crucial in high-paced agile environments where multiple releases might occur in a single day.
+1. Seed the first stable release manually.
+   Use the commit you want to treat as the first stable release and publish a
+   GitHub release with a semver tag such as `v0.2.0`.
+2. Let autorelease derive the next version from Git tags.
+   The workflow uses the latest stable semver tag as the current version source.
+3. Publish later releases automatically.
+   Every subsequent qualifying push to `main` can create the next tag and the
+   matching GitHub release without committing back to the branch.
 
----
-## Setting Up an Auto-Release Workflow
-### Step-by-Step Guide
-#### 1) The GitHub App configuration
+## Workflow Behavior
 
-Let's start by creating and configuring a GitHub App. Go to Settings > Developer Settings > GitHub Apps (Developer Settings is at the bottom of the Settings page). Click on New GitHub App.
+- `push` on `main` runs the normal production autorelease flow.
+- The workflow does not update `pyproject.toml` or `CHANGELOG.md` in Git.
+- The workflow pushes only tags and then creates the GitHub release body from
+  the generated changelog text.
 
-Once you are creating a new GitHub app, make sure to configure the following:
+## Token Requirements
 
-    Complete the necessary details for the application.
-    Uncheck the active webhook.
-    From the Repository Permissions, set the following:
-        Administration to Read and Write.
-        Contents to Read and Write.
-        Issues to Read and Write.
-        Metadata to Read Only.
-        Pull Requests to Read and Write.
-    Check Install Only on this account.
-Once you have created the app, you need to install it on the repository you want to use it. Follow GitHub's guide on installing your apps to repositories you own.
-One more thing you need to do from the app's settings. Go to the app's settings and generate a new private key. Copy that private key to a safe place and then copy the app ID. You will need both values as repository secrets.
-You can easily find ID here(Settings > Application > configure your github APP > app settings > you can see app id)
-#### 2) The GitHub repository configuration
-Go to Settings > Secrets and Variables > Actions to create new secrets. Add one secret for the private key(VILNACRM_APP_PRIVATE_KEY) and another for the app ID(VILNACRM_APP_ID).
-#### 3) Allow force push
-To configure the repository branch protection rules, go to Settings > Branches.
-Check the option to Allow force pushes and specify that the only allowed actor is the GitHub app you already installed.
+The workflow uses `REPO_GITHUB_TOKEN` when present and falls back to the
+repository-scoped `GITHUB_TOKEN`. The token needs `contents: write` so it can
+push tags and publish releases.
+
+## Manual Seed Release
+
+If the repository has historical tags without GitHub releases, clean that state
+up before enabling automatic stable releases:
+
+1. Delete any stray tag that points to an unpublished failed workflow commit.
+2. Create the first stable release manually from the intended default-branch
+   commit.
+3. Verify the new release tag is now the latest stable semver tag.
+
+After that seed release exists, the autorelease workflow can advance from that
+tag automatically.

@@ -1,0 +1,6 @@
+config:
+  aws:region: eu-central-1
+  user-service-infrastructure:amiId: ami-xxxxxxxxxxxxxxxxx
+  user-service-infrastructure:instanceType: t3.micro
+  user-service-infrastructure:nameTag: ExampleAppServerInstance
+encryptionsalt: v1:qYONAe8CNuE=:v1:O/82qsM01J5T8f4Z:Mv3YegCs1m8ZsFtRrMRXmaZ45Qk2sQ==

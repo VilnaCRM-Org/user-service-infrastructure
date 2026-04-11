@@ -1,116 +1,154 @@
+# User Service Infrastructure
+
 [![SWUbanner](https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/banner2-direct.svg)](https://supportukrainenow.org/)
 
-# Infrastructure template for modern DevOps applications
+[![Pulumi Unit Tests](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/pulumi-unit.yml/badge.svg)](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/pulumi-unit.yml)
+[![Pulumi Integration Tests](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/pulumi-integration.yml/badge.svg)](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/pulumi-integration.yml)
+[![Pulumi Structural Tests](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/pulumi-structural.yml/badge.svg)](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/pulumi-structural.yml)
+[![Pulumi Policy Tests](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/pulumi-policy.yml/badge.svg)](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/pulumi-policy.yml)
+[![Pulumi PR Guardrails](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/pulumi-pr-guardrails.yml/badge.svg)](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/pulumi-pr-guardrails.yml)
+[![Pulumi Mutation Tests](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/pulumi-mutation.yml/badge.svg)](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/pulumi-mutation.yml)
+[![CLI Tests](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/bats-tests.yml/badge.svg)](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/bats-tests.yml)
+[![Python Quality Checks](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/python-quality.yml/badge.svg)](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/python-quality.yml)
+[![Security Scans](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/security-scans.yml/badge.svg)](https://github.com/VilnaCRM-Org/user-service-infrastructure/actions/workflows/security-scans.yml)
+
+Pulumi-based infrastructure repository for the VilnaCRM user service, with a
+Docker workspace, policy-pack guardrails, and CI checks aligned with the shared
+infrastructure template.
 
 ## Possibilities
-- Modern stack for services: [Pulumi](https://www.pulumi.com)
-- Built-in docker environment and convenient `make` cli command
-- A lot of CI checks to ensure the highest code quality that can be (linters and other terraform related checks)
-- Configured testing tools
-- Much more!
 
-## Why you might need it
-Many DevOps engineers need to create new projects from scratch and spend a lot of time.
+- Pulumi (Python) starter that exports environment metadata and tagging helpers.
+- Reproducible Docker Compose workspace with a Pulumi-ready container and helper `make` tasks.
+- CI pipelines for structural, policy, preview, security, unit, integration, mutation, and CLI-level checks.
+- Release and template-sync automations to keep downstream repos aligned.
+- Documentation on AWS credential management for secure automation using GitHub OIDC and short-lived credentials.
 
-We decided to simplify this exhausting process and create a public template for modern infrastructures. This template is used for all our microservices in VilnaCRM.
+## Why You Might Need It
+
+Operate the user-service infrastructure without rewiring every guardrail by hand. This repository gives DevOps teams a single source that:
+
+- Encodes best practices from VilnaCRM’s production stack.
+- Works out-of-the-box with AWS and Pulumi.
+- Keeps infrastructure changes reviewable with local Pulumi previews, policy-pack guardrails, and CI test suites before deploying.
 
 ## License
-This software is distributed under the [Creative Commons Zero v1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/deed) license. Please read [LICENSE](https://github.com/VilnaCRM-Org/infrastructure-template/blob/main/LICENSE) for information on the software availability and distribution.
 
-### Minimal installation
-You can clone this repository locally or use Github functionality "Use this template"
-
-Install the latest [docker](https://docs.docker.com/engine/install/) and [docker compose](https://docs.docker.com/compose/install/)
-
-Use `make` command to set up project and automatically install all needed dependencies
-> make start
-
-Check [Getting started](https://www.pulumi.com/docs/iac/get-started/aws/review-project/) section to manage your infrastructure
-
-That's it. You should now be ready to use infrastructure template!
-
-## Using
-You can use `make` command to easily control and work with project locally.
-
-Execute `make` or `make help` to see the full list of project commands.
-
-The list of the `make` possibilities:
-
-```
-build           Builds the images (PHP, caddy)
-down            Stop the docker hub
-pulumi          Pulumi enables you to safely and predictably create, change, and improve infrastructure.
-sh              Log to the docker container
-start           Docker container with terraspace and terraform
-up              Start the container for development
-```
+This software is distributed under the [Creative Commons Zero v1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/deed) license. Please read [`LICENSE`](LICENSE) for details.
 
 ## Documentation
-Start reading at the [GitHub wiki](https://github.com/VilnaCRM-Org/infrastructure-template/wiki). If you're having trouble, head for [the troubleshooting guide](https://github.com/VilnaCRM-Org/infrastructure-template/wiki/Troubleshooting) as it's frequently updated.
 
-If the documentation doesn't cover what you need, search the [many questions on Stack Overflow](http://stackoverflow.com/questions/tagged/vilnacrm), and before you ask a question, [read the troubleshooting guide](https://github.com/VilnaCRM-Org/infrastructure-template/wiki/Troubleshooting).
+All project docs live under `docs/` to keep everything version controlled. Start with the handbook and jump directly to common topics:
 
-## Tests
-[Test status](https://github.com/VilnaCRM-Org/infrastructure-template/actions)
+- [Quick Start](docs/README.md#quick-start)
+- [Local Tooling](docs/README.md#local-tooling)
+- [Development Environment](docs/README.md#development)
+- [PyCharm Autocomplete](docs/pycharm-autocomplete.md)
+- [CI/CD and Secrets](docs/README.md#cicd-and-secrets)
+- [CI Quality Gates](docs/ci-quality-gates.md)
+- [CI Guardrails](docs/ci-guardrails.md)
+- [CI Architecture](docs/ci-architecture.md)
+- [Security Baseline](docs/security-baseline.md)
+- [Pulumi Guardrails](docs/pulumi-guardrails.md)
+- [uv and Rust-native Python tooling](docs/uv-rust-python-tooling-plan.md)
+- [SRE Operations](docs/sre-operations.md)
+- [Testing and Validation](docs/README.md#testing-and-validation)
+- [Security](docs/README.md#security)
+- [Contributing](docs/README.md#contributing)
+- [Sponsorship](docs/README.md#sponsorship)
 
-If this isn't passing, is there something you can do to help?
+Community Q&A lives under the [`vilnacrm` tag on Stack Overflow](https://stackoverflow.com/questions/tagged/vilnacrm). For questions or feature requests, open an issue.
 
-## Repository Synchronization
+## Local Pulumi test suites
 
-This template is automatically synchronized with other repositories in our ecosystem. Whenever changes are made to the template, those changes are propagated to dependent projects, ensuring they stay up to date with the latest improvements and best practices.
+Docker Compose CLI 2.24.0+ is required because `docker-compose.yml` uses the
+`env_file.required` flag (older Compose releases fail to parse it).
 
-The synchronization is powered by the [actions-template-sync](https://github.com/AndreasAugustin/actions-template-sync) GitHub Action, which automates the process of propagating updates from this template to other projects.
+## Environment files
 
-### Handling Workflow Permissions Error
+The Makefile resolves the effective env file as the first existing file from
+`.env` and `.env.empty`.
 
-When setting up the repository synchronization, you may encounter permission-related issues. Below are two methods to resolve common workflow permissions errors: using a Personal Access Token (PAT) or using a GitHub App.
+- `.env` is git-ignored and should hold local secrets or developer-specific overrides.
+- `.env.empty` is committed and acts as the minimal fallback so Docker Compose and `make` targets still run in a fresh clone.
+- `.env.dist` remains an optional example/template file you can copy from when you want a fuller starting point; unlike `.env.empty`, it is not the automatic fallback used by the Makefile.
 
-#### Option 1: Using a Personal Access Token (PAT)
+For onboarding, create or update `.env` with any local overrides you need, keep
+`.env.empty` safe to commit, and refresh `.env.dist` only when the example
+values or documented setup flow changes.
 
-Details on how to configure and use a PAT for repository synchronization can be found in the [TEMPLATE_SYNC_PAT.md](.github/TEMPLATE_SYNC_PAT.md) file inside the `.github` directory.
+If you want a local `uv` environment outside Docker, seed it once so Pulumi's
+Automation API can still use `pip` for package discovery:
 
-#### Option 2: Using a GitHub App
-
-For projects that prefer GitHub App authentication, please refer to the [TEMPLATE_SYNC_APP.md](.github/TEMPLATE_SYNC_APP.md) file in the `.github` directory for setup instructions and examples.
-
-## Project structure
-
+```sh
+export UV_PROJECT_ENVIRONMENT="${HOME}/.venvs/user-service-infrastructure"
+uv venv --seed "${UV_PROJECT_ENVIRONMENT}"
+uv sync --all-groups
 ```
-project-root/
-├── Pulumi.yaml                # Project metadata for the overall repo
-├── requirements.txt           # All Python dependencies
-├── components/                # Reusable component resources (e.g., VPCs, compute, storage)
-│   ├── __init__.py
-│   ├── network.py             # Networking-related resources
-│   ├── compute.py             # EC2, ECS, or Lambda components
-│   └── storage.py             # S3, RDS, etc.
-├── stacks/                    # Environment-specific deployments
-│   ├── dev/
-│   │   ├── __main__.py        # Imports from ../components and assembles the dev stack
-│   │   ├── Pulumi.dev.yaml    # Dev configuration (secrets, region, etc.)
-│   │   └── config.py          # Optional: shared config for this stack
-│   └── prod/
-│       ├── __main__.py        # Imports from ../components and assembles the prod stack
-│       ├── Pulumi.prod.yaml   # Prod configuration file
-│       └── config.py          # Optional: prod-specific config and variables
-└── shared/                    # Optional directory for common utilities or secrets handling
-    └── common.py
 
+The Docker workspace already ships with an isolated seeded environment outside
+the bind-mounted repository tree, so the `make` targets remain the recommended
+way to run the different Pulumi-focused suites (see `docker-compose.yml` for
+the canonical workspace layout):
+
+```sh
+# Build the dev image used by the local and CI batteries
+make build
+
+# Configuration validation
+make test-pulumi
+
+# Rust-based quality gates
+make test-quality
+
+# Pulumi policy and guardrail validation
+make test-policy
+
+# Unit tests (pure Pulumi runtime with mocks)
+make test-unit
+
+# Automation-based integration tests
+make test-integration
+
+# Mutation analysis (time-consuming)
+make test-mutation
+```
+
+Use the local batteries that match the scope of your change:
+
+- `make test` runs the faster structural, policy, quality, repo-hygiene, unit, integration, coverage, and CLI battery.
+- `make test-security` and `make test-guardrails` focus on infrastructure safety controls.
+- `make ci-pr` mirrors the non-mutation GitHub pull-request battery before merge.
+- `make ci` runs the full local superset, including the prerequisite check, image build, preview guardrails, security scans, and mutation suite.
+- `make report-quality` generates the scheduled Wily, Vulture, docstring-coverage, and SBOM reports locally.
+
+If Pulumi provider plugin downloads hit GitHub rate limits during local preview
+or drift commands, pass `GITHUB_TOKEN="$(gh auth token)"` explicitly to that
+single Make invocation instead of exporting it globally.
+
+Run `make doctor` when you need a fast prerequisite check before debugging local
+Docker or Compose behavior.
+
+`make pulumi-preview` and `make pulumi-up` automatically enable the repository
+policy pack. If the shared `uv` environment inside the container is missing
+core Pulumi Python dependencies, the bootstrap helper resyncs it from
+`uv.lock` before Pulumi starts. The policy runtime is refreshed separately in
+`policy/.venv` from `policy/requirements.txt` so Pulumi starts the policy pack
+consistently in Docker, CI, and local shells. The interactive Pulumi targets
+also log into the configured backend automatically, falling back to the local
+file backend under `.pulumi-backend/` when no shared backend is configured,
+select the first committed `Pulumi.<stack>.yaml` file by default, and expect
+shared backends to use an AWS KMS-backed secrets provider instead of a
+passphrase-managed stack secret flow.
+
+The default Docker service is intentionally credential-light. When a local
+command needs shared AWS config from `~/.aws` or host-exported `AWS_*`
+variables, opt in explicitly with `ENABLE_AWS_CREDENTIALS=1`, for example:
+
+```sh
+ENABLE_AWS_CREDENTIALS=1 make pulumi-preview
 ```
 
 ## Security
+
 Please disclose any vulnerabilities found responsibly – report security issues to the maintainers privately.
-
-See [SECURITY](https://github.com/VilnaCRM-Org/infrastructure-template/tree/main/SECURITY.md) and [Security advisories on GitHub](https://github.com/VilnaCRM-Org/infrastructure-template/security).
-
-## Contributing
-Please submit bug reports, suggestions, and pull requests to the [GitHub issue tracker](https://github.com/VilnaCRM-Org/infrastructure-template/issues).
-
-We're particularly interested in fixing edge cases, expanding test coverage, and updating translations.
-
-If you found a mistake in the docs, or want to add something, go ahead and amend the wiki – anyone can edit it.
-
-## Sponsorship
-Development time and resources for this repository are provided by [VilnaCRM](https://vilnacrm.com/), the free and opensource CRM system.
-
-Donations are very welcome, whether in beer 🍺, T-shirts 👕, or cold, hard cash 💰. Sponsorship through GitHub is a simple and convenient way to say "thank you" to maintainers and contributors – just click the "Sponsor" button [on the project page](https://github.com/VilnaCRM-Org/infrastructure-template). If your company uses this template, consider taking part in the VilnaCRM's enterprise support program.

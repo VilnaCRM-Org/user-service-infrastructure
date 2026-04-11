@@ -1,21 +1,58 @@
-version: '3.8'
+x-pulumi-base: &pulumi-base
+  build:
+    context: .
+    dockerfile: Dockerfile
+    target: ${COMPOSE_TARGET:-dev}
+    args:
+      UID: "${UID:-1000}"
+      GID: "${GID:-1000}"
+      USERNAME: "dev"
+  working_dir: /workspace
+  volumes:
+    - type: bind
+      source: .
+      target: /workspace
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    - PULUMI_ACCESS_TOKEN
+    - PULUMI_BACKEND_URL
+    - PYTHONPATH=/workspace/pulumi
+  tty: true
+  stdin_open: true
 
 services:
-  app:
+  pulumi:
+    <<: *pulumi-base
+
+  # Opt in to this service only for commands that intentionally need host AWS
+  # config or host-exported AWS_* variables inside the container.
+  pulumi-aws:
+    <<: *pulumi-base
     build:
       context: .
       dockerfile: Dockerfile
+      target: ${COMPOSE_TARGET:-dev}
       args:
         UID: "${UID:-1000}"
         GID: "${GID:-1000}"
-        USERNAME: "${USER:-appuser}"
+        USERNAME: "dev"
     volumes:
-      - ./pulumi:/home/${USER}/project
-    working_dir: /home/${USER}/project
+      - type: bind
+        source: .
+        target: /workspace
+      - type: bind
+        source: "${HOME}/.aws"
+        target: "/home/dev/.aws"
+        read_only: true
     environment:
-      - USER
+      - PULUMI_ACCESS_TOKEN
+      - PULUMI_BACKEND_URL
       - AWS_ACCESS_KEY_ID
       - AWS_SECRET_ACCESS_KEY
       - AWS_SESSION_TOKEN
-    tty: true
-    stdin_open: true
+      - AWS_PROFILE
+      - AWS_REGION
+      - AWS_DEFAULT_REGION
+      - PYTHONPATH=/workspace/pulumi

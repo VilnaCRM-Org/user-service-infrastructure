@@ -1,0 +1,17 @@
+# Legacy historical findings from old template-sync commits that added a tracked
+# Symfony example `.env`. These fingerprints scope the ignore to inherited git
+# history only and do not relax scanning for current files.
+01ca9b0aaa1bb5a175d863c7902a87080de08d9b:.env:generic-api-key:3
+2202333c377d92f8e83212e85598b6a306847788:.env:generic-api-key:3
+23a567f68a7636d87ebcdf749c3941d2acba8c93:.env:generic-api-key:3
+3515f82186f02a2f2627f508577b308e61817ba6:.env:generic-api-key:3
+415bc42cc3e62cbef2748b10be8a9af1ce9f3631:.env:generic-api-key:3
+689093542546ccb4ebf3a6d98393c6a31876b7d9:.env:generic-api-key:3
+6fb3e291f65dccc3ad0e05568335eb73d7d0e9fc:.env:generic-api-key:3
+78440fcb097d50decf3c4ff5e87479c8729333be:.env:generic-api-key:3
+94802aac87cc39e5d8e040bb59d3b3b99b3ba063:.env:generic-api-key:3
+d099c26db5f6729f7a7522a24d4976c6aa200295:.env:generic-api-key:3
+e11b2d7e23c219c4aa560c2e75cd2274fba0d371:.env:generic-api-key:3
+ea41cbc7d211065655626c66b68fe4759fb42304:.env:generic-api-key:3
+eb47a5002ee2214913eb38948968b353cc495653:.env:generic-api-key:3
+f6865832caded599472e506384ef46c3dd84e8b6:.env:generic-api-key:3

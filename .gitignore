@@ -1,1 +1,17 @@
 .idea
+.venv/
+pulumi/.venv/
+# The policy bootstrap may materialize either a symlink or a directory here.
+policy/.venv
+policy/.venv/
+.env
+.ruff_cache/
+.tmp.importlinter.toml
+__pycache__/
+*.py[cod]
+.mutmut-cache
+.pulumi-backend/
+.artifacts/
+.pulumi-home/
+.coverage*
+!.coveragerc

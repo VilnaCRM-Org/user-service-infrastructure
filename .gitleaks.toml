@@ -1,0 +1,10 @@
+title = "user-service-infrastructure gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Allow the legacy Symfony example APP_SECRET that only exists in historical .env commits."
+condition = "AND"
+paths = ['''^\.env$''']
+regexes = ['''^APP_SECRET=2e222659c5b006df8d0e68cc33913706$''']

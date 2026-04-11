@@ -1,0 +1,4 @@
+config:
+  user-service-infrastructure:environment: dev
+  user-service-infrastructure:serviceName: user-service-infrastructure
+encryptionsalt: v1:pql7l6GqniM=:v1:HwvqtBlUIl+FsBp/:jWoOPxy3f+I5XI5c2ya3Z40+N65V1w==

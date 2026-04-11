@@ -26,7 +26,7 @@ infrastructure template.
 
 ## Why You Might Need It
 
-Spin up consistent project infrastructure without wiring every component manually. This template gives DevOps teams a single source that:
+Operate the user-service infrastructure without rewiring every guardrail by hand. This repository gives DevOps teams a single source that:
 
 - Encodes best practices from VilnaCRM’s production stack.
 - Works out-of-the-box with AWS and Pulumi.
@@ -140,6 +140,14 @@ file backend under `.pulumi-backend/` when no shared backend is configured,
 select the first committed `Pulumi.<stack>.yaml` file by default, and expect
 shared backends to use an AWS KMS-backed secrets provider instead of a
 passphrase-managed stack secret flow.
+
+The default Docker service is intentionally credential-light. When a local
+command needs shared AWS config from `~/.aws` or host-exported `AWS_*`
+variables, opt in explicitly with `ENABLE_AWS_CREDENTIALS=1`, for example:
+
+```sh
+ENABLE_AWS_CREDENTIALS=1 make pulumi-preview
+```
 
 ## Security
 

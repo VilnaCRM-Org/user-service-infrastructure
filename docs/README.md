@@ -1,4 +1,4 @@
-# Infrastructure Template Documentation
+# User Service Infrastructure Documentation
 
 We follow a docs-as-code workflow: every guide lives alongside the source and evolves through pull requests. Update or add files in this folder whenever you change the infrastructure template so future readers stay aligned with the repository.
 
@@ -37,7 +37,10 @@ We follow a docs-as-code workflow: every guide lives alongside the source and ev
    make start
    ```
 
-5. Configure your AWS credentials (for example via `aws configure`, environment variables, or GitHub Actions secrets).
+5. Configure AWS credentials only for commands that intentionally need shared
+   AWS access. The default Docker service stays credential-light; use
+   `ENABLE_AWS_CREDENTIALS=1` when you want the container to mount `~/.aws` and
+   pass through host `AWS_*` variables.
 6. Run a preview from inside the container to validate infrastructure changes:
 
    ```bash
@@ -92,8 +95,7 @@ uv, Ruff, Ty).
 - [PyCharm autocomplete guide](pycharm-autocomplete.md) — shows how to attach
   PyCharm to the Docker Compose interpreter or create a local virtualenv
   fallback.
-- `docker compose up --build -d` launches the workspace; `docker compose down`
-  stops it.
+- `make start` launches the workspace; `make down` stops it.
 
 ## Python Tooling
 

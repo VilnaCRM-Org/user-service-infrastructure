@@ -92,7 +92,14 @@ assert_help_target() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"./scripts/prepare_docker_context.py"* ]]
   assert_compose_env_file
-  [[ "$output" == *"up -d"* ]]
+  [[ "$output" == *"up -d pulumi"* ]]
+}
+
+@test "make start can opt into the AWS-enabled compose service" {
+  run make -n start ENABLE_AWS_CREDENTIALS=1
+  [ "$status" -eq 0 ]
+  assert_compose_env_file
+  [[ "$output" == *"up -d pulumi-aws"* ]]
 }
 
 @test "make build builds the Pulumi development image" {
@@ -134,6 +141,7 @@ assert_help_target() {
   [ "$status" -eq 0 ]
   assert_compose_env_file
   [[ "$output" == *"-e GITHUB_TOKEN"* ]]
+  [[ "$output" == *"-e PULUMI_STACK"* ]]
   [[ "$output" != *"ghs_test_token"* ]]
   [[ "$output" == *"stack select"* ]]
   [[ "$output" == *"./scripts/prepare_policy_pack.py"* ]]
@@ -141,10 +149,18 @@ assert_help_target() {
   [[ "$output" == *"--policy-pack /workspace/policy"* ]]
 }
 
+@test "make pulumi-preview passes PULUMI_STACK via environment instead of shell interpolation" {
+  run make -n pulumi-preview "PULUMI_STACK=dev'; printf INJECTED >&2; #"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"-e PULUMI_STACK"* ]]
+  [[ "$output" != *"INJECTED"* ]]
+}
+
 @test "make pulumi-up executes deployment inside container" {
   run make -n pulumi-up
   [ "$status" -eq 0 ]
   assert_compose_env_file
+  [[ "$output" == *"-e PULUMI_STACK"* ]]
   [[ "$output" == *"stack select"* ]]
   [[ "$output" == *"./scripts/prepare_policy_pack.py"* ]]
   [[ "$output" == *"pulumi --cwd pulumi up --stack"* ]]
@@ -156,6 +172,7 @@ assert_help_target() {
   [ "$status" -eq 0 ]
   assert_compose_env_file
   [[ "$output" == *"-e GITHUB_TOKEN"* ]]
+  [[ "$output" == *"-e PULUMI_STACK"* ]]
   [[ "$output" != *"ghs_test_token"* ]]
   [[ "$output" == *"stack select"* ]]
   [[ "$output" != *"--create --non-interactive"* ]]
@@ -167,6 +184,7 @@ assert_help_target() {
   [ "$status" -eq 0 ]
   assert_compose_env_file
   [[ "$output" == *"-e GITHUB_TOKEN"* ]]
+  [[ "$output" == *"-e PULUMI_STACK"* ]]
   [[ "$output" != *"ghs_test_token"* ]]
   [[ "$output" == *"stack select"* ]]
   [[ "$output" != *"--create --non-interactive"* ]]
@@ -180,11 +198,11 @@ assert_help_target() {
   [[ "$output" == *"run --rm pulumi sh"* ]]
 }
 
-@test "make down stops docker compose without depending on the env file" {
+@test "make down stops docker compose with the selected env file" {
   run make -n down
   [ "$status" -eq 0 ]
-  [[ "$output" == *"docker compose down"* ]]
-  [[ "$output" != *"--env-file"* ]]
+  assert_compose_env_file
+  [[ "$output" == *" down"* ]]
 }
 
 @test "make test-unit executes the unit suite with coverage" {
@@ -473,7 +491,8 @@ assert_help_target() {
 @test "make clean removes compose state and Python build artifacts" {
   run make -n clean
   [ "$status" -eq 0 ]
-  [[ "$output" == *"docker compose down -v"* ]]
+  assert_compose_env_file
+  [[ "$output" == *" down -v"* ]]
   [[ "$output" == *"find . -type d -name __pycache__"* ]]
   [[ "$output" == *"find . -type f -name \"*.pyc\""* ]]
   [[ "$output" == *"rm -rf .venv policy/.venv dist build *.egg-info"* ]]

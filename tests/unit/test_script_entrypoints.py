@@ -181,6 +181,15 @@ def test_prepare_docker_context_main_bootstraps_and_rejects_invalid_env(
     assert ".env.empty not found" in capsys.readouterr().err
 
     (repo_dir / ".env.empty").write_text("KEY=value\n", encoding="utf-8")
+    template_target = tmp_path / "template.env"
+    template_target.write_text("TARGET=value\n", encoding="utf-8")
+    (repo_dir / ".env.empty").unlink()
+    (repo_dir / ".env.empty").symlink_to(template_target)
+    assert module.main() == 1
+    assert ".env.empty must be a regular file" in capsys.readouterr().err
+    (repo_dir / ".env.empty").unlink()
+    (repo_dir / ".env.empty").write_text("KEY=value\n", encoding="utf-8")
+
     target_env = tmp_path / "target.env"
     target_env.write_text("TARGET=value\n", encoding="utf-8")
     (repo_dir / ".env").symlink_to(target_env)
@@ -364,6 +373,7 @@ def test_report_maintainability_trends_main_handles_git_and_wily_paths(
     monkeypatch.setenv("ROOT_DIR", str(repo_dir))
     monkeypatch.setenv("QUALITY_ARTIFACT_DIR", "reports")
     monkeypatch.setenv("WILY_TARGETS", "pulumi,policy")
+    monkeypatch.setattr(module, "find_uv_binary", lambda: "uv")
 
     skip_results = iter(
         [
@@ -608,6 +618,11 @@ def test_run_pulumi_preview_main_handles_empty_and_successful_runs(
     )
     assert any(
         any("prepare_policy_pack.py" in str(part) for part in command)
+        for command, _, _ in run_calls
+    )
+    assert any(
+        command[:3] == ["uv", "--project", str(repo_dir)]
+        and any("prepare_policy_pack.py" in str(part) for part in command)
         for command, _, _ in run_calls
     )
     assert any(

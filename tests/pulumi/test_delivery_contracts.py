@@ -181,9 +181,10 @@ def test_dockerfile_pins_base_image_and_verifies_downloads() -> None:
 
 
 def test_docker_compose_keeps_workspace_and_credentials_contract() -> None:
-    """Keep the local container contract stable for developers and CI."""
+    """Keep the default workspace credential-light and the AWS path opt-in."""
     compose = yaml.safe_load(DOCKER_COMPOSE.read_text(encoding="utf-8"))
     service = compose["services"]["pulumi"]
+    aws_service = compose["services"]["pulumi-aws"]
 
     assert service["build"]["context"] == "."
     assert service["build"]["dockerfile"] == "Dockerfile"
@@ -200,15 +201,21 @@ def test_docker_compose_keeps_workspace_and_credentials_contract() -> None:
         volume["source"] == "." and volume["target"] == "/workspace"
         for volume in volumes
     )
+    assert not any(volume["target"] == "/home/dev/.aws" for volume in volumes)
+
+    assert service["env_file"] == [{"path": ".env", "required": False}]
+    assert service["environment"] == [
+        "PULUMI_ACCESS_TOKEN",
+        "PULUMI_BACKEND_URL",
+        "PYTHONPATH=/workspace/pulumi",
+    ]
     assert any(
         volume["source"] == "${HOME}/.aws"
         and volume["target"] == "/home/dev/.aws"
         and volume["read_only"] is True
-        for volume in volumes
+        for volume in aws_service["volumes"]
     )
-
-    assert service["env_file"] == [{"path": ".env", "required": False}]
-    assert service["environment"] == [
+    assert aws_service["environment"] == [
         "PULUMI_ACCESS_TOKEN",
         "PULUMI_BACKEND_URL",
         "AWS_ACCESS_KEY_ID",
@@ -350,6 +357,32 @@ def test_prepare_docker_context_script_requires_env_template(tmp_path: Path) -> 
     assert "error: .env.empty not found" in result.stderr
 
 
+def test_prepare_docker_context_script_rejects_symlinked_env_template(
+    tmp_path: Path,
+) -> None:
+    """Fail fast when the committed fallback env template is a symlink."""
+    home_dir = tmp_path / "home"
+    repo_dir = tmp_path / "repo"
+    template_target = tmp_path / "template.env"
+    home_dir.mkdir()
+    repo_dir.mkdir()
+    template_target.write_text("DEFAULT=value\n", encoding="utf-8")
+    (repo_dir / ".env.empty").symlink_to(template_target)
+
+    result = subprocess.run(
+        ["uv", "run", "python", str(PREPARE_SCRIPT)],
+        check=False,
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "HOME": str(home_dir)},
+        timeout=30,
+    )
+
+    assert result.returncode != 0
+    assert "error: .env.empty must be a regular file" in result.stderr
+
+
 def test_prepare_policy_pack_script_uses_shared_uv_environment() -> None:
     """Keep policy-pack bootstrap aligned with the shared uv-managed interpreter."""
     script_text = PREPARE_POLICY_SCRIPT.read_text(encoding="utf-8")
@@ -393,6 +426,7 @@ def test_new_helper_scripts_keep_local_ci_behaviour_explicit() -> None:
     assert 'root_dir = Path(os.environ.get("ROOT_DIR"' in wily_script
     assert "quality_artifact_dir = Path(" in wily_script
     assert "if not quality_artifact_dir.is_absolute()" in wily_script
+    assert "find_uv_binary" in wily_script
     assert '"git", "rev-parse", "--verify", "HEAD"' in wily_script
     assert "Wily maintainability report skipped" in wily_script
     assert "PULUMI_REQUIRE_SHARED_BACKEND" in preview_summary_script
@@ -455,13 +489,18 @@ def test_makefile_keeps_pulumi_guardrails_secret_safe() -> None:
         "--non-interactive >/dev/null; "
         'pulumi $(PULUMI_CWD_FLAG) destroy --stack "$$stack"'
     )
-    guardrail_runs = "$(COMPOSE_GITHUB_TOKEN) $(COMPOSE_SERVICE) bash -lc"
+    direct_guardrail_runs = "$(COMPOSE_GITHUB_TOKEN) $(COMPOSE_SERVICE) bash -lc"
+    stack_guardrail_runs = (
+        "$(COMPOSE_GITHUB_TOKEN) $(COMPOSE_PULUMI_STACK) $(COMPOSE_SERVICE) bash -lc"
+    )
 
     assert "GITHUB_TOKEN='$(GITHUB_TOKEN)'" not in makefile_text
     assert "export GITHUB_TOKEN" in makefile_text
+    assert "export PULUMI_STACK" in makefile_text
     assert refresh_select in makefile_text
     assert destroy_select in makefile_text
-    assert makefile_text.count(guardrail_runs) >= 6
+    assert makefile_text.count(direct_guardrail_runs) >= 2
+    assert makefile_text.count(stack_guardrail_runs) == 4
 
 
 def test_bats_suite_covers_every_public_make_target() -> None:

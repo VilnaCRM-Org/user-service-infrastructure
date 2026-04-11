@@ -39,11 +39,15 @@ jobs:
       - name: Validate drift detection prerequisites
         run: |
           missing=()
+          mapfile -t stack_files < <(find pulumi -maxdepth 1 -type f -name 'Pulumi.*.yaml' ! -name 'Pulumi.yaml')
           if [[ -z "${{ vars.AWS_OIDC_ROLE_ARN }}" ]]; then
             missing+=("vars.AWS_OIDC_ROLE_ARN")
           fi
           if [[ -z "${PULUMI_BACKEND_URL}" ]]; then
             missing+=("vars.PULUMI_BACKEND_URL")
+          fi
+          if [[ -z "${PULUMI_DRIFT_STACKS}" && ${#stack_files[@]} -eq 0 ]]; then
+            missing+=("vars.PULUMI_DRIFT_STACKS or committed pulumi/Pulumi.<stack>.yaml")
           fi
           if [[ ${#missing[@]} -gt 0 ]]; then
             printf 'error: nightly drift detection requires %s\n' "${missing[*]}" >&2

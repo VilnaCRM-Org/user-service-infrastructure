@@ -100,6 +100,8 @@ def main() -> int:
     run(
         [
             uv_bin,
+            "--project",
+            str(root_dir),
             "run",
             "python",
             str(root_dir / "scripts" / "prepare_policy_pack.py"),

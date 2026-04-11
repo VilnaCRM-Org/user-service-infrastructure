@@ -5,7 +5,7 @@ import os
 import shutil
 from pathlib import Path
 
-from _script_support import repo_root, run, split_values
+from _script_support import find_uv_binary, repo_root, run, split_values
 
 
 def main() -> int:
@@ -20,6 +20,7 @@ def main() -> int:
         quality_artifact_dir = root_dir / quality_artifact_dir
 
     wily_targets = split_values(os.environ.get("WILY_TARGETS", "pulumi policy scripts"))
+    uv_bin = find_uv_binary()
     wily_cache_dir = quality_artifact_dir / "wily-cache"
     wily_report = quality_artifact_dir / "wily-rank.txt"
 
@@ -51,7 +52,7 @@ def main() -> int:
 
     run(
         [
-            "uv",
+            uv_bin,
             "run",
             "wily",
             "--path",
@@ -68,7 +69,7 @@ def main() -> int:
 
     result = run(
         [
-            "uv",
+            uv_bin,
             "run",
             "wily",
             "--path",

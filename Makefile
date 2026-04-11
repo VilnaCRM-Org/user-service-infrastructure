@@ -2,7 +2,8 @@
 PROJECT            = user-service-infrastructure
 ENV_FILE           = .env
 EMPTY_ENV_FILE     = .env.empty
-COMPOSE_SERVICE   ?= pulumi
+ENABLE_AWS_CREDENTIALS ?=
+COMPOSE_SERVICE   ?= $(if $(filter 1 true TRUE yes YES on ON,$(ENABLE_AWS_CREDENTIALS)),pulumi-aws,pulumi)
 PULUMI_DIR        ?= pulumi
 EFFECTIVE_ENV_FILE := $(firstword $(wildcard $(ENV_FILE)) $(wildcard $(EMPTY_ENV_FILE)))
 
@@ -20,6 +21,7 @@ DOCKER_COMPOSE    = docker compose
 COMPOSE_ENV_FLAG  = $(if $(COMPOSE_ENV_FILE),--env-file $(COMPOSE_ENV_FILE),)
 COMPOSE           = $(DOCKER_COMPOSE) $(COMPOSE_ENV_FLAG)
 COMPOSE_GITHUB_TOKEN = $(if $(GITHUB_TOKEN),-e GITHUB_TOKEN,)
+COMPOSE_PULUMI_STACK = -e PULUMI_STACK
 REPO_PYTHON      ?= python3
 PULUMI_CWD_FLAG   = --cwd $(PULUMI_DIR)
 POLICY_PACK_DIR   = /workspace/policy
@@ -68,6 +70,7 @@ TOTAL_COVERAGE_ENV        = -e COVERAGE_FILE=/workspace/.coverage.total \
 
 pulumi-preview pulumi-up pulumi-refresh pulumi-destroy test-preview \
 test-destructive-diff test-iam-validation test-drift: export GITHUB_TOKEN := $(GITHUB_TOKEN)
+pulumi-preview pulumi-up pulumi-refresh pulumi-destroy: export PULUMI_STACK := $(PULUMI_STACK)
 
 all: help ## Display help (default goal).
 
@@ -83,28 +86,28 @@ build: ## Build the Pulumi development image used by local and CI checks.
 
 start: ## Prepare the Docker-backed workspace and start the Pulumi development environment.
 	$(REPO_PYTHON) ./scripts/prepare_docker_context.py
-	$(COMPOSE) up -d
+	$(COMPOSE) up -d $(COMPOSE_SERVICE)
 
 publish-pulumi-preview-summary: ## Generate Pulumi preview artifacts and publish the summary for CI.
 	$(REPO_PYTHON) ./scripts/publish_pulumi_preview_summary.py
 
 pulumi-preview: ## Preview infrastructure changes from inside the Pulumi container.
-	@$(COMPOSE) run --rm $(COMPOSE_GITHUB_TOKEN) $(COMPOSE_SERVICE) bash -lc '$(PULUMI_LOGIN_CMD); stack="$${PULUMI_STACK:-$(PULUMI_STACK)}"; if [ -z "$$stack" ]; then echo "error: set PULUMI_STACK or commit pulumi/Pulumi.<stack>.yaml" >&2; exit 1; fi; pulumi $(PULUMI_CWD_FLAG) stack select "$$stack" --create --non-interactive >/dev/null; $(REPO_PYTHON) ./scripts/prepare_policy_pack.py && pulumi $(PULUMI_CWD_FLAG) preview --stack "$$stack" $(POLICY_PACK_FLAG)'
+	@$(COMPOSE) run --rm $(COMPOSE_GITHUB_TOKEN) $(COMPOSE_PULUMI_STACK) $(COMPOSE_SERVICE) bash -lc '$(PULUMI_LOGIN_CMD); stack="$${PULUMI_STACK:-}"; if [ -z "$$stack" ]; then echo "error: set PULUMI_STACK or commit pulumi/Pulumi.<stack>.yaml" >&2; exit 1; fi; pulumi $(PULUMI_CWD_FLAG) stack select "$$stack" --create --non-interactive >/dev/null; $(REPO_PYTHON) ./scripts/prepare_policy_pack.py && pulumi $(PULUMI_CWD_FLAG) preview --stack "$$stack" $(POLICY_PACK_FLAG)'
 
 pulumi-up: ## Apply the current Pulumi infrastructure plan.
-	@$(COMPOSE) run --rm $(COMPOSE_GITHUB_TOKEN) $(COMPOSE_SERVICE) bash -lc '$(PULUMI_LOGIN_CMD); stack="$${PULUMI_STACK:-$(PULUMI_STACK)}"; if [ -z "$$stack" ]; then echo "error: set PULUMI_STACK or commit pulumi/Pulumi.<stack>.yaml" >&2; exit 1; fi; pulumi $(PULUMI_CWD_FLAG) stack select "$$stack" --create --non-interactive >/dev/null; $(REPO_PYTHON) ./scripts/prepare_policy_pack.py && pulumi $(PULUMI_CWD_FLAG) up --stack "$$stack" $(POLICY_PACK_FLAG)'
+	@$(COMPOSE) run --rm $(COMPOSE_GITHUB_TOKEN) $(COMPOSE_PULUMI_STACK) $(COMPOSE_SERVICE) bash -lc '$(PULUMI_LOGIN_CMD); stack="$${PULUMI_STACK:-}"; if [ -z "$$stack" ]; then echo "error: set PULUMI_STACK or commit pulumi/Pulumi.<stack>.yaml" >&2; exit 1; fi; pulumi $(PULUMI_CWD_FLAG) stack select "$$stack" --create --non-interactive >/dev/null; $(REPO_PYTHON) ./scripts/prepare_policy_pack.py && pulumi $(PULUMI_CWD_FLAG) up --stack "$$stack" $(POLICY_PACK_FLAG)'
 
 pulumi-refresh: ## Sync the Pulumi stack with live cloud resources.
-	@$(COMPOSE) run --rm $(COMPOSE_GITHUB_TOKEN) $(COMPOSE_SERVICE) bash -lc '$(PULUMI_LOGIN_CMD); stack="$${PULUMI_STACK:-$(PULUMI_STACK)}"; if [ -z "$$stack" ]; then echo "error: set PULUMI_STACK or commit pulumi/Pulumi.<stack>.yaml" >&2; exit 1; fi; pulumi $(PULUMI_CWD_FLAG) stack select "$$stack" --non-interactive >/dev/null; pulumi $(PULUMI_CWD_FLAG) refresh --stack "$$stack"'
+	@$(COMPOSE) run --rm $(COMPOSE_GITHUB_TOKEN) $(COMPOSE_PULUMI_STACK) $(COMPOSE_SERVICE) bash -lc '$(PULUMI_LOGIN_CMD); stack="$${PULUMI_STACK:-}"; if [ -z "$$stack" ]; then echo "error: set PULUMI_STACK or commit pulumi/Pulumi.<stack>.yaml" >&2; exit 1; fi; pulumi $(PULUMI_CWD_FLAG) stack select "$$stack" --non-interactive >/dev/null; pulumi $(PULUMI_CWD_FLAG) refresh --stack "$$stack"'
 
 pulumi-destroy: ## Tear down the Pulumi stack (irreversible; use with caution).
-	@$(COMPOSE) run --rm $(COMPOSE_GITHUB_TOKEN) $(COMPOSE_SERVICE) bash -lc '$(PULUMI_LOGIN_CMD); stack="$${PULUMI_STACK:-$(PULUMI_STACK)}"; if [ -z "$$stack" ]; then echo "error: set PULUMI_STACK or commit pulumi/Pulumi.<stack>.yaml" >&2; exit 1; fi; pulumi $(PULUMI_CWD_FLAG) stack select "$$stack" --non-interactive >/dev/null; pulumi $(PULUMI_CWD_FLAG) destroy --stack "$$stack"'
+	@$(COMPOSE) run --rm $(COMPOSE_GITHUB_TOKEN) $(COMPOSE_PULUMI_STACK) $(COMPOSE_SERVICE) bash -lc '$(PULUMI_LOGIN_CMD); stack="$${PULUMI_STACK:-}"; if [ -z "$$stack" ]; then echo "error: set PULUMI_STACK or commit pulumi/Pulumi.<stack>.yaml" >&2; exit 1; fi; pulumi $(PULUMI_CWD_FLAG) stack select "$$stack" --non-interactive >/dev/null; pulumi $(PULUMI_CWD_FLAG) destroy --stack "$$stack"'
 
 sh: ## Open a shell inside the Pulumi container.
 	$(COMPOSE) run --rm $(COMPOSE_SERVICE) sh
 
 down: ## Stop the Docker Compose environment.
-	$(DOCKER_COMPOSE) down
+	$(COMPOSE) down
 
 test-unit: ## Execute fast unit tests for the Pulumi application layer.
 	rm -f .coverage.unit .coverage.unit.*
@@ -316,7 +319,7 @@ ci: ## Run the full local equivalent of all GitHub checks, including mutation.
 	$(MAKE) test-mutation
 
 clean: ## Remove Docker Compose artifacts, Python caches, and build artifacts.
-	$(DOCKER_COMPOSE) down -v 2>/dev/null || true
+	$(COMPOSE) down -v 2>/dev/null || true
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
 	rm -rf .venv policy/.venv dist build *.egg-info 2>/dev/null || true

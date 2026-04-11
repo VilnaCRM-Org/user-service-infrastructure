@@ -22,6 +22,27 @@ def _is_regular_directory_path(path: Path, label: str) -> bool:
     return True
 
 
+def _bootstrap_env_file(env_path: Path, empty_env_path: Path) -> bool:
+    if env_path.is_symlink() or (env_path.exists() and not env_path.is_file()):
+        print("error: .env must be a regular file", file=sys.stderr)
+        return False
+
+    if env_path.exists():
+        return True
+
+    if empty_env_path.is_symlink() or (
+        empty_env_path.exists() and not empty_env_path.is_file()
+    ):
+        print("error: .env.empty must be a regular file", file=sys.stderr)
+        return False
+    if not empty_env_path.is_file():
+        print("error: .env.empty not found; cannot bootstrap .env", file=sys.stderr)
+        return False
+
+    shutil.copyfile(empty_env_path, env_path)
+    return True
+
+
 def main() -> int:
     home_dir = Path.home()
     repo_dir = Path.cwd()
@@ -34,15 +55,8 @@ def main() -> int:
         return 1
     _ensure_dir(aws_path, 0o700)
 
-    if env_path.is_symlink() or (env_path.exists() and not env_path.is_file()):
-        print("error: .env must be a regular file", file=sys.stderr)
+    if not _bootstrap_env_file(env_path, empty_env_path):
         return 1
-
-    if not env_path.exists():
-        if not empty_env_path.is_file():
-            print("error: .env.empty not found; cannot bootstrap .env", file=sys.stderr)
-            return 1
-        shutil.copyfile(empty_env_path, env_path)
 
     os.chmod(env_path, stat.S_IRUSR | stat.S_IWUSR)
     if not _is_regular_directory_path(backend_dir, ".pulumi-backend"):

@@ -44,6 +44,10 @@ jobs, `make start` standardizes the expected local state:
 - prepares the `.pulumi-backend` directory used by local-backend test flows
 - starts the Compose service so later `make` targets share the same prepared workspace
 
+The default Compose service does not mount `${HOME}/.aws` into the container.
+Use `ENABLE_AWS_CREDENTIALS=1` only for commands that intentionally need shared
+AWS config or host-exported `AWS_*` variables inside Docker.
+
 Centralizing the setup keeps workflows consistent and reduces drift between
 checks.
 

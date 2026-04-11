@@ -1,10 +1,12 @@
-"""An AWS Python Pulumi program"""
+"""Pulumi entrypoint that exports baseline stack metadata."""
+
+from app import EnvironmentSettings
 
 import pulumi
-from pulumi_aws import s3
 
-# Create an AWS resource (S3 Bucket)
-bucket = s3.BucketV2("my-bucket")
+settings = EnvironmentSettings("environment-settings")
 
-# Export the name of the bucket
-pulumi.export("bucket_name", bucket.id)
+pulumi.export("environment", settings.environment)
+pulumi.export("serviceName", settings.service_name)
+pulumi.export("stackTag", settings.stack_tag)
+pulumi.export("defaultTags", settings.default_tags)

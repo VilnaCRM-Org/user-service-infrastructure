@@ -8,11 +8,11 @@ rules:
     level: error # Enforce strict indentation
 
   line-length:
-    max: 120
-    level: warning # Consider changing this to 100 for better readability
+    max: 100
+    level: warning # Standard line length for better readability
 
   new-line-at-end-of-file:
-    level: warning
+    level: error
 
   trailing-spaces:
     level: error # Enforce no trailing spaces
@@ -32,3 +32,26 @@ rules:
 
   colons:
     level: error # Enforce proper colon usage
+
+  # Pulumi-specific configurations
+  truthy:
+    allowed-values: ["true", "false", "yes", "no"]
+    check-keys: false # Allow truthy values in keys for Pulumi configs
+
+  key-duplicates:
+    level: error # Prevent duplicate keys in Pulumi configs
+
+  comments:
+    min-spaces-from-content: 1
+    level: warning
+
+  quoted-strings:
+    quote-type: any # Allow both single and double quotes for flexibility
+    required: only-when-needed
+    level: warning
+
+# Ignore patterns for Pulumi-generated or sensitive files
+ignore: |
+  pulumi/.pulumi/
+  pulumi/Pulumi.*.yaml
+  !pulumi/Pulumi.example.yaml

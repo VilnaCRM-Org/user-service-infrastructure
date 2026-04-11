@@ -83,6 +83,11 @@ def test_pyproject_declares_quality_tooling_contracts() -> None:
     ] == ["app.environment"]
     assert contracts["Pulumi app layering remains one-way"]["containers"] == ["app"]
     assert contracts["Pulumi app layering remains one-way"]["layers"] == [
+        "stack",
+        "compute",
+        "data",
+        "messaging",
+        "network",
         "environment",
         "guardrails",
     ]

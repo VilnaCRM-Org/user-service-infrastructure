@@ -109,7 +109,7 @@ allowed_importers = ["app.environment"]
 name = "Pulumi app layering remains one-way"
 type = "layers"
 containers = ["app"]
-layers = ["environment", "guardrails"]
+layers = ["stack", "compute", "data", "messaging", "network", "environment", "guardrails"]
 
 [[tool.importlinter.contracts]]
 name = "Policy pack stays behind the policy entrypoint"

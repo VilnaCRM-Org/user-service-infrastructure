@@ -1,6 +1,12 @@
 config:
   aws:region: eu-central-1
-  user-service-infrastructure:amiId: ami-xxxxxxxxxxxxxxxxx
-  user-service-infrastructure:instanceType: t3.micro
-  user-service-infrastructure:nameTag: ExampleAppServerInstance
-encryptionsalt: v1:qYONAe8CNuE=:v1:O/82qsM01J5T8f4Z:Mv3YegCs1m8ZsFtRrMRXmaZ45Qk2sQ==
+  user-service-infrastructure:deploymentMode: managed
+  user-service-infrastructure:environment: prod
+  user-service-infrastructure:serviceName: user-service
+  user-service-infrastructure:accessLogsBucketName: shared-alb-access-logs
+  user-service-infrastructure:apiBaseUrl: https://users.example.com
+  user-service-infrastructure:apiUrl: https://users.example.com
+  user-service-infrastructure:corsAllowOrigin: ^https://users\.example\.com$
+  user-service-infrastructure:certificateArn: arn:aws:acm:eu-central-1:123456789012:certificate/example
+  user-service-infrastructure:webImageTag: 2026.04.12
+  user-service-infrastructure:workerImageTag: 2026.04.12

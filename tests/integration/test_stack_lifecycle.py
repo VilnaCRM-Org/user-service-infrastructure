@@ -51,7 +51,7 @@ def _workspace_options(work_dir: Path) -> auto.LocalWorkspaceOptions:
 
 
 def test_pulumi_stack_preview_and_up_cycle(tmp_path: Path) -> None:
-    """Validate preview/up/destroy behavior for the baseline stack."""
+    """Validate preview/up/destroy behavior for the credential-free preview stack."""
     work_dir = _copy_workdir(tmp_path, name="pulumi-program")
 
     stack = auto.create_or_select_stack(
@@ -61,6 +61,7 @@ def test_pulumi_stack_preview_and_up_cycle(tmp_path: Path) -> None:
     )
     stack.set_config("environment", auto.ConfigValue(value="integration"))
     stack.set_config("serviceName", auto.ConfigValue(value="integration-test"))
+    stack.set_config("deploymentMode", auto.ConfigValue(value="preview"))
 
     try:
         preview_result = stack.preview()
@@ -68,15 +69,31 @@ def test_pulumi_stack_preview_and_up_cycle(tmp_path: Path) -> None:
 
         up_result = stack.up()
 
+        assert up_result.outputs["deploymentMode"].value == "preview"
         assert up_result.outputs["stackTag"].value == "integration-test-integration"
         assert up_result.outputs["serviceName"].value == "integration-test"
         assert up_result.outputs["environment"].value == "integration"
+        assert up_result.outputs["region"].value == "eu-central-1"
         assert up_result.outputs["defaultTags"].value == {
             "Project": "integration-test",
             "Environment": "integration",
             "Owner": "platform",
             "CostCenter": "engineering",
         }
+        assert (
+            up_result.outputs["serviceUrl"].value
+            == "https://integration-test.integration.internal"
+        )
+        assert (
+            up_result.outputs["loadBalancerDnsName"].value
+            == "integration-test-integration-alb.elb.amazonaws.com"
+        )
+        assert (
+            up_result.outputs["clusterName"].value == "integration-test-integration-ecs"
+        )
+        assert up_result.outputs["queueUrls"].value["healthCheck"] == (
+            "https://sqs.eu-central-1.amazonaws.com/preview/health-check-queue"
+        )
     finally:
         try:
             stack.destroy(on_output=None)
@@ -120,6 +137,7 @@ def test_invalid_stack_config_fails_preview(
     baseline = {
         "environment": "integration",
         "serviceName": "integration-test",
+        "deploymentMode": "preview",
     }
     for key, value in baseline.items():
         stack.set_config(key, auto.ConfigValue(value=value))

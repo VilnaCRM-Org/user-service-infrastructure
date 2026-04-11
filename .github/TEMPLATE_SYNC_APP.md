@@ -48,8 +48,6 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
   issues: write
 
 jobs:
@@ -89,7 +87,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            github.rest.issues.create({
+            await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: 'Template sync failed',

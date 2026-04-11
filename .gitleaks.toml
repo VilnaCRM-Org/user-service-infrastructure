@@ -4,7 +4,8 @@ title = "user-service-infrastructure gitleaks configuration"
 useDefault = true
 
 [[allowlists]]
-description = "Allow the inherited Symfony APP_SECRET literal that exists only in legacy pre-Pulumi .env commits from the former php-service template history."
+description = "Allow the legacy APP_SECRET literal verified in historical .env commit 2202333c377d92f8e83212e85598b6a306847788 from the former php-service template lineage."
 condition = "AND"
+commits = ['''2202333c377d92f8e83212e85598b6a306847788''']
 paths = ['''^\.env$''']
 regexes = ['''^APP_SECRET=2e222659c5b006df8d0e68cc33913706$''']

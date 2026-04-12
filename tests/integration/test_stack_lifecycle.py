@@ -271,7 +271,8 @@ def test_environment_helpers_cover_managed_validation_paths() -> None:
         ValueError,
         match=(
             r"^appSecret is configured as plain text; re-set it with "
-            r"`pulumi config set --secret appSecret <value>` for managed "
+            r"`pulumi -C pulumi config set --secret appSecret <value>` for "
+            r"managed "
             r"deployments\.$"
         ),
     ):

@@ -336,9 +336,19 @@ def test_mutation_workflow_covers_entrypoint_and_example_tags_stay_strings() -> 
     environment_shard = next(
         shard for shard in shards if shard["name"] == "environment"
     )
+    web_tag = re.search(
+        r'user-service-infrastructure:webImageTag:\s*"([^"\n]+)"',
+        example_config,
+    )
+    worker_tag = re.search(
+        r'user-service-infrastructure:workerImageTag:\s*"([^"\n]+)"',
+        example_config,
+    )
 
     assert environment_shard["paths"] == (
         "pulumi/app/environment.py,pulumi/app/__init__.py,pulumi/__main__.py"
     )
-    assert 'user-service-infrastructure:webImageTag: "2026.04.12"' in example_config
-    assert 'user-service-infrastructure:workerImageTag: "2026.04.12"' in example_config
+    assert web_tag is not None
+    assert worker_tag is not None
+    assert web_tag.group(1)
+    assert worker_tag.group(1)

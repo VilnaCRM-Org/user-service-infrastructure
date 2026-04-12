@@ -284,7 +284,8 @@ def _secret_value(
         if managed:
             raise ValueError(
                 f"{key} is configured as plain text; re-set it with "
-                f"`pulumi config set --secret {key} <value>` for managed deployments."
+                f"`pulumi -C pulumi config set --secret {key} <value>` for managed "
+                f"deployments."
             )
         return pulumi.Output.secret(configured_plain)
 

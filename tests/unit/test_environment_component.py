@@ -273,6 +273,12 @@ def mocked_pulumi_context(
                 return_value=credentials_present,
             )
         )
+        stack.enter_context(
+            patch(
+                "app.stack.has_aws_credentials",
+                return_value=credentials_present,
+            )
+        )
 
         if project_name is not None:
             stack.enter_context(
@@ -726,7 +732,8 @@ def test_secret_value_supports_preview_plaintext_and_rejects_managed_plaintext()
         ValueError,
         match=(
             r"^appSecret is configured as plain text; re-set it with "
-            r"`pulumi config set --secret appSecret <value>` for managed "
+            r"`pulumi -C pulumi config set --secret appSecret <value>` for "
+            r"managed "
             r"deployments\.$"
         ),
     ):

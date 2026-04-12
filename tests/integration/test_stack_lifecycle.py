@@ -2,13 +2,27 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import uuid
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 import pulumi.automation as auto
 import pytest
+from app.compute import ComputePlane
+from app.environment import (
+    NetworkSettings,
+    _normalize_choice,
+    _normalize_csv,
+    _required_managed_string,
+    _secret_value,
+    _validate_parallel_lengths,
+    build_resource_name,
+    resolve_deployment_mode,
+)
+from app.messaging import MessagingPlane
 from pulumi.automation.errors import RuntimeError as AutomationRuntimeError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -105,6 +119,218 @@ def test_pulumi_stack_preview_and_up_cycle(tmp_path: Path) -> None:
             print(f"Pulumi stack removal failed: {exc}")
 
 
+def test_pulumi_stack_managed_preview_cycle_without_host_credentials(
+    tmp_path: Path,
+) -> None:
+    """Preview the managed stack even when the workspace has no real AWS creds."""
+    work_dir = _copy_workdir(tmp_path, name="pulumi-managed-preview")
+
+    stack = auto.create_or_select_stack(
+        stack_name=_stack_name(),
+        work_dir=str(work_dir),
+        opts=_workspace_options(work_dir),
+    )
+    plain_config = {
+        "environment": "prod",
+        "serviceName": "user-service",
+        "deploymentMode": "managed",
+        "accessLogsBucketName": "shared-alb-access-logs",
+        "apiBaseUrl": "https://users.example.com",
+        "apiUrl": "https://users.example.com",
+        "corsAllowOrigin": "^https://users\\.example\\.com$",
+        "certificateArn": (
+            "arn:aws:acm:eu-central-1:123456789012:certificate/user-service"
+        ),
+        "webImage": "123456789012.dkr.ecr.eu-central-1.amazonaws.com/user-service:sha",
+        "workerImage": (
+            "123456789012.dkr.ecr.eu-central-1.amazonaws.com/user-service-worker:sha"
+        ),
+    }
+    secret_config = {
+        "documentDbPassword": "mongo-secret",
+        "redisAuthToken": "redis-secret-token-1234",
+        "appSecret": "app-secret",
+        "mailerDsn": "smtp://mail.example.com:587",
+        "oauthEncryptionKey": "oauth-encryption-key",
+        "oauthPassphrase": "oauth-passphrase",
+        "twoFactorEncryptionKey": "two-factor-key",
+        "oauthPrivateKeyPem": "private-key",
+        "oauthPublicKeyPem": "public-key",
+        "githubClientSecret": "github-secret",
+        "googleClientSecret": "google-secret",
+        "facebookClientSecret": "facebook-secret",
+        "twitterClientSecret": "twitter-secret",
+    }
+    for key, value in plain_config.items():
+        stack.set_config(key, auto.ConfigValue(value=value))
+    for key, value in secret_config.items():
+        stack.set_config(key, auto.ConfigValue(value=value, secret=True))
+
+    try:
+        preview_result = stack.preview()
+        assert preview_result.change_summary is not None
+        assert preview_result.change_summary
+    finally:
+        try:
+            stack.workspace.remove_stack(stack.name)
+        except Exception as exc:  # pragma: no cover - best-effort cleanup
+            print(f"Pulumi stack removal failed: {exc}")
+
+
+def test_environment_helpers_cover_managed_validation_paths() -> None:
+    """Cover the config-validation helpers used by managed stack previews."""
+    assert resolve_deployment_mode("auto", credentials_present=True) == "managed"
+    assert _normalize_csv(" one, ,two ", default=("default",)) == ("one", "two")
+    assert _normalize_csv(" , ", default=("default",)) == ("default",)
+    assert len(build_resource_name("x" * 40, "suffix", max_length=24)) <= 24
+
+    with pytest.raises(
+        ValueError,
+        match=r"^deployment mode must be one of: managed, preview\.$",
+    ):
+        _normalize_choice(
+            "invalid",
+            allowed={"managed", "preview"},
+            label="deployment mode",
+        )
+
+    config_with_value = Mock()
+    config_with_value.get.return_value = "configured"
+    assert (
+        _required_managed_string(
+            config_with_value,
+            "accessLogsBucketName",
+            managed=True,
+            preview_default="preview-value",
+        )
+        == "configured"
+    )
+
+    config_with_secret = Mock()
+    config_with_secret.get_secret.return_value = Mock()
+    config_with_secret.get.return_value = None
+    assert (
+        _secret_value(
+            config_with_secret,
+            "appSecret",
+            managed=True,
+            preview_default="preview-secret",
+        )
+        is config_with_secret.get_secret.return_value
+    )
+
+    config_with_plaintext = Mock()
+    config_with_plaintext.get_secret.return_value = None
+    config_with_plaintext.get.return_value = "plaintext-secret"
+    with patch(
+        "app.environment.pulumi.Output.secret",
+        side_effect=lambda value: f"secret:{value}",
+    ):
+        assert (
+            _secret_value(
+                config_with_plaintext,
+                "appSecret",
+                managed=True,
+                preview_default="preview-secret",
+            )
+            == "secret:plaintext-secret"
+        )
+
+    config_without_value = Mock()
+    config_without_value.get.return_value = None
+    with patch("app.environment.pulumi.runtime.is_dry_run", return_value=False):
+        with pytest.raises(
+            ValueError,
+            match=(
+                "^accessLogsBucketName must be configured for managed deployments\\.$"
+            ),
+        ):
+            _required_managed_string(
+                config_without_value,
+                "accessLogsBucketName",
+                managed=True,
+                preview_default="preview-value",
+            )
+
+    config_without_secret = Mock()
+    config_without_secret.get_secret.return_value = None
+    config_without_secret.get.return_value = None
+    with patch("app.environment.pulumi.runtime.is_dry_run", return_value=False):
+        with pytest.raises(
+            ValueError,
+            match=(
+                r"^appSecret must be configured as a secret for managed "
+                r"deployments\.$"
+            ),
+        ):
+            _secret_value(
+                config_without_secret,
+                "appSecret",
+                managed=True,
+                preview_default="preview-secret",
+            )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "^availability zones, public subnets, app subnets, and data subnets "
+            "must have the same number of entries\\.$"
+        ),
+    ):
+        _validate_parallel_lengths(
+            NetworkSettings(
+                vpc_cidr="10.42.0.0/16",
+                availability_zones=("eu-central-1a", "eu-central-1b"),
+                public_subnet_cidrs=("10.42.0.0/24",),
+                app_subnet_cidrs=("10.42.10.0/24", "10.42.11.0/24"),
+                data_subnet_cidrs=("10.42.20.0/24", "10.42.21.0/24"),
+            )
+        )
+
+
+def test_component_helpers_cover_listener_and_policy_paths() -> None:
+    """Cover helper branches that the Automation API path does not assert directly."""
+    compute = object.__new__(ComputePlane)
+    messaging = object.__new__(MessagingPlane)
+
+    fake_output = Mock()
+    fake_output.apply.side_effect = lambda callback: callback("repo-url")
+    with patch("app.compute.pulumi.Output.from_input", return_value=fake_output):
+        assert (
+            compute._resolve_image_uri(
+                repository_url="ignored",
+                image_tag="2026.04.12",
+                override=None,
+            )
+            == "repo-url:2026.04.12"
+        )
+
+    settings = Mock()
+    settings.runtime.certificate_arn = None
+    load_balancer = Mock(arn="alb-arn")
+    target_group = Mock(arn="tg-arn")
+    with patch(
+        "app.compute.aws.lb.Listener",
+        side_effect=lambda name, **kwargs: kwargs,
+    ):
+        listener = compute._create_http_listener(
+            settings,
+            load_balancer,
+            target_group,
+        )
+    assert listener["protocol"] == "HTTP"
+    assert listener["default_actions"][0].type == "forward"
+
+    secret_policy = json.loads(compute._secret_access_policy_json(["secret-arn"]))
+    assert secret_policy["Statement"][0]["Resource"] == ["secret-arn"]
+
+    queue_policy = json.loads(compute._task_queue_policy_json(["queue-arn"]))
+    assert queue_policy["Statement"][0]["Resource"] == ["queue-arn"]
+
+    health_policy = json.loads(messaging._health_check_policy_json("queue-arn"))
+    assert health_policy["Statement"][0]["Resource"] == ["queue-arn"]
+
+
 @pytest.mark.parametrize(
     ("config_key", "config_value", "message"),
     [
@@ -128,7 +354,7 @@ def test_invalid_stack_config_fails_preview(
     message: str,
 ) -> None:
     """Reject invalid environment metadata during a real Pulumi preview."""
-    work_dir = _copy_workdir(tmp_path, name=f"invalid-{config_key}")
+    work_dir = _copy_workdir(tmp_path, name=f"pulumi-invalid-{config_key}")
     stack = auto.create_or_select_stack(
         stack_name=_stack_name(),
         work_dir=str(work_dir),

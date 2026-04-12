@@ -12,9 +12,14 @@ from unittest.mock import Mock, call, patch
 import pytest
 from app.environment import (
     EnvironmentSettings,
+    NetworkSettings,
     _default_tags_from_parts,
+    _normalize_choice,
+    _normalize_csv,
+    _secret_value,
     _stack_metadata_from_outputs,
     _stack_tag_from_parts,
+    _validate_parallel_lengths,
     build_resource_name,
     has_aws_credentials,
     resolve_config_value,
@@ -638,6 +643,83 @@ def test_resolve_deployment_mode_handles_auto_and_explicit_modes() -> None:
     assert resolve_deployment_mode("managed", credentials_present=False) == "managed"
 
 
+def test_normalize_choice_rejects_unknown_values() -> None:
+    """Reject invalid enumerated config values with a clear error."""
+    with pytest.raises(
+        ValueError,
+        match=r"^deployment mode must be one of: managed, preview\.$",
+    ):
+        _normalize_choice(
+            "invalid",
+            allowed={"managed", "preview"},
+            label="deployment mode",
+        )
+
+
+def test_normalize_csv_ignores_empty_entries_and_falls_back_to_default() -> None:
+    """Trim CSV segments and preserve defaults when no concrete values remain."""
+    assert _normalize_csv(" one, ,two ", default=("default",)) == ("one", "two")
+    assert _normalize_csv(" , ", default=("default",)) == ("default",)
+
+
+def test_secret_value_supports_plaintext_and_rejects_missing_managed_apply() -> None:
+    """Wrap plaintext secrets and still fail fast on missing managed inputs."""
+    config_with_plaintext = Mock()
+    config_with_plaintext.get_secret.return_value = None
+    config_with_plaintext.get.return_value = "plaintext-secret"
+
+    with patch(
+        "app.environment.pulumi.Output.secret",
+        side_effect=lambda value: f"secret:{value}",
+    ):
+        plaintext_secret = _secret_value(
+            config_with_plaintext,
+            "appSecret",
+            managed=True,
+            preview_default="preview-secret",
+        )
+    assert plaintext_secret == "secret:plaintext-secret"
+
+    config_without_secret = Mock()
+    config_without_secret.get_secret.return_value = None
+    config_without_secret.get.return_value = None
+
+    with patch("app.environment.pulumi.runtime.is_dry_run", return_value=False):
+        with pytest.raises(
+            ValueError,
+            match=(
+                r"^appSecret must be configured as a secret for managed "
+                r"deployments\.$"
+            ),
+        ):
+            _secret_value(
+                config_without_secret,
+                "appSecret",
+                managed=True,
+                preview_default="preview-secret",
+            )
+
+
+def test_validate_parallel_lengths_rejects_misaligned_subnet_sets() -> None:
+    """Reject network config where AZs and subnet partitions drift apart."""
+    with pytest.raises(
+        ValueError,
+        match=(
+            "^availability zones, public subnets, app subnets, and data subnets "
+            "must have the same number of entries\\.$"
+        ),
+    ):
+        _validate_parallel_lengths(
+            NetworkSettings(
+                vpc_cidr="10.42.0.0/16",
+                availability_zones=("eu-central-1a", "eu-central-1b"),
+                public_subnet_cidrs=("10.42.0.0/24",),
+                app_subnet_cidrs=("10.42.10.0/24", "10.42.11.0/24"),
+                data_subnet_cidrs=("10.42.20.0/24", "10.42.21.0/24"),
+            )
+        )
+
+
 def test_has_aws_credentials_detects_supported_sources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -860,6 +942,53 @@ def test_user_service_stack_managed_mode_builds_managed_outputs_under_mocks() ->
         _assert_output_value(
             stack_component.data.outputs.redis_endpoint,
             "user-service-redis.cache.local",
+        )
+
+    with mocked_pulumi_context(
+        managed_config,
+        aws_config_values={"region": "eu-central-1"},
+    ):
+        _run_pulumi_program(program)
+
+
+def test_user_service_stack_managed_mode_supports_https_and_image_overrides() -> None:
+    """Exercise the HTTPS-listener path and explicit image overrides."""
+    managed_config = {
+        "deploymentMode": "managed",
+        "serviceName": "user-service",
+        "accessLogsBucketName": "shared-alb-access-logs",
+        "certificateArn": (
+            "arn:aws:acm:eu-central-1:123456789012:certificate/user-service"
+        ),
+        "webImage": "123456789012.dkr.ecr.eu-central-1.amazonaws.com/custom-web:sha",
+        "workerImage": (
+            "123456789012.dkr.ecr.eu-central-1.amazonaws.com/custom-worker:sha"
+        ),
+        "documentDbPassword": "mongo-secret",
+        "redisAuthToken": "redis-secret",
+        "appSecret": "app-secret",
+        "mailerDsn": "smtp://mail.example.com:587",
+        "oauthEncryptionKey": "oauth-encryption-key",
+        "oauthPassphrase": "oauth-passphrase",
+        "twoFactorEncryptionKey": "two-factor-key",
+        "oauthPrivateKeyPem": "private-key",
+        "oauthPublicKeyPem": "public-key",
+        "githubClientSecret": "github-secret",
+        "googleClientSecret": "google-secret",
+        "facebookClientSecret": "facebook-secret",
+        "twitterClientSecret": "twitter-secret",
+    }
+
+    def program() -> None:
+        """Instantiate the managed stack with HTTPS and explicit image URIs."""
+        stack_component = UserServiceStack("managed-stack-https")
+        _assert_output_value(
+            stack_component.compute.outputs.load_balancer_dns_name,
+            "user-service-alb.elb.amazonaws.com",
+        )
+        _assert_output_value(
+            stack_component.compute.outputs.web_service_name,
+            "user-service-dev-web",
         )
 
     with mocked_pulumi_context(

@@ -9,7 +9,12 @@ import pulumi_aws as aws
 import pulumi
 from app.compute import ComputePlane
 from app.data import DataPlane
-from app.environment import EnvironmentSettings, StackSettings, resolve_stack_settings
+from app.environment import (
+    EnvironmentSettings,
+    StackSettings,
+    has_aws_credentials,
+    resolve_stack_settings,
+)
 from app.messaging import MessagingPlane
 from app.network import NetworkPlane
 
@@ -98,12 +103,21 @@ class UserServiceStack(pulumi.ComponentResource):
         if not self.settings.is_managed:
             return None
 
+        preview_without_credentials = pulumi.runtime.is_dry_run() and not (
+            has_aws_credentials()
+        )
+        preview_access_key = "pulumi-preview" if preview_without_credentials else None
+        preview_secret_key = "pulumi-preview" if preview_without_credentials else None
+
         return aws.Provider(
             "managed-provider",
             region=self.settings.region,
+            access_key=preview_access_key,
+            secret_key=preview_secret_key,
             default_tags=aws.ProviderDefaultTagsArgs(tags=self.settings.default_tags),
             skip_credentials_validation=pulumi.runtime.is_dry_run(),
             skip_metadata_api_check=pulumi.runtime.is_dry_run(),
             skip_requesting_account_id=pulumi.runtime.is_dry_run(),
+            skip_region_validation=preview_without_credentials,
             opts=pulumi.ResourceOptions(parent=self),
         )

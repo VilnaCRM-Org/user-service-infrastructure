@@ -15,6 +15,7 @@ def main() -> int:
 
     uv_bin = find_uv_binary()
     mutation_paths = split_values(os.environ.get("MUTATION_PATHS", "pulumi/app"))
+    mutation_paths_arg = ",".join(mutation_paths)
     mutation_test_targets = (
         split_values(os.environ.get("MUTATION_TEST_TARGETS")) or default_targets
     )
@@ -57,7 +58,7 @@ def main() -> int:
             "mutmut",
             "run",
             "--paths-to-mutate",
-            " ".join(mutation_paths),
+            mutation_paths_arg,
             "--runner",
             mutation_runner,
             "--tests-dir",

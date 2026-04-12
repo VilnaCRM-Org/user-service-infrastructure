@@ -10,10 +10,12 @@ from pathlib import Path
 from unittest.mock import Mock, call, patch
 
 import pytest
+from app.compute import ComputePlane
 from app.environment import (
     EnvironmentSettings,
     NetworkSettings,
     _default_tags_from_parts,
+    _get_int,
     _normalize_choice,
     _normalize_csv,
     _secret_value,
@@ -612,8 +614,14 @@ def test_component_registers_expected_type_token() -> None:
 def test_build_resource_name_hashes_when_length_limit_is_applied() -> None:
     """Keep AWS-length truncation deterministic for resource naming."""
     short_name = build_resource_name("user-service-dev", "alb", max_length=32)
+    tiny_name = build_resource_name(
+        "user-service-with-a-very-long-environment-name",
+        "load-balancer",
+        max_length=6,
+    )
 
     assert short_name.startswith("user-service-dev-alb")
+    assert len(tiny_name) == 6
     assert build_resource_name(
         "user-service-with-a-very-long-environment-name",
         "load-balancer",
@@ -662,8 +670,19 @@ def test_normalize_csv_ignores_empty_entries_and_falls_back_to_default() -> None
     assert _normalize_csv(" , ", default=("default",)) == ("default",)
 
 
-def test_secret_value_supports_plaintext_and_rejects_missing_managed_apply() -> None:
-    """Wrap plaintext secrets and still fail fast on missing managed inputs."""
+def test_get_int_preserves_explicit_zero_and_defaults_missing_values() -> None:
+    """Return configured zero values instead of replacing them with defaults."""
+    config = Mock()
+    config.get_int.side_effect = lambda key: {"zero": 0}.get(key)
+
+    assert _get_int(config, "zero", default=42) == 0
+    assert _get_int(config, "missing", default=42) == 42
+
+
+def test_secret_value_supports_preview_plaintext_and_rejects_managed_plaintext() -> (
+    None
+):
+    """Allow preview-only plaintext while rejecting managed plain-text secrets."""
     config_with_plaintext = Mock()
     config_with_plaintext.get_secret.return_value = None
     config_with_plaintext.get.return_value = "plaintext-secret"
@@ -675,11 +694,29 @@ def test_secret_value_supports_plaintext_and_rejects_missing_managed_apply() -> 
         plaintext_secret = _secret_value(
             config_with_plaintext,
             "appSecret",
-            managed=True,
+            managed=False,
             preview_default="preview-secret",
         )
     assert plaintext_secret == "secret:plaintext-secret"
 
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"^appSecret is configured as plain text; re-set it with "
+            r"`pulumi config set --secret appSecret <value>` for managed "
+            r"deployments\.$"
+        ),
+    ):
+        _secret_value(
+            config_with_plaintext,
+            "appSecret",
+            managed=True,
+            preview_default="preview-secret",
+        )
+
+
+def test_secret_value_rejects_missing_managed_apply() -> None:
+    """Fail fast when managed deployments omit required secret inputs."""
     config_without_secret = Mock()
     config_without_secret.get_secret.return_value = None
     config_without_secret.get.return_value = None
@@ -752,6 +789,8 @@ def test_resolve_stack_settings_defaults_to_preview_without_credentials() -> Non
     assert settings_model is not None
     assert settings_model.deployment_mode == "preview"
     assert settings_model.region == "eu-central-1"
+    assert settings_model.runtime.app_env == "prod"
+    assert settings_model.runtime.app_debug == "0"
     assert settings_model.runtime.api_base_url == "https://user.dev.internal"
     assert settings_model.runtime.api_url == "https://user.dev.internal"
     assert (
@@ -830,6 +869,102 @@ def test_main_exports_expected_outputs() -> None:
         }
     ):
         _run_pulumi_program(program)
+
+
+def test_resolve_stack_settings_preserves_zero_capacity_overrides() -> None:
+    """Keep explicit zero-valued numeric config instead of falling back to defaults."""
+    captured: dict[str, object] = {}
+
+    def program() -> None:
+        """Resolve stack settings with zero-valued capacity and data overrides."""
+        env_settings = EnvironmentSettings("unit", environment="dev")
+        captured["settings"] = resolve_stack_settings(env_settings)
+
+    with mocked_pulumi_context(
+        {
+            "serviceName": "user-service",
+            "containerPort": 0,
+            "webDesiredCount": 0,
+            "workerDesiredCount": 0,
+            "documentDbInstanceCount": 0,
+            "documentDbPort": 0,
+            "documentDbBackupRetentionDays": 0,
+            "redisReplicasPerNodeGroup": 0,
+            "redisPort": 0,
+            "redisSnapshotRetentionLimit": 0,
+            "appEnv": "staging",
+            "appDebug": "1",
+        }
+    ):
+        _run_pulumi_program(program)
+
+    settings_model = captured["settings"]
+    assert settings_model is not None
+    assert settings_model.capacity.container_port == 0
+    assert settings_model.capacity.web_desired_count == 0
+    assert settings_model.capacity.worker_desired_count == 0
+    assert settings_model.documentdb.instance_count == 0
+    assert settings_model.documentdb.port == 0
+    assert settings_model.documentdb.backup_retention_days == 0
+    assert settings_model.redis.replicas_per_node_group == 0
+    assert settings_model.redis.port == 0
+    assert settings_model.redis.snapshot_retention_limit == 0
+    assert settings_model.runtime.app_env == "staging"
+    assert settings_model.runtime.app_debug == "1"
+
+
+def test_compute_common_environment_uses_runtime_app_flags() -> None:
+    """Populate APP_ENV and APP_DEBUG from runtime settings instead of literals."""
+    compute = object.__new__(ComputePlane)
+    settings_model = Mock()
+    settings_model.region = "eu-central-1"
+    settings_model.runtime.app_env = "staging"
+    settings_model.runtime.app_debug = "1"
+    settings_model.runtime.api_base_url = "https://users.example.com"
+    settings_model.runtime.api_url = "https://users.example.com"
+    settings_model.runtime.cors_allow_origin = "^https://users\\.example\\.com$"
+    settings_model.runtime.mail_sender = "noreply@example.com"
+    settings_model.runtime.jwt_issuer = "issuer"
+    settings_model.runtime.jwt_audience = "audience"
+    settings_model.runtime.emf_namespace = "UserService/Test"
+    settings_model.runtime.aws_sqs_endpoint_base = (
+        "https://sqs.eu-central-1.amazonaws.com"
+    )
+    settings_model.runtime.aws_sqs_port = "443"
+    settings_model.social.github_client_id = "github-client"
+    settings_model.social.github_redirect_uri = "https://users.example.com/github"
+    settings_model.social.google_client_id = "google-client"
+    settings_model.social.google_redirect_uri = "https://users.example.com/google"
+    settings_model.social.facebook_client_id = "facebook-client"
+    settings_model.social.facebook_redirect_uri = "https://users.example.com/facebook"
+    settings_model.social.facebook_graph_api_version = "v19.0"
+    settings_model.social.twitter_client_id = "twitter-client"
+    settings_model.social.twitter_redirect_uri = "https://users.example.com/twitter"
+
+    messaging = Mock()
+    messaging.outputs.health_check_access_key_id = "access-key-id"
+    messaging.outputs.queue_urls = {
+        "sendEmail": "https://queue/send-email",
+        "failedSendEmail": "https://queue/failed-send-email",
+        "insertUserBatch": "https://queue/insert-user-batch",
+        "domainEvents": "https://queue/domain-events",
+        "failedDomainEvents": "https://queue/failed-domain-events",
+    }
+
+    with patch.object(
+        compute,
+        "_queue_dsn",
+        side_effect=lambda queue_url, region: f"{region}:{queue_url}",
+    ):
+        environment = compute._common_environment(
+            settings_model,
+            messaging,
+            include_worker_name=False,
+        )
+    values = {entry["name"]: entry["value"] for entry in environment}
+
+    assert values["APP_ENV"] == "staging"
+    assert values["APP_DEBUG"] == "1"
 
 
 def test_register_outputs_maps_component_properties() -> None:

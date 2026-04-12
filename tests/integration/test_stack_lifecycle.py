@@ -183,6 +183,7 @@ def test_environment_helpers_cover_managed_validation_paths() -> None:
     assert _normalize_csv(" one, ,two ", default=("default",)) == ("one", "two")
     assert _normalize_csv(" , ", default=("default",)) == ("default",)
     assert len(build_resource_name("x" * 40, "suffix", max_length=24)) <= 24
+    assert len(build_resource_name("x" * 40, "suffix", max_length=6)) == 6
 
     with pytest.raises(
         ValueError,
@@ -222,6 +223,21 @@ def test_environment_helpers_cover_managed_validation_paths() -> None:
     config_with_plaintext = Mock()
     config_with_plaintext.get_secret.return_value = None
     config_with_plaintext.get.return_value = "plaintext-secret"
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"^appSecret is configured as plain text; re-set it with "
+            r"`pulumi config set --secret appSecret <value>` for managed "
+            r"deployments\.$"
+        ),
+    ):
+        _secret_value(
+            config_with_plaintext,
+            "appSecret",
+            managed=True,
+            preview_default="preview-secret",
+        )
+
     with patch(
         "app.environment.pulumi.Output.secret",
         side_effect=lambda value: f"secret:{value}",
@@ -230,7 +246,7 @@ def test_environment_helpers_cover_managed_validation_paths() -> None:
             _secret_value(
                 config_with_plaintext,
                 "appSecret",
-                managed=True,
+                managed=False,
                 preview_default="preview-secret",
             )
             == "secret:plaintext-secret"
@@ -290,6 +306,8 @@ def test_environment_helpers_cover_managed_validation_paths() -> None:
 
 def test_component_helpers_cover_listener_and_policy_paths() -> None:
     """Cover helper branches that the Automation API path does not assert directly."""
+    # These checks bypass full constructors on purpose so coverage reaches helper
+    # branches that the public stack lifecycle does not expose directly.
     compute = object.__new__(ComputePlane)
     messaging = object.__new__(MessagingPlane)
 
@@ -329,6 +347,10 @@ def test_component_helpers_cover_listener_and_policy_paths() -> None:
 
     health_policy = json.loads(messaging._health_check_policy_json("queue-arn"))
     assert health_policy["Statement"][0]["Resource"] == ["queue-arn"]
+    assert health_policy["Statement"][0]["Action"] == [
+        "sqs:GetQueueAttributes",
+        "sqs:GetQueueUrl",
+    ]
 
 
 @pytest.mark.parametrize(

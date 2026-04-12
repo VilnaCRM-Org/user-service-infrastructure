@@ -126,6 +126,8 @@ class RuntimeSettings:
     """Plain-text application runtime configuration."""
 
     access_logs_bucket_name: str | None
+    app_env: str
+    app_debug: str
     api_base_url: str
     api_url: str
     cors_allow_origin: str
@@ -279,6 +281,11 @@ def _secret_value(
 
     configured_plain = config.get(key)
     if configured_plain is not None:
+        if managed:
+            raise ValueError(
+                f"{key} is configured as plain text; re-set it with "
+                f"`pulumi config set --secret {key} <value>` for managed deployments."
+            )
         return pulumi.Output.secret(configured_plain)
 
     if managed and not pulumi.runtime.is_dry_run():
@@ -353,6 +360,12 @@ def resolve_config_value(
     return default
 
 
+def _get_int(config: pulumi.Config, key: str, *, default: int) -> int:
+    """Return configured integers verbatim while keeping defaults for missing keys."""
+    value = config.get_int(key)
+    return default if value is None else value
+
+
 def is_production_environment(environment: str) -> bool:
     """Return whether the environment should enable stricter protections."""
     return environment in {"prod", "production"}
@@ -370,6 +383,8 @@ def build_resource_name(
         return name
 
     digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:8]
+    if max_length <= len(digest):
+        return digest[:max_length]
     prefix_length = max_length - len(digest) - 1
     truncated_prefix = name[:prefix_length].rstrip("-")
     return f"{truncated_prefix}-{digest}"
@@ -521,7 +536,11 @@ def resolve_stack_settings(environment_settings: EnvironmentSettings) -> StackSe
     api_url = resolve_config_value(None, config.get("apiUrl"), default=api_base_url)
 
     capacity = ServiceCapacitySettings(
-        container_port=config.get_int("containerPort") or DEFAULT_CONTAINER_PORT,
+        container_port=_get_int(
+            config,
+            "containerPort",
+            default=DEFAULT_CONTAINER_PORT,
+        ),
         health_check_path=resolve_config_value(
             None,
             config.get("healthCheckPath"),
@@ -535,8 +554,8 @@ def resolve_stack_settings(environment_settings: EnvironmentSettings) -> StackSe
             config.get("workerMemory"),
             default="1024",
         ),
-        web_desired_count=config.get_int("webDesiredCount") or 2,
-        worker_desired_count=config.get_int("workerDesiredCount") or 2,
+        web_desired_count=_get_int(config, "webDesiredCount", default=2),
+        worker_desired_count=_get_int(config, "workerDesiredCount", default=2),
     )
 
     documentdb = DocumentDbSettings(
@@ -550,14 +569,18 @@ def resolve_stack_settings(environment_settings: EnvironmentSettings) -> StackSe
             config.get("documentDbInstanceClass"),
             default="db.t4g.medium",
         ),
-        instance_count=config.get_int("documentDbInstanceCount") or 2,
-        port=config.get_int("documentDbPort") or DEFAULT_DOCUMENTDB_PORT,
+        instance_count=_get_int(config, "documentDbInstanceCount", default=2),
+        port=_get_int(config, "documentDbPort", default=DEFAULT_DOCUMENTDB_PORT),
         engine_version=resolve_config_value(
             None,
             config.get("documentDbEngineVersion"),
             default="5.0.0",
         ),
-        backup_retention_days=config.get_int("documentDbBackupRetentionDays") or 7,
+        backup_retention_days=_get_int(
+            config,
+            "documentDbBackupRetentionDays",
+            default=7,
+        ),
         preferred_backup_window=resolve_config_value(
             None,
             config.get("documentDbPreferredBackupWindow"),
@@ -578,14 +601,22 @@ def resolve_stack_settings(environment_settings: EnvironmentSettings) -> StackSe
             config.get("redisNodeType"),
             default="cache.t4g.small",
         ),
-        replicas_per_node_group=config.get_int("redisReplicasPerNodeGroup") or 1,
-        port=config.get_int("redisPort") or DEFAULT_REDIS_PORT,
+        replicas_per_node_group=_get_int(
+            config,
+            "redisReplicasPerNodeGroup",
+            default=1,
+        ),
+        port=_get_int(config, "redisPort", default=DEFAULT_REDIS_PORT),
         engine_version=resolve_config_value(
             None,
             config.get("redisEngineVersion"),
             default="7.1",
         ),
-        snapshot_retention_limit=config.get_int("redisSnapshotRetentionLimit") or 7,
+        snapshot_retention_limit=_get_int(
+            config,
+            "redisSnapshotRetentionLimit",
+            default=7,
+        ),
         snapshot_window=resolve_config_value(
             None,
             config.get("redisSnapshotWindow"),
@@ -668,6 +699,8 @@ def resolve_stack_settings(environment_settings: EnvironmentSettings) -> StackSe
             managed=deployment_mode == "managed",
             preview_default=_preview_placeholder("alb-access-logs"),
         ),
+        app_env=resolve_config_value(None, config.get("appEnv"), default="prod"),
+        app_debug=resolve_config_value(None, config.get("appDebug"), default="0"),
         api_base_url=api_base_url,
         api_url=api_url,
         cors_allow_origin=resolve_config_value(

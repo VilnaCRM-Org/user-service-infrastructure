@@ -218,19 +218,17 @@ class MessagingPlane(pulumi.ComponentResource):
         )
 
     def _health_check_policy_json(self, queue_arn: str) -> str:
-        """Limit the health-check IAM user to creating only its queue."""
+        """Limit the health-check IAM user to readonly queue access."""
         return json.dumps(
             {
                 "Version": "2012-10-17",
                 "Statement": [
                     {
-                        "Sid": "CreateHealthCheckQueue",
+                        "Sid": "HealthCheckQueueAccess",
                         "Effect": "Allow",
                         "Action": [
-                            "sqs:CreateQueue",
                             "sqs:GetQueueAttributes",
                             "sqs:GetQueueUrl",
-                            "sqs:TagQueue",
                         ],
                         "Resource": [queue_arn],
                     }

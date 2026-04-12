@@ -613,8 +613,8 @@ class ComputePlane(pulumi.ComponentResource):
     ) -> list[dict[str, pulumi.Input[str]]]:
         """Build the non-secret environment variables shared by both workloads."""
         environment: list[dict[str, pulumi.Input[str]]] = [
-            {"name": "APP_ENV", "value": "prod"},
-            {"name": "APP_DEBUG", "value": "0"},
+            {"name": "APP_ENV", "value": settings.runtime.app_env},
+            {"name": "APP_DEBUG", "value": settings.runtime.app_debug},
             {"name": "API_BASE_URL", "value": settings.runtime.api_base_url},
             {"name": "API_URL", "value": settings.runtime.api_url},
             {"name": "CORS_ALLOW_ORIGIN", "value": settings.runtime.cors_allow_origin},

@@ -1093,6 +1093,93 @@ def test_managed_stack_uses_preview_credential_skips_and_scoped_data_egress() ->
     assert redis_security_group["inputs"]["egress"][0]["cidrBlocks"] == ["10.42.0.0/16"]
 
 
+def test_managed_stack_requires_at_least_one_documentdb_instance() -> None:
+    """Reject a managed DocumentDB cluster that would expose no instances."""
+    managed_config = {
+        "deploymentMode": "managed",
+        "serviceName": "user-service",
+        "accessLogsBucketName": "shared-alb-access-logs",
+        "documentDbPassword": "mongo-secret",
+        "redisAuthToken": "redis-secret",
+        "appSecret": "app-secret",
+        "mailerDsn": "smtp://mail.example.com:587",
+        "oauthEncryptionKey": "oauth-encryption-key",
+        "oauthPassphrase": "oauth-passphrase",
+        "twoFactorEncryptionKey": "two-factor-key",
+        "oauthPrivateKeyPem": "private-key",
+        "oauthPublicKeyPem": "public-key",
+    }
+
+    def program() -> None:
+        """Instantiate a managed stack with an invalid zero-instance topology."""
+        UserServiceStack("managed-stack")
+
+    with mocked_pulumi_context(
+        {**managed_config, "documentDbInstanceCount": 0},
+        aws_config_values={"region": "eu-central-1"},
+    ):
+        with pytest.raises(
+            ValueError,
+            match=(
+                r"^documentDbInstanceCount must be at least 1 for managed "
+                r"deployments\.$"
+            ),
+        ):
+            _run_pulumi_program(program)
+
+
+def test_managed_stack_percent_encodes_data_plane_connection_urls() -> None:
+    """Percent-encode reserved credentials before exporting managed URLs."""
+    managed_config = {
+        "deploymentMode": "managed",
+        "serviceName": "user-service",
+        "accessLogsBucketName": "shared-alb-access-logs",
+        "documentDbUsername": "user@example.com",
+        "documentDbPassword": "mongo:/?#@secret",
+        "redisAuthToken": "redis:/?#@token",
+        "appSecret": "app-secret",
+        "mailerDsn": "smtp://mail.example.com:587",
+        "oauthEncryptionKey": "oauth-encryption-key",
+        "oauthPassphrase": "oauth-passphrase",
+        "twoFactorEncryptionKey": "two-factor-key",
+        "oauthPrivateKeyPem": "private-key",
+        "oauthPublicKeyPem": "public-key",
+    }
+    recording_mocks = RecordingMocks()
+
+    def program() -> None:
+        """Instantiate a managed stack and record the derived data secrets."""
+        UserServiceStack("managed-stack")
+
+    with mocked_pulumi_context(
+        managed_config,
+        aws_config_values={"region": "eu-central-1"},
+    ):
+        _run_pulumi_program(program, test_mocks=recording_mocks)
+
+    documentdb_secret_version = next(
+        resource
+        for resource in recording_mocks.resources
+        if resource["name"] == "user-service-documentdb-url-version"
+    )
+    redis_secret_version = next(
+        resource
+        for resource in recording_mocks.resources
+        if resource["name"] == "user-service-redis-url-version"
+    )
+    documentdb_secret_string = documentdb_secret_version["inputs"]["secretString"][
+        "value"
+    ]
+    redis_secret_string = redis_secret_version["inputs"]["secretString"]["value"]
+
+    assert documentdb_secret_string.startswith(
+        "mongodb://user%40example.com:mongo%3A%2F%3F%23%40secret@"
+    )
+    assert "user@example.com:mongo:/?#@secret@" not in documentdb_secret_string
+    assert redis_secret_string.startswith("rediss://:redis%3A%2F%3F%23%40token@")
+    assert ":redis:/?#@token@" not in redis_secret_string
+
+
 def test_register_outputs_maps_component_properties() -> None:
     """Register outputs for component properties consistently."""
     original_register = pulumi.ComponentResource.register_outputs

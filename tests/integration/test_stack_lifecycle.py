@@ -64,6 +64,54 @@ def _workspace_options(work_dir: Path) -> auto.LocalWorkspaceOptions:
     )
 
 
+def _configure_managed_stack(
+    stack: auto.Stack,
+    *,
+    plain_overrides: dict[str, str] | None = None,
+    secret_overrides: dict[str, str] | None = None,
+) -> None:
+    """Apply the baseline managed-stack config used by Automation API tests."""
+    plain_config = {
+        "environment": "prod",
+        "serviceName": "user-service",
+        "deploymentMode": "managed",
+        "accessLogsBucketName": "shared-alb-access-logs",
+        "apiBaseUrl": "https://users.example.com",
+        "apiUrl": "https://users.example.com",
+        "corsAllowOrigin": "^https://users\\.example\\.com$",
+        "certificateArn": (
+            "arn:aws:acm:eu-central-1:123456789012:certificate/user-service"
+        ),
+        "webImage": "123456789012.dkr.ecr.eu-central-1.amazonaws.com/user-service:sha",
+        "workerImage": (
+            "123456789012.dkr.ecr.eu-central-1.amazonaws.com/user-service-worker:sha"
+        ),
+    }
+    secret_config = {
+        "documentDbPassword": "mongo-secret",
+        "redisAuthToken": "redis-secret-token-1234",
+        "appSecret": "app-secret",
+        "mailerDsn": "smtp://mail.example.com:587",
+        "oauthEncryptionKey": "oauth-encryption-key",
+        "oauthPassphrase": "oauth-passphrase",
+        "twoFactorEncryptionKey": "two-factor-key",
+        "oauthPrivateKeyPem": "private-key",
+        "oauthPublicKeyPem": "public-key",
+        "githubClientSecret": "github-secret",
+        "googleClientSecret": "google-secret",
+        "facebookClientSecret": "facebook-secret",
+        "twitterClientSecret": "twitter-secret",
+    }
+    if plain_overrides:
+        plain_config.update(plain_overrides)
+    if secret_overrides:
+        secret_config.update(secret_overrides)
+    for key, value in plain_config.items():
+        stack.set_config(key, auto.ConfigValue(value=value))
+    for key, value in secret_config.items():
+        stack.set_config(key, auto.ConfigValue(value=value, secret=True))
+
+
 def test_pulumi_stack_preview_and_up_cycle(tmp_path: Path) -> None:
     """Validate preview/up/destroy behavior for the credential-free preview stack."""
     work_dir = _copy_workdir(tmp_path, name="pulumi-program")
@@ -130,46 +178,42 @@ def test_pulumi_stack_managed_preview_cycle_without_host_credentials(
         work_dir=str(work_dir),
         opts=_workspace_options(work_dir),
     )
-    plain_config = {
-        "environment": "prod",
-        "serviceName": "user-service",
-        "deploymentMode": "managed",
-        "accessLogsBucketName": "shared-alb-access-logs",
-        "apiBaseUrl": "https://users.example.com",
-        "apiUrl": "https://users.example.com",
-        "corsAllowOrigin": "^https://users\\.example\\.com$",
-        "certificateArn": (
-            "arn:aws:acm:eu-central-1:123456789012:certificate/user-service"
-        ),
-        "webImage": "123456789012.dkr.ecr.eu-central-1.amazonaws.com/user-service:sha",
-        "workerImage": (
-            "123456789012.dkr.ecr.eu-central-1.amazonaws.com/user-service-worker:sha"
-        ),
-    }
-    secret_config = {
-        "documentDbPassword": "mongo-secret",
-        "redisAuthToken": "redis-secret-token-1234",
-        "appSecret": "app-secret",
-        "mailerDsn": "smtp://mail.example.com:587",
-        "oauthEncryptionKey": "oauth-encryption-key",
-        "oauthPassphrase": "oauth-passphrase",
-        "twoFactorEncryptionKey": "two-factor-key",
-        "oauthPrivateKeyPem": "private-key",
-        "oauthPublicKeyPem": "public-key",
-        "githubClientSecret": "github-secret",
-        "googleClientSecret": "google-secret",
-        "facebookClientSecret": "facebook-secret",
-        "twitterClientSecret": "twitter-secret",
-    }
-    for key, value in plain_config.items():
-        stack.set_config(key, auto.ConfigValue(value=value))
-    for key, value in secret_config.items():
-        stack.set_config(key, auto.ConfigValue(value=value, secret=True))
+    _configure_managed_stack(stack)
 
     try:
         preview_result = stack.preview()
         assert preview_result.change_summary is not None
         assert preview_result.change_summary
+    finally:
+        try:
+            stack.workspace.remove_stack(stack.name)
+        except Exception as exc:  # pragma: no cover - best-effort cleanup
+            print(f"Pulumi stack removal failed: {exc}")
+
+
+def test_pulumi_stack_rejects_zero_documentdb_instances_in_managed_mode(
+    tmp_path: Path,
+) -> None:
+    """Fail the managed preview when DocumentDB would publish no instances."""
+    work_dir = _copy_workdir(tmp_path, name="pulumi-managed-preview")
+
+    stack = auto.create_or_select_stack(
+        stack_name=_stack_name(),
+        work_dir=str(work_dir),
+        opts=_workspace_options(work_dir),
+    )
+    _configure_managed_stack(
+        stack,
+        plain_overrides={"documentDbInstanceCount": "0"},
+    )
+
+    try:
+        with pytest.raises(AutomationRuntimeError) as exc_info:
+            stack.preview()
+        assert (
+            "documentDbInstanceCount must be at least 1 for managed deployments."
+            in str(exc_info.value)
+        ), str(exc_info.value)
     finally:
         try:
             stack.workspace.remove_stack(stack.name)

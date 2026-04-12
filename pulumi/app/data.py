@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import quote
 
 import pulumi_aws as aws
 
@@ -125,6 +126,11 @@ class DataPlane(pulumi.ComponentResource):
             opts=pulumi.ResourceOptions(parent=self),
         )
 
+        if settings.documentdb.instance_count < 1:
+            raise ValueError(
+                "documentDbInstanceCount must be at least 1 for managed deployments."
+            )
+
         for index in range(settings.documentdb.instance_count):
             aws.docdb.ClusterInstance(
                 f"user-service-documentdb-instance-{index + 1}",
@@ -155,7 +161,8 @@ class DataPlane(pulumi.ComponentResource):
             ).apply(
                 lambda parts: (
                     "mongodb://"
-                    f"{parts[0]}:{parts[1]}@{parts[2]}:{settings.documentdb.port}/"
+                    f"{quote(parts[0], safe='')}:{quote(parts[1], safe='')}@"
+                    f"{parts[2]}:{settings.documentdb.port}/"
                     "?tls=true&replicaSet=rs0&readPreference=secondaryPreferred"
                     "&retryWrites=false"
                 )
@@ -210,7 +217,10 @@ class DataPlane(pulumi.ComponentResource):
                 settings.secrets.redis_auth_token,
                 redis_replication_group.primary_endpoint_address,
             ).apply(
-                lambda parts: f"rediss://:{parts[0]}@{parts[1]}:{settings.redis.port}/0"
+                lambda parts: (
+                    f"rediss://:{quote(parts[0], safe='')}@"
+                    f"{parts[1]}:{settings.redis.port}/0"
+                )
             ),
             opts=pulumi.ResourceOptions(parent=self),
         )

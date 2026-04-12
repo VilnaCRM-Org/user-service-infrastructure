@@ -36,6 +36,7 @@ class MessagingPlane(pulumi.ComponentResource):
         settings: StackSettings,
         opts: Optional[pulumi.ResourceOptions] = None,
     ) -> None:
+        """Build preview-safe outputs or provision managed queue resources."""
         super().__init__(
             "user-service-infrastructure:messaging:Plane",
             name,

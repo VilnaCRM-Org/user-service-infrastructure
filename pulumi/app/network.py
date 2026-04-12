@@ -39,6 +39,7 @@ class NetworkPlane(pulumi.ComponentResource):
         settings: StackSettings,
         opts: Optional[pulumi.ResourceOptions] = None,
     ) -> None:
+        """Build preview-safe outputs or provision the managed network topology."""
         super().__init__("user-service-infrastructure:network:Plane", name, None, opts)
 
         self.outputs = (

@@ -37,6 +37,7 @@ class UserServiceStack(pulumi.ComponentResource):
         *,
         opts: Optional[pulumi.ResourceOptions] = None,
     ) -> None:
+        """Compose the full user-service infrastructure stack for the active config."""
         super().__init__(
             "user-service-infrastructure:stack:UserService", name, None, opts
         )

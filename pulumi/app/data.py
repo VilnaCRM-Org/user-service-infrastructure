@@ -39,6 +39,7 @@ class DataPlane(pulumi.ComponentResource):
         network: NetworkPlane,
         opts: Optional[pulumi.ResourceOptions] = None,
     ) -> None:
+        """Build preview-safe outputs or provision managed data services."""
         super().__init__("user-service-infrastructure:data:Plane", name, None, opts)
 
         self.outputs = (

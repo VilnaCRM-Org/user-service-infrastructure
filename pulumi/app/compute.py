@@ -45,6 +45,7 @@ class ComputePlane(pulumi.ComponentResource):
         messaging: MessagingPlane,
         opts: Optional[pulumi.ResourceOptions] = None,
     ) -> None:
+        """Build preview-safe outputs or provision the managed compute plane."""
         super().__init__("user-service-infrastructure:compute:Plane", name, None, opts)
 
         self.outputs = (

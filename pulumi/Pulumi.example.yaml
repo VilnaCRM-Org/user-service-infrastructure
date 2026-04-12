@@ -8,5 +8,5 @@ config:
   user-service-infrastructure:apiUrl: https://users.example.com
   user-service-infrastructure:corsAllowOrigin: ^https://users\.example\.com$
   user-service-infrastructure:certificateArn: arn:aws:acm:eu-central-1:123456789012:certificate/example
-  user-service-infrastructure:webImageTag: 2026.04.12
-  user-service-infrastructure:workerImageTag: 2026.04.12
+  user-service-infrastructure:webImageTag: "2026.04.12"
+  user-service-infrastructure:workerImageTag: "2026.04.12"

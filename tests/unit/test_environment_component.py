@@ -176,12 +176,35 @@ class SimpleMocks(mocks.Mocks):
         return args.inputs
 
 
-def _run_pulumi_program(program: Callable[[], None]) -> None:
+class RecordingMocks(SimpleMocks):
+    """Pulumi mocks that retain resource inputs for focused assertions."""
+
+    def __init__(self) -> None:
+        """Initialize the in-memory resource call log."""
+        self.resources: list[dict[str, object]] = []
+
+    def new_resource(self, args: mocks.MockResourceArgs) -> tuple[str, dict]:
+        """Record resource inputs before delegating to the default mock outputs."""
+        self.resources.append(
+            {
+                "name": args.name,
+                "type": args.typ,
+                "inputs": dict(args.inputs),
+            }
+        )
+        return super().new_resource(args)
+
+
+def _run_pulumi_program(
+    program: Callable[[], None],
+    *,
+    test_mocks: mocks.Mocks | None = None,
+) -> None:
     """Execute a Pulumi program with mocks."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        test_mocks = SimpleMocks()
+        test_mocks = test_mocks or SimpleMocks()
         monitor = mocks.MockMonitor(test_mocks)
         mocks.set_mocks(
             test_mocks,
@@ -965,6 +988,109 @@ def test_compute_common_environment_uses_runtime_app_flags() -> None:
 
     assert values["APP_ENV"] == "staging"
     assert values["APP_DEBUG"] == "1"
+
+
+def test_resolve_stack_settings_requires_social_secrets_for_enabled_providers() -> None:
+    """Require managed social-provider secrets only when a provider is enabled."""
+
+    def program() -> None:
+        """Resolve managed settings with GitHub OAuth enabled but no secret set."""
+        env_settings = EnvironmentSettings("unit", environment="prod")
+        resolve_stack_settings(env_settings)
+
+    managed_config = {
+        "deploymentMode": "managed",
+        "serviceName": "user-service",
+        "accessLogsBucketName": "shared-alb-access-logs",
+        "githubClientId": "github-client",
+        "documentDbPassword": "mongo-secret",
+        "redisAuthToken": "redis-secret",
+        "appSecret": "app-secret",
+        "mailerDsn": "smtp://mail.example.com:587",
+        "oauthEncryptionKey": "oauth-encryption-key",
+        "oauthPassphrase": "oauth-passphrase",
+        "twoFactorEncryptionKey": "two-factor-key",
+        "oauthPrivateKeyPem": "private-key",
+        "oauthPublicKeyPem": "public-key",
+    }
+
+    with (
+        mocked_pulumi_context(managed_config),
+        patch("app.environment.pulumi.runtime.is_dry_run", return_value=False),
+    ):
+        with pytest.raises(
+            ValueError,
+            match=(
+                r"^githubClientSecret must be configured as a secret for managed "
+                r"deployments\.$"
+            ),
+        ):
+            _run_pulumi_program(program)
+
+
+def test_managed_stack_uses_preview_credential_skips_and_scoped_data_egress() -> None:
+    """Keep provider preview skips and managed data-plane networking intentional."""
+    managed_config = {
+        "deploymentMode": "managed",
+        "serviceName": "user-service",
+        "accessLogsBucketName": "shared-alb-access-logs",
+        "documentDbPassword": "mongo-secret",
+        "redisAuthToken": "redis-secret",
+        "appSecret": "app-secret",
+        "mailerDsn": "smtp://mail.example.com:587",
+        "oauthEncryptionKey": "oauth-encryption-key",
+        "oauthPassphrase": "oauth-passphrase",
+        "twoFactorEncryptionKey": "two-factor-key",
+        "oauthPrivateKeyPem": "private-key",
+        "oauthPublicKeyPem": "public-key",
+    }
+    recording_mocks = RecordingMocks()
+
+    def program() -> None:
+        """Instantiate a managed stack with a single-node Redis topology."""
+        UserServiceStack("managed-stack")
+
+    with mocked_pulumi_context(
+        {**managed_config, "redisReplicasPerNodeGroup": 0},
+        aws_config_values={"region": "eu-central-1"},
+    ):
+        _run_pulumi_program(program, test_mocks=recording_mocks)
+
+    provider = next(
+        resource
+        for resource in recording_mocks.resources
+        if resource["name"] == "managed-provider"
+    )
+    provider_inputs = provider["inputs"]
+    assert provider_inputs["skipCredentialsValidation"] == "false"
+    assert provider_inputs["skipMetadataApiCheck"] == "false"
+    assert provider_inputs["skipRequestingAccountId"] == "false"
+    assert provider_inputs["skipRegionValidation"] == "false"
+
+    redis_replication_group = next(
+        resource
+        for resource in recording_mocks.resources
+        if resource["name"] == "user-service-redis"
+    )
+    redis_inputs = redis_replication_group["inputs"]
+    assert redis_inputs["automaticFailoverEnabled"] is False
+    assert redis_inputs["multiAzEnabled"] is False
+    assert redis_inputs["numCacheClusters"] == 1
+
+    documentdb_security_group = next(
+        resource
+        for resource in recording_mocks.resources
+        if resource["name"] == "user-service-documentdb-sg"
+    )
+    redis_security_group = next(
+        resource
+        for resource in recording_mocks.resources
+        if resource["name"] == "user-service-redis-sg"
+    )
+    assert documentdb_security_group["inputs"]["egress"][0]["cidrBlocks"] == [
+        "10.42.0.0/16"
+    ]
+    assert redis_security_group["inputs"]["egress"][0]["cidrBlocks"] == ["10.42.0.0/16"]
 
 
 def test_register_outputs_maps_component_properties() -> None:

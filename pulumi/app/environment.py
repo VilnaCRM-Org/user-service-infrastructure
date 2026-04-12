@@ -837,25 +837,25 @@ def resolve_stack_settings(environment_settings: EnvironmentSettings) -> StackSe
         github_client_secret=_secret_value(
             config,
             "githubClientSecret",
-            managed=False,
+            managed=deployment_mode == "managed" and bool(social.github_client_id),
             preview_default="",
         ),
         google_client_secret=_secret_value(
             config,
             "googleClientSecret",
-            managed=False,
+            managed=deployment_mode == "managed" and bool(social.google_client_id),
             preview_default="",
         ),
         facebook_client_secret=_secret_value(
             config,
             "facebookClientSecret",
-            managed=False,
+            managed=deployment_mode == "managed" and bool(social.facebook_client_id),
             preview_default="",
         ),
         twitter_client_secret=_secret_value(
             config,
             "twitterClientSecret",
-            managed=False,
+            managed=deployment_mode == "managed" and bool(social.twitter_client_id),
             preview_default="",
         ),
     )

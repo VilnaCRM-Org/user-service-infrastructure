@@ -27,7 +27,7 @@ jobs:
       matrix:
         shard:
           - name: environment
-            paths: pulumi/app/environment.py
+            paths: pulumi/app/environment.py,pulumi/app/__init__.py,pulumi/__main__.py
           - name: compute
             paths: pulumi/app/compute.py
           - name: data-network

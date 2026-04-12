@@ -321,3 +321,24 @@ def test_mutation_script_derives_coverage_flags_from_mutation_paths() -> None:
     assert '"mutmut"' in script
     assert '"--test-time-multiplier"' in script
     assert "--cov=pulumi/app" not in script
+
+
+def test_mutation_workflow_covers_entrypoint_and_example_tags_stay_strings() -> None:
+    """Keep mutation scope aligned with the runtime surface.
+
+    Keep the example image tags explicit strings.
+    """
+    workflow = _workflow("pulumi-mutation.yml")
+    example_config = (PROJECT_ROOT / "pulumi" / "Pulumi.example.yaml").read_text(
+        encoding="utf-8"
+    )
+    shards = workflow["jobs"]["mutation"]["strategy"]["matrix"]["shard"]
+    environment_shard = next(
+        shard for shard in shards if shard["name"] == "environment"
+    )
+
+    assert environment_shard["paths"] == (
+        "pulumi/app/environment.py,pulumi/app/__init__.py,pulumi/__main__.py"
+    )
+    assert 'user-service-infrastructure:webImageTag: "2026.04.12"' in example_config
+    assert 'user-service-infrastructure:workerImageTag: "2026.04.12"' in example_config

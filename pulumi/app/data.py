@@ -189,8 +189,8 @@ class DataPlane(pulumi.ComponentResource):
             transit_encryption_mode="required",
             auth_token=settings.secrets.redis_auth_token,
             auth_token_update_strategy="ROTATE",  # nosec B106
-            automatic_failover_enabled=True,
-            multi_az_enabled=True,
+            automatic_failover_enabled=settings.redis.replicas_per_node_group > 0,
+            multi_az_enabled=settings.redis.replicas_per_node_group > 0,
             num_cache_clusters=settings.redis.replicas_per_node_group + 1,
             snapshot_retention_limit=settings.redis.snapshot_retention_limit,
             snapshot_window=settings.redis.snapshot_window,

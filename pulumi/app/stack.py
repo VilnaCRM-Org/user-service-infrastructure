@@ -116,9 +116,9 @@ class UserServiceStack(pulumi.ComponentResource):
             access_key=preview_access_key,
             secret_key=preview_secret_key,
             default_tags=aws.ProviderDefaultTagsArgs(tags=self.settings.default_tags),
-            skip_credentials_validation=pulumi.runtime.is_dry_run(),
-            skip_metadata_api_check=pulumi.runtime.is_dry_run(),
-            skip_requesting_account_id=pulumi.runtime.is_dry_run(),
+            skip_credentials_validation=preview_without_credentials,
+            skip_metadata_api_check=preview_without_credentials,
+            skip_requesting_account_id=preview_without_credentials,
             skip_region_validation=preview_without_credentials,
             opts=pulumi.ResourceOptions(parent=self),
         )

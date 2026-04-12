@@ -279,7 +279,7 @@ class NetworkPlane(pulumi.ComponentResource):
                     protocol="-1",
                     from_port=0,
                     to_port=0,
-                    cidr_blocks=["0.0.0.0/0"],
+                    cidr_blocks=[settings.network.vpc_cidr],
                 )
             ],
             opts=pulumi.ResourceOptions(parent=self),
@@ -302,7 +302,7 @@ class NetworkPlane(pulumi.ComponentResource):
                     protocol="-1",
                     from_port=0,
                     to_port=0,
-                    cidr_blocks=["0.0.0.0/0"],
+                    cidr_blocks=[settings.network.vpc_cidr],
                 )
             ],
             opts=pulumi.ResourceOptions(parent=self),

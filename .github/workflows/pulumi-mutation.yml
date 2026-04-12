@@ -19,10 +19,23 @@ permissions:
 
 jobs:
   mutation:
-    name: Mutation
+    name: Mutation (${{ matrix.shard.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - name: environment
+            paths: pulumi/app/environment.py
+          - name: compute
+            paths: pulumi/app/compute.py
+          - name: data-network
+            paths: pulumi/app/data.py,pulumi/app/network.py
+          - name: messaging-stack-guardrails
+            paths: pulumi/app/messaging.py,pulumi/app/stack.py,pulumi/app/guardrails.py
     env:
+      MUTATION_PATHS: ${{ matrix.shard.paths }}
       PULUMI_SKIP_UPDATE_CHECK: "true"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5

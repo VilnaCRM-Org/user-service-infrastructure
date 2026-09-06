@@ -129,6 +129,9 @@ def test_default_tags_use_service_and_environment() -> None:
                 "Environment": "production",
                 "Owner": "platform",
                 "CostCenter": "engineering",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
 
@@ -155,6 +158,9 @@ def test_environment_falls_back_to_config_value() -> None:
                 "Environment": "qa",
                 "Owner": "platform",
                 "CostCenter": "engineering",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
 
@@ -166,6 +172,9 @@ def test_environment_falls_back_to_config_value() -> None:
         call("serviceName"),
         call("owner"),
         call("costCenter"),
+        call("dataClassification"),
+        call("criticality"),
+        call("retentionClass"),
     ]
 
 
@@ -189,6 +198,9 @@ def test_environment_defaults_to_dev_when_unset() -> None:
                 "Environment": "dev",
                 "Owner": "platform",
                 "CostCenter": "engineering",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
 
@@ -214,6 +226,9 @@ def test_service_name_falls_back_to_config_value() -> None:
                 "Environment": "qa",
                 "Owner": "platform",
                 "CostCenter": "engineering",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
 
@@ -239,6 +254,9 @@ def test_service_name_defaults_to_project_name() -> None:
                 "Environment": "qa",
                 "Owner": "platform",
                 "CostCenter": "engineering",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
 
@@ -260,6 +278,9 @@ def test_default_tags_allow_owner_and_cost_center_overrides() -> None:
                 "Environment": "qa",
                 "Owner": "team-platform",
                 "CostCenter": "cost-123",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
 
@@ -281,6 +302,9 @@ def test_default_tags_trim_owner_and_cost_center_config_values() -> None:
                 "Environment": "qa",
                 "Owner": "team-platform",
                 "CostCenter": "cost-123",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
 
@@ -304,6 +328,9 @@ def test_default_tags_fall_back_when_owner_and_cost_center_are_blank() -> None:
                 "Environment": "qa",
                 "Owner": "platform",
                 "CostCenter": "engineering",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
 
@@ -331,6 +358,9 @@ def test_default_tags_allow_explicit_owner_and_cost_center_overrides() -> None:
                 "Environment": "qa",
                 "Owner": "payments",
                 "CostCenter": "finops",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
 
@@ -357,6 +387,9 @@ def test_default_tags_trim_explicit_owner_and_cost_center_overrides() -> None:
                 "Environment": "qa",
                 "Owner": "payments",
                 "CostCenter": "finops",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
 
@@ -370,19 +403,30 @@ def test_resolve_config_value_preserves_explicit_configured_and_default_paths() 
     assert resolve_config_value(None, None, default="dev") == "dev"
 
 
-def test_stack_metadata_helpers_keep_the_four_field_layout() -> None:
+def test_stack_metadata_helpers_keep_the_seven_field_layout() -> None:
     """Map service, environment, owner, and cost center without index drift."""
     metadata = _stack_metadata_from_outputs(
-        ["billing", "qa", "team-platform", "cost-123"]
+        ["billing", "qa", "team-platform", "cost-123", "internal", "high", "standard"]
     )
 
-    assert metadata == ("billing", "qa", "team-platform", "cost-123")
+    assert metadata == (
+        "billing",
+        "qa",
+        "team-platform",
+        "cost-123",
+        "internal",
+        "high",
+        "standard",
+    )
     assert _stack_tag_from_parts(metadata) == "billing-qa"
     assert _default_tags_from_parts(metadata) == {
         "Project": "billing",
         "Environment": "qa",
         "Owner": "team-platform",
         "CostCenter": "cost-123",
+        "DataClassification": "internal",
+        "Criticality": "high",
+        "RetentionClass": "standard",
     }
 
 
@@ -473,6 +517,9 @@ def test_main_exports_expected_outputs() -> None:
                 "Environment": "dev",
                 "Owner": "platform",
                 "CostCenter": "engineering",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
 
@@ -516,3 +563,50 @@ def test_register_outputs_maps_component_properties() -> None:
     assert outputs["serviceName"] is resource.service_name
     assert outputs["stackTag"] is resource.stack_tag
     assert outputs["defaultTags"] is resource.default_tags
+
+
+@pytest.mark.parametrize(
+    "configured,expected",
+    [
+        (
+            {
+                "dataClassification": " confidential ",
+                "criticality": " critical ",
+                "retentionClass": " regulated ",
+            },
+            {
+                "DataClassification": "confidential",
+                "Criticality": "critical",
+                "RetentionClass": "regulated",
+            },
+        ),
+        (
+            {"dataClassification": " ", "criticality": "", "retentionClass": " "},
+            {
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
+            },
+        ),
+    ],
+)
+def test_required_tag_classifications_follow_config(configured, expected):
+    """Resolve all mandatory labels before exporting resource default tags."""
+
+    def program():
+        component = EnvironmentSettings(
+            "required-tags", environment="test", service_name="billing"
+        )
+        _assert_output_value(
+            component.default_tags,
+            {
+                "Project": "billing",
+                "Environment": "test",
+                "Owner": "platform",
+                "CostCenter": "engineering",
+                **expected,
+            },
+        )
+
+    with mocked_pulumi_context(configured):
+        _run_pulumi_program(program)

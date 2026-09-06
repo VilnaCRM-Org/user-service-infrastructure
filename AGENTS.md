@@ -72,8 +72,6 @@ These rules are mandatory for AI coding agents in this repository.
 
 ## Governed service contract
 
-# AGENTS.md — user-service-infrastructure (managed service repo)
-
 These are the repo-local agent rules for `user-service-infrastructure`. They mirror
 the governance gating and secret-handling posture enforced centrally by the
 `bootstrap-infrastructure` governance stack. An agent (or human) working in this
@@ -114,7 +112,7 @@ This repo **consumes, never creates** that infrastructure.
 ### 3. Two accounts, one region
 - `test` stack -> AWS account `891377212104`; `prod` stack -> AWS account `933245420672`;
   region `eu-central-1`. Each stack pins ONLY its own account (no cross-account literal
-  in the other stack). Account literals live ONLY in the stack config, never in Python.
+  in the other stack). Account literals belong in stack config, never in Pulumi program Python; synthetic test fixtures may use explicit account IDs.
 
 ### 4. OIDC-only credentials — no static keys, no AdministratorAccess
 - All AWS credentials come from **GitHub OIDC role assumption** through

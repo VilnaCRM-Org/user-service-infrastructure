@@ -12,13 +12,7 @@ x-pulumi-base: &pulumi-base
     - type: bind
       source: .
       target: /workspace
-  env_file:
-    - path: .env
-      required: false
   environment:
-    - AWS_ACCESS_KEY_ID
-    - AWS_SECRET_ACCESS_KEY
-    - AWS_SESSION_TOKEN
     - AWS_REGION
     - AWS_DEFAULT_REGION
     - PULUMI_STACK
@@ -50,6 +44,9 @@ services:
   # config or host-exported AWS_* variables inside the container.
   pulumi-aws:
     <<: *pulumi-base
+    env_file:
+      - path: .env
+        required: false
     build:
       context: .
       dockerfile: Dockerfile

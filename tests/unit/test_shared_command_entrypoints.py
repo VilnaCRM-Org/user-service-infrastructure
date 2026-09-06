@@ -965,6 +965,7 @@ def test_run_up_stack_rejects_direct_apply_in_github_actions(
     ):
         monkeypatch.setattr(module, name, forbidden_preparation)
     assert module.main(["up"]) == 1
+    assert module.main(["destroy"]) == 1
     assert module._run_up_stack(context, "test") == 1  # nosec B101
     assert "direct Pulumi up is disabled in GitHub Actions" in (  # nosec B101
         capsys.readouterr().err

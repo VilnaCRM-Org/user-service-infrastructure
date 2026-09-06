@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""Single source of truth for governance / credential-bearing path globs.
+"""Inherited bootstrap path classifier retained for shared helper compatibility.
 
-`GOVERNANCE_PATH_GLOBS` is the §7.1 CODEOWNERS glob set (SECURITY-4): every
-path that can alter IAM trust, scope, secrets, or the gate itself and therefore
-requires @Kravalg review. The same set drives (a) the CODEOWNERS drift test,
-(b) the intake ``governance_touched`` step, and (c) the governance runner's
-server-side scope recompute. There is exactly one authoritative list; a later
-story asserts this tuple is byte-equal to the ``@Kravalg`` lines in
-``.github/CODEOWNERS``.
+This service repository requires @Kravalg CODEOWNERS review for every path.
+Its service-only controller deliberately does not use this bootstrap classifier
+for routing: all changes stay within the service account/backend capability,
+never the central governance IAM role. These globs describe the bootstrap
+credential/trust surface; they are not byte-equal to downstream CODEOWNERS.
 """
 
 from __future__ import annotations
@@ -17,10 +15,8 @@ import posixpath
 import sys
 from fnmatch import fnmatchcase
 
-# Expanded §7.1 set covering ALL credential-bearing / trust-or-scope-altering
-# code. CODEOWNERS syntax: a leading "/" anchors to the repo root and a trailing
-# "/" denotes a directory subtree. Keep this byte-equal to the @Kravalg globs in
-# .github/CODEOWNERS.
+# Bootstrap-origin credential/trust paths. This list does not narrow the
+# downstream all-path CODEOWNERS review requirement or grant deployment rights.
 GOVERNANCE_PATH_GLOBS: tuple[str, ...] = (
     "/pulumi/governance/",
     "/pulumi/github-ci-bootstrap/",

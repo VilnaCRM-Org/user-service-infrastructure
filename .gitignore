@@ -4,7 +4,6 @@ pulumi/.venv/
 # The policy bootstrap may materialize either a symlink or a directory here.
 policy/.venv
 policy/.venv/
-.env
 .ruff_cache/
 .tmp.importlinter.toml
 __pycache__/
@@ -17,6 +16,9 @@ __pycache__/
 !.coveragerc
 
 .env*
+!.env.dist
+!.env.empty
+!.env.example
 .pulumi/
 *.pyc
 .trusted/

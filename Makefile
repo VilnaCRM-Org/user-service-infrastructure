@@ -22,6 +22,9 @@ COMPOSE_ENV_FLAG  = $(if $(COMPOSE_ENV_FILE),--env-file $(COMPOSE_ENV_FILE),)
 COMPOSE           = $(DOCKER_COMPOSE) $(COMPOSE_ENV_FLAG)
 COMPOSE_GITHUB_TOKEN = $(if $(GITHUB_TOKEN),-e GITHUB_TOKEN,)
 COMPOSE_PULUMI_STACK = -e PULUMI_STACK
+# Forward temporary OIDC credentials by name only on explicit cloud commands.
+COMPOSE_AWS_SESSION = $(if $(filter true,$(GITHUB_ACTIONS)),$(if $(AWS_SESSION_TOKEN),-e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN,))
+COMPOSE_CLOUD_ENV = $(COMPOSE_GITHUB_TOKEN) $(COMPOSE_PULUMI_STACK) $(COMPOSE_AWS_SESSION)
 REPO_PYTHON      ?= python3
 PULUMI_CWD_FLAG   = --cwd $(PULUMI_DIR)
 POLICY_PACK_DIR   = /workspace/policy
@@ -56,7 +59,7 @@ TOTAL_COVERAGE_ENV        = -e COVERAGE_FILE=/workspace/.coverage.total \
 .DEFAULT_GOAL     = help
 .RECIPEPREFIX    +=
 .PHONY: help doctor build start publish-pulumi-preview-summary pulumi-preview pulumi-up pulumi-refresh \
-        pulumi-destroy sh down ci ci-pr nightly-quality report-quality \
+        pulumi-destroy pulumi-plan pulumi-up-plan initialize-stack sh down ci ci-pr nightly-quality report-quality \
         report-maintainability-trends report-dead-code report-docstrings \
         report-sbom test-quality test-ruff test-ty test-maintainability \
         test-architecture test-dependency-hygiene test-lockfile test-coverage \
@@ -66,9 +69,9 @@ TOTAL_COVERAGE_ENV        = -e COVERAGE_FILE=/workspace/.coverage.total \
         test-repo-hygiene test-unit test-integration test-pulumi test-policy \
         test-crossguard test-mutation test-battery test-cli test all clean
 
-pulumi-preview pulumi-up pulumi-refresh pulumi-destroy test-preview \
+pulumi-preview pulumi-up pulumi-refresh pulumi-destroy pulumi-plan pulumi-up-plan initialize-stack test-preview \
 test-destructive-diff test-iam-validation test-drift: export GITHUB_TOKEN := $(GITHUB_TOKEN)
-pulumi-preview pulumi-up pulumi-refresh pulumi-destroy: export PULUMI_STACK := $(PULUMI_STACK)
+pulumi-preview pulumi-up pulumi-refresh pulumi-destroy pulumi-plan pulumi-up-plan test-drift initialize-stack: export PULUMI_STACK := $(PULUMI_STACK)
 
 all: help ## Display help (default goal).
 
@@ -90,16 +93,16 @@ publish-pulumi-preview-summary: ## Generate Pulumi preview artifacts and publish
 	$(REPO_PYTHON) ./scripts/publish_pulumi_preview_summary.py
 
 pulumi-preview: ## Run the guarded preview command.
-	$(COMPOSE) run --rm $(COMPOSE_SERVICE) uv run --frozen python scripts/run_pulumi_command.py preview
+	$(COMPOSE) run --rm $(COMPOSE_CLOUD_ENV) $(COMPOSE_SERVICE) uv run --frozen python scripts/run_pulumi_command.py preview
 
 pulumi-up: ## Run the guarded up command.
-	$(COMPOSE) run --rm $(COMPOSE_SERVICE) uv run --frozen python scripts/run_pulumi_command.py up
+	$(COMPOSE) run --rm $(COMPOSE_CLOUD_ENV) $(COMPOSE_SERVICE) uv run --frozen python scripts/run_pulumi_command.py up
 
 pulumi-refresh: ## Run the guarded refresh command.
-	$(COMPOSE) run --rm $(COMPOSE_SERVICE) uv run --frozen python scripts/run_pulumi_command.py refresh
+	$(COMPOSE) run --rm $(COMPOSE_CLOUD_ENV) $(COMPOSE_SERVICE) uv run --frozen python scripts/run_pulumi_command.py refresh
 
 pulumi-destroy: ## Run the guarded destroy command.
-	$(COMPOSE) run --rm $(COMPOSE_SERVICE) uv run --frozen python scripts/run_pulumi_command.py destroy
+	$(COMPOSE) run --rm $(COMPOSE_CLOUD_ENV) $(COMPOSE_SERVICE) uv run --frozen python scripts/run_pulumi_command.py destroy
 
 sh: ## Open a shell inside the Pulumi container.
 	$(COMPOSE) run --rm $(COMPOSE_SERVICE) sh
@@ -230,7 +233,7 @@ test-guardrails: ## Run the credential-free preview and destructive-diff guardra
 	$(MAKE) test-destructive-diff
 
 test-drift: ## Run the guarded drift command.
-	$(COMPOSE) run --rm $(COMPOSE_SERVICE) uv run --frozen python scripts/run_pulumi_command.py drift
+	$(COMPOSE) run --rm $(COMPOSE_CLOUD_ENV) $(COMPOSE_SERVICE) uv run --frozen python scripts/run_pulumi_command.py drift
 
 test-quality: ## Run blocking Python quality, architecture, and dependency gates.
 	$(MAKE) test-ruff
@@ -323,12 +326,11 @@ clean: ## Remove Docker Compose artifacts, Python caches, and build artifacts.
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
 	rm -rf .venv policy/.venv dist build *.egg-info 2>/dev/null || true
 
-.PHONY: pulumi-plan pulumi-up-plan initialize-stack
 pulumi-plan: ## Save an exact reviewed-source plan against existing AWS state.
-	$(COMPOSE) run --rm $(COMPOSE_SERVICE) uv run --frozen python scripts/run_pulumi_command.py plan
+	$(COMPOSE) run --rm $(COMPOSE_CLOUD_ENV) $(COMPOSE_SERVICE) uv run --frozen python scripts/run_pulumi_command.py plan
 
 pulumi-up-plan: ## Apply only the verified saved plan.
-	$(COMPOSE) run --rm $(COMPOSE_SERVICE) uv run --frozen python scripts/run_pulumi_command.py up-plan
+	$(COMPOSE) run --rm $(COMPOSE_CLOUD_ENV) $(COMPOSE_SERVICE) uv run --frozen python scripts/run_pulumi_command.py up-plan
 
 initialize-stack: ## Initialize one missing shared stack through the trusted guard.
-	$(COMPOSE) run --rm $(COMPOSE_SERVICE) uv run --frozen python scripts/initialize_service_stack.py initialize
+	$(COMPOSE) run --rm $(COMPOSE_CLOUD_ENV) $(COMPOSE_SERVICE) uv run --frozen python scripts/initialize_service_stack.py initialize

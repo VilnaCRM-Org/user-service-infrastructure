@@ -37,6 +37,9 @@ assert_help_target() {
     pulumi-up
     pulumi-refresh
     pulumi-destroy
+    pulumi-plan
+    pulumi-up-plan
+    initialize-stack
     report-dead-code
     report-docstrings
     report-maintainability-trends
@@ -137,7 +140,7 @@ assert_help_target() {
 }
 
 @test "guarded Pulumi targets use locked runtime without shell interpolation" {
-  for command in preview up refresh destroy; do
+  for command in preview up refresh destroy plan up-plan; do
     run env GITHUB_TOKEN=ghs_test_token make -n "pulumi-${command}" "PULUMI_STACK=dev'; printf INJECTED >&2; #"
     [ "$status" -eq 0 ]
     assert_compose_env_file
@@ -496,4 +499,11 @@ assert_help_target() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"uv run cyclonedx-py environment"* ]]
   [[ "$output" == *"python-environment.cdx.json"* ]]
+}
+
+@test "make initialize-stack uses the trusted locked initializer" {
+  run make -n initialize-stack PULUMI_STACK=test
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"-e PULUMI_STACK"* ]]
+  [[ "$output" == *"uv run --frozen python scripts/initialize_service_stack.py initialize"* ]]
 }

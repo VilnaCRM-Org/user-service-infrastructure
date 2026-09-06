@@ -195,7 +195,6 @@ def test_compose_forwards_fixed_identity_and_shared_backend_pins():
     actual = set(compose["services"]["pulumi"]["environment"])
     assert {
         "AWS_ACCOUNT_ID",
-        "AWS_SESSION_TOKEN",
         "PULUMI_BACKEND_URL",
         "PULUMI_SECRETS_PROVIDER",
         "PULUMI_EXPECTED_SHA",
@@ -206,6 +205,9 @@ def test_compose_forwards_fixed_identity_and_shared_backend_pins():
         "GITHUB_REF",
         "GITHUB_REPOSITORY",
     } <= actual
+    assert (
+        not {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"} & actual
+    )
     assert "PULUMI_CONFIG_PASSPHRASE" not in actual
     assert "PULUMI_ACCESS_TOKEN" not in actual
     assert not any(

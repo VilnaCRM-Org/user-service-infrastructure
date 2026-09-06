@@ -560,3 +560,20 @@ def test_missing_checkpoint_never_becomes_empty_initialization_fallback(setup):
             pytest.fail("unexpected yield")
     assert not any(call[0] == "pulumi" for call in calls)
     assert not any("encrypt" in call or "generate-data-key" in call for call in calls)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("backend_url", "s3://[invalid"), ("secrets_provider", "awskms://[invalid")],
+)
+def test_malformed_uri_uses_guarded_stack_error(setup, field, value):
+    module, _, context, values, calls, _ = setup
+    if field == "secrets_provider":
+        values["export"]["deployment"]["secrets_providers"]["state"]["url"] = value
+    broken = replace(context, **{field: value})
+    with pytest.raises(
+        module.StackConfigError, match="Invalid stack backend or secrets provider URI"
+    ):
+        with module.prepared_stack_configuration(broken, "test"):
+            pytest.fail("Malformed URI reached program execution")
+    assert not any("encrypt" in call or "generate-data-key" in call for call in calls)

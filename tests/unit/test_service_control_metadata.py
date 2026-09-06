@@ -41,7 +41,7 @@ def test_ruleset_metadata_retains_stronger_rules_and_exact_app_issuer():
     )
     assert controls.ruleset_verification_blockers(ruleset, promotion_app_id=54321)
     assert controls.ruleset_verification_blockers(None, promotion_app_id=12345)
-    assert len(controls.ruleset_verification_blockers({}, promotion_app_id=12345)) == 3
+    assert len(controls.ruleset_verification_blockers({}, promotion_app_id=12345)) == 4
     assert controls.rulesets_have_pull_request_rule([{}, ruleset])
     assert not controls.rulesets_have_pull_request_rule([{}])
     assert controls.active_branch_ruleset_count([{}, ruleset]) == 1

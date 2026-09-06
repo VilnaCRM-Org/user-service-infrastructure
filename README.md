@@ -154,9 +154,7 @@ ENABLE_AWS_CREDENTIALS=1 make pulumi-preview
 Please disclose any vulnerabilities found responsibly – report security issues to the maintainers privately.
 
 
-## Governed TEST and PROD deployment
-
-# Service infrastructure scaffold
+## Service infrastructure scaffold
 
 Generate a complete repository from the bootstrap repository root:
 
@@ -180,6 +178,8 @@ KMS key, config secrets and OIDC roles. Operator-owned `github-ci-bootstrap`
 provisions the immutable permission boundary. Deploying
 actual service workloads requires separately reviewed capability and boundary
 changes. Catalog membership grants no general AWS infrastructure authority.
+
+## Governed TEST and PROD deployment
 
 Before granting privileges, create or inspect the actual service GitHub repository
 and pin its immutable repository ID and owner ID in the governance catalog. Never
@@ -236,7 +236,7 @@ Apply comments and Initialize Service Stack dispatches must be requested by a
 maintainer other than sole environment reviewer Kravalg. Kravalg approves the
 protected environment; the original apply commenter cannot also be the approver.
 
-### Existing template compatibility
+## Existing template compatibility
 
 The original development metadata component and its four exports remain intact.
 Local integration fixtures use disposable, credential-free file state only for
@@ -250,3 +250,16 @@ Shared previews, saved-plan applies and post-apply drift use Service Self Deploy
 Existing quality, security, mutation, release and template-sync automation remains.
 Earlier template documentation describing the generic OIDC/token path is
 historical; the governed TEST/PROD contract above governs shared deployments.
+
+Scheduled TEST and PROD drift runs use the protected `test-preview` and `prod-preview` environments in Service Self Deploy, with config-reader and drift OIDC roles only. These runs still require the designated reviewer; unattended drift remains an installation prerequisite, requiring dedicated main-only read-only environments and narrowly extended config-reader/drift trust subjects. Apply trust and approvals remain unchanged.
+
+The default Compose service does not load `.env` or forward AWS access keys. Cloud Make commands forward temporary credentials by variable name only in GitHub Actions when a session token exists. Local host credentials remain an explicit `ENABLE_AWS_CREDENTIALS=1` opt-in. `pulumi-plan`, `pulumi-up-plan`, `test-drift`, and `initialize-stack` export the selected `PULUMI_STACK`; GitHub tokens are forwarded only for these explicit cloud commands.
+
+The credential-free preview helper (`make test-preview` and
+`scripts/run_pulumi_preview.py`) defaults to the committed `dev` stack when
+`PULUMI_PREVIEW_STACKS` is unset or empty. An explicit stack list overrides that
+local fixture default. Shared TEST/PROD previews use `make pulumi-plan` through
+the protected controller and its exact account-local stack list, backend and KMS
+provider. The general guarded command helper preserves explicit selected-stack
+or multi-stack configuration; the local fixture helper does not silently request
+shared TEST/PROD credentials.

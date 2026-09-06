@@ -13,23 +13,30 @@ DEFAULT_OWNER = "platform"
 DEFAULT_COST_CENTER = "engineering"
 
 
-def _stack_metadata_from_outputs(parts: list[str]) -> tuple[str, str, str, str]:
+def _stack_metadata_from_outputs(
+    parts: list[str],
+) -> tuple[str, str, str, str, str, str, str]:
     """Narrow Pulumi's list-shaped Output.all result to a stable tuple."""
-    return parts[0], parts[1], parts[2], parts[3]
+    return parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6]
 
 
-def _stack_tag_from_parts(parts: tuple[str, str, str, str]) -> str:
+def _stack_tag_from_parts(parts: tuple[str, str, str, str, str, str, str]) -> str:
     """Build the exported stack tag from the service and environment names."""
     return f"{parts[0]}-{parts[1]}"
 
 
-def _default_tags_from_parts(parts: tuple[str, str, str, str]) -> dict[str, str]:
+def _default_tags_from_parts(
+    parts: tuple[str, str, str, str, str, str, str],
+) -> dict[str, str]:
     """Build the default Pulumi tags shared by stack resources."""
     return {
         "Project": parts[0],
         "Environment": parts[1],
         "Owner": parts[2],
         "CostCenter": parts[3],
+        "DataClassification": parts[4],
+        "Criticality": parts[5],
+        "RetentionClass": parts[6],
     }
 
 
@@ -105,12 +112,21 @@ class EnvironmentSettings(pulumi.ComponentResource):
         self.environment = pulumi.Output.from_input(resolved_environment)
         self.service_name = pulumi.Output.from_input(resolved_service)
 
-        stack_metadata: pulumi.Output[tuple[str, str, str, str]] = pulumi.Output.all(
-            self.service_name,
-            self.environment,
-            resolved_owner,
-            resolved_cost_center,
-        ).apply(_stack_metadata_from_outputs)
+        stack_metadata: pulumi.Output[tuple[str, str, str, str, str, str, str]] = (
+            pulumi.Output.all(
+                self.service_name,
+                self.environment,
+                resolved_owner,
+                resolved_cost_center,
+                _normalize_tag_value(
+                    config.get("dataClassification") or "", default="internal"
+                ),
+                _normalize_tag_value(config.get("criticality") or "", default="high"),
+                _normalize_tag_value(
+                    config.get("retentionClass") or "", default="standard"
+                ),
+            ).apply(_stack_metadata_from_outputs)
+        )
         self.stack_tag = stack_metadata.apply(_stack_tag_from_parts)
 
         self.default_tags = stack_metadata.apply(_default_tags_from_parts)

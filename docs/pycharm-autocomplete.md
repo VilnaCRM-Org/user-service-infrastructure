@@ -39,7 +39,7 @@ an interpreter on disk.
    - Choose the repo's `docker-compose.yml`.
    - Set **Service** to `pulumi`.
    - Leave the working directory as `/workspace`.
-   - Ensure the Python interpreter path is `/home/dev/.venvs/user-service-infrastructure/bin/python`.
+   - Ensure the Docker Python interpreter path is `/home/dev/.venvs/bootstrap-infrastructure/bin/python`, matching the pinned scaffold image.
 5. Click **OK**, then **Apply**. PyCharm connects to the running container,
    indexes the interpreter, and autocomplete should light up immediately.
 

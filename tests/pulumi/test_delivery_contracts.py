@@ -201,7 +201,13 @@ def test_docker_compose_keeps_workspace_and_credentials_contract() -> None:
     )
     assert not any(volume["target"] == "/home/dev/.aws" for volume in volumes)
 
-    assert service["env_file"] == [{"path": ".env", "required": False}]
+    assert "env_file" not in service
+    assert aws_service["env_file"] == [{"path": ".env", "required": False}]
+    assert not {
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+    } & set(service["environment"])
     assert {
         "AWS_ACCOUNT_ID",
         "PULUMI_STACK",
@@ -209,7 +215,6 @@ def test_docker_compose_keeps_workspace_and_credentials_contract() -> None:
         "PULUMI_SECRETS_PROVIDER",
         "PULUMI_COMMIT_SHA",
         "PULUMI_EXPECTED_SHA",
-        "AWS_SESSION_TOKEN",
     } <= set(service["environment"])
     assert "PULUMI_ACCESS_TOKEN" not in service["environment"]
     assert any(
@@ -218,9 +223,12 @@ def test_docker_compose_keeps_workspace_and_credentials_contract() -> None:
         and volume["read_only"] is True
         for volume in aws_service["volumes"]
     )
-    assert set(service["environment"]) | {"AWS_PROFILE"} == set(
-        aws_service["environment"]
-    )
+    assert set(service["environment"]) | {
+        "AWS_PROFILE",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+    } == set(aws_service["environment"])
 
 
 def test_prepare_docker_context_script_creates_expected_files(tmp_path: Path) -> None:
@@ -496,6 +504,9 @@ def test_bats_suite_covers_every_public_make_target() -> None:
         "make -n pulumi-up",
         "make -n pulumi-refresh",
         "make -n pulumi-destroy",
+        "make -n pulumi-plan",
+        "make -n pulumi-up-plan",
+        "make -n initialize-stack",
         "make -n report-dead-code",
         "make -n report-docstrings",
         "make -n report-maintainability-trends",
@@ -542,7 +553,12 @@ def test_bats_suite_covers_every_public_make_target() -> None:
             "up",
             "refresh",
             "destroy",
+            "plan",
+            "up-plan",
         }:
+            loop = re.search(r"for command in ([^;]+); do", bats_text)
+            assert loop is not None
+            assert invocation.removeprefix("make -n pulumi-") in loop.group(1).split()
             assert 'make -n "pulumi-${command}"' in bats_text
         else:
             assert invocation in bats_text

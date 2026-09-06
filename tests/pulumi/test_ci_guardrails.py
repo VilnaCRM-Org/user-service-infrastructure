@@ -27,162 +27,14 @@ def _triggers(workflow: dict) -> dict:
     return workflow.get("on", workflow.get(True, {}))
 
 
-def test_preview_guardrail_workflow_requires_preview_diff_and_iam_jobs() -> None:
-    """Keep the preview workflow aligned with the repo-local Make entrypoints."""
+def test_preview_guardrail_workflow_remains_credential_free() -> None:
+    """Ordinary PR code cannot request cloud credentials through a legacy path."""
     workflow = _workflow("pulumi-pr-guardrails.yml")
-    jobs = workflow["jobs"]
-    same_repo_with_cloud_config = (
-        "${{ (github.event_name != 'pull_request' || "
-        "github.event.pull_request.head.repo.full_name == github.repository) && "
-        "vars.AWS_OIDC_ROLE_ARN != '' && vars.PULUMI_BACKEND_URL != '' }}"
-    )
-    same_repo_or_skipped = (
-        "${{ always() && needs.preview.result == 'success' && "
-        "(needs.preview_privileged.result == 'success' || "
-        "needs.preview_privileged.result == 'skipped') }}"
-    )
-    destructive_diff_runs = [
-        step.get("run") for step in jobs["destructive_diff"]["steps"] if step.get("run")
-    ]
-    preview_upload_step = next(
-        (
-            step
-            for step in jobs["preview"]["steps"]
-            if step.get("uses", "").startswith("actions/upload-artifact@")
-        ),
-        None,
-    )
-    preview_privileged_upload_step = next(
-        (
-            step
-            for step in jobs["preview_privileged"]["steps"]
-            if step.get("uses", "").startswith("actions/upload-artifact@")
-        ),
-        None,
-    )
-    preview_privileged_oidc_step = next(
-        (
-            step
-            for step in jobs["preview_privileged"]["steps"]
-            if step.get("name") == "Configure AWS credentials via OIDC"
-        ),
-        None,
-    )
-    preview_run_step = next(
-        (
-            step
-            for step in jobs["preview"]["steps"]
-            if step.get("name") == "Run preview guardrail"
-        ),
-        None,
-    )
-    preview_privileged_run_step = next(
-        (
-            step
-            for step in jobs["preview_privileged"]["steps"]
-            if step.get("name") == "Run preview guardrail"
-        ),
-        None,
-    )
-    privileged_download_step = next(
-        (
-            step
-            for step in jobs["destructive_diff"]["steps"]
-            if step.get("name") == "Download privileged preview artifact"
-        ),
-        None,
-    )
-    unprivileged_download_step = next(
-        (
-            step
-            for step in jobs["destructive_diff"]["steps"]
-            if step.get("name") == "Download unprivileged preview artifact"
-        ),
-        None,
-    )
-    iam_download_step = next(
-        (
-            step
-            for step in jobs["iam_validation"]["steps"]
-            if step.get("name") == "Download preview artifact"
-        ),
-        None,
-    )
-    iam_oidc_step = next(
-        (
-            step
-            for step in jobs["iam_validation"]["steps"]
-            if step.get("name") == "Configure AWS credentials via OIDC"
-        ),
-        None,
-    )
-    preview_privileged_if = " ".join(jobs["preview_privileged"]["if"].split())
-    iam_validation_if = " ".join(jobs["iam_validation"]["if"].split())
-    destructive_diff_if = " ".join(jobs["destructive_diff"]["if"].split())
-
-    assert workflow["concurrency"]["cancel-in-progress"] is True
-    assert "if" not in jobs["preview"]
-    assert jobs["preview"]["permissions"] == {"contents": "read"}
-    assert (
-        jobs["preview"]["env"]["PULUMI_BACKEND_URL"]
-        == "file:///workspace/.pulumi-backend"
-    )
-    assert preview_privileged_if == same_repo_with_cloud_config
-    assert jobs["preview_privileged"]["permissions"] == {
-        "contents": "read",
-        "id-token": "write",
-    }
-    assert iam_validation_if == same_repo_with_cloud_config
-    assert destructive_diff_if == same_repo_or_skipped
-    assert set(jobs["destructive_diff"]["needs"]) == {"preview", "preview_privileged"}
-    assert set(jobs["iam_validation"]["needs"]) == {"preview", "preview_privileged"}
-    assert preview_privileged_oidc_step is not None, "preview OIDC step not found"
-    assert iam_oidc_step is not None, "IAM validation OIDC step not found"
-    assert preview_run_step is not None, "preview run step not found"
-    assert preview_privileged_run_step is not None, (
-        "privileged preview run step not found"
-    )
-    assert preview_upload_step is not None, "preview artifact upload step not found"
-    assert preview_upload_step["with"]["name"] == "pulumi-preview-unprivileged"
-    assert preview_privileged_upload_step is not None, (
-        "preview privileged artifact upload step not found"
-    )
-    assert preview_privileged_upload_step["with"]["name"] == "pulumi-preview-privileged"
-    assert "if" not in preview_privileged_oidc_step
-    assert "if" not in iam_oidc_step
-    assert preview_run_step["run"] == "make publish-pulumi-preview-summary"
-    assert preview_privileged_run_step["run"] == "make publish-pulumi-preview-summary"
-    assert preview_privileged_run_step["env"] == {
-        "PULUMI_REQUIRE_SHARED_BACKEND": "true"
-    }
-    assert any(step.get("run") == "make start" for step in jobs["preview"]["steps"])
-    assert any(
-        step.get("run") == "make start" for step in jobs["preview_privileged"]["steps"]
-    )
-    assert privileged_download_step is not None
-    assert privileged_download_step["if"] == (
-        "${{ needs.preview_privileged.result == 'success' }}"
-    )
-    assert privileged_download_step["with"]["name"] == "pulumi-preview-privileged"
-    assert unprivileged_download_step is not None
-    assert unprivileged_download_step["if"] == (
-        "${{ needs.preview_privileged.result != 'success' }}"
-    )
-    assert unprivileged_download_step["with"]["name"] == "pulumi-preview-unprivileged"
-    assert iam_download_step is not None
-    assert iam_download_step["with"]["name"] == "pulumi-preview-privileged"
-    assert any(
-        step.get("run") == "make test-destructive-diff"
-        for step in jobs["destructive_diff"]["steps"]
-    )
-    assert any(
-        'cp "${GITHUB_EVENT_PATH}" .artifacts/github-event.json' in run
-        for run in destructive_diff_runs
-    )
-    assert any(
-        step.get("run") == "make test-iam-validation"
-        for step in jobs["iam_validation"]["steps"]
-    )
+    assert set(workflow["jobs"]) == {"preview", "destructive_diff"}
+    assert workflow["jobs"]["preview"]["env"]["PULUMI_PREVIEW_STACKS"] == "dev"
+    assert "id-token" not in str(workflow)
+    assert "configure-aws-credentials" not in str(workflow)
+    assert workflow["jobs"]["destructive_diff"]["needs"] == ["preview"]
 
 
 def test_security_scan_workflow_runs_repo_make_targets() -> None:
@@ -234,41 +86,14 @@ def test_codeql_workflow_covers_python_and_github_actions() -> None:
     assert any("github/codeql-action/analyze@" in uses for uses in uses_steps)
 
 
-def test_nightly_guardrails_workflow_covers_drift_and_scorecard() -> None:
-    """Keep the scheduled guardrail workflow focused and discoverable."""
+def test_nightly_guardrails_preserves_scorecard_without_legacy_cloud_path() -> None:
+    """Shared drift belongs to protected self-deploy, not generic token variables."""
     workflow = _workflow("nightly-guardrails.yml")
-    jobs = workflow["jobs"]
-    triggers = _triggers(workflow)
-    scorecard_uses = [
-        step.get("uses") for step in jobs["scorecard"]["steps"] if step.get("uses")
-    ]
-    drift_steps = jobs["drift_detection"]["steps"]
-    preflight_step = next(
-        (
-            step
-            for step in drift_steps
-            if step.get("name") == "Validate drift detection prerequisites"
-        ),
-        None,
-    )
-
-    assert "schedule" in triggers
-    assert "workflow_dispatch" in triggers
-    assert workflow["concurrency"]["cancel-in-progress"] is False
-    assert jobs["drift_detection"]["permissions"] == {
-        "contents": "read",
-        "id-token": "write",
-    }
-    assert (
-        jobs["drift_detection"]["env"]["PULUMI_ACCESS_TOKEN"]
-        == "${{ secrets.PULUMI_ACCESS_TOKEN }}"
-    )
-    assert preflight_step is not None, "drift preflight step not found"
-    assert "vars.AWS_OIDC_ROLE_ARN" in preflight_step["run"]
-    assert "vars.PULUMI_BACKEND_URL" in preflight_step["run"]
-    assert any(step.get("run") == "make test-drift" for step in drift_steps)
-    assert any("ossf/scorecard-action@" in uses for uses in scorecard_uses)
-    assert any("upload-sarif@" in uses for uses in scorecard_uses)
+    assert set(workflow["jobs"]) == {"scorecard"}
+    assert "PULUMI_ACCESS_TOKEN" not in str(workflow)
+    assert "configure-aws-credentials" not in str(workflow)
+    assert "test_post_apply_drift" in _workflow("self-deploy.yml")["jobs"]
+    assert "prod_post_apply_drift" in _workflow("self-deploy.yml")["jobs"]
 
 
 def test_new_guardrail_scripts_and_configs_are_present() -> None:

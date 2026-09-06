@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import runpy
 import sys
+from collections.abc import Generator
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, cast
@@ -19,7 +21,9 @@ POLICY_MAIN = POLICY_DIR / "__main__.py"
 
 
 @pytest.fixture
-def policy_runtime(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+def policy_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Generator[SimpleNamespace, None, None]:
     """Import the policy modules without leaking globals across tests."""
     module_names = (
         "config",
@@ -28,6 +32,8 @@ def policy_runtime(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         "policy.config",
         "policy.guardrails",
         "policy.pack",
+        "reviewed_iam",
+        "policy.reviewed_iam",
     )
     for module_name in module_names:
         monkeypatch.delitem(sys.modules, module_name, raising=False)
@@ -53,6 +59,8 @@ def policy_runtime(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
 
     config = load_module("config", POLICY_DIR / "config.py")
     load_module("policy.config", POLICY_DIR / "config.py")
+    load_module("reviewed_iam", POLICY_DIR / "reviewed_iam.py")
+    load_module("policy.reviewed_iam", POLICY_DIR / "reviewed_iam.py")
     guardrails = load_module("guardrails", POLICY_DIR / "guardrails.py")
     load_module("policy.guardrails", POLICY_DIR / "guardrails.py")
     pack = load_module("pack", POLICY_DIR / "pack.py")
@@ -69,11 +77,16 @@ def policy_runtime(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
             iam_policy_identifier=guardrails.iam_policy_identifier,
             invalid_region=guardrails.invalid_region,
             is_public_bucket_allowlisted=guardrails.is_public_bucket_allowlisted,
+            logging_stack_violations=guardrails.logging_stack_violations,
             logging_violations=guardrails.logging_violations,
             missing_required_tags=guardrails.missing_required_tags,
             open_admin_ports=guardrails.open_admin_ports,
             production_database_violations=guardrails.production_database_violations,
+            storage_encryption_stack_violations=(
+                guardrails.storage_encryption_stack_violations
+            ),
             storage_encryption_violations=guardrails.storage_encryption_violations,
+            reviewed_iam_document_matches=guardrails.reviewed_iam_document_matches,
             wildcard_iam_violations=guardrails.wildcard_iam_violations,
             POLICY_PACK_NAME=pack.POLICY_PACK_NAME,
             block_open_admin_ports=pack.block_open_admin_ports,
@@ -83,8 +96,10 @@ def policy_runtime(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
             enforce_allowed_regions=pack.enforce_allowed_regions,
             require_default_tags=pack.require_default_tags,
             require_logging=pack.require_logging,
+            require_logging_stack=pack.require_logging_stack,
             require_production_database_safety=pack.require_production_database_safety,
             require_storage_encryption=pack.require_storage_encryption,
+            require_storage_encryption_stack=pack.require_storage_encryption_stack,
         )
     finally:
         for module_name in injected_modules:
@@ -98,7 +113,7 @@ def _custom_config(policy_runtime: SimpleNamespace, **overrides: object) -> obje
         "allowed_regions": ("eu-central-1", "eu-west-1"),
         "production_environments": ("prod", "production"),
         "public_s3_bucket_allowlist": frozenset(),
-        "wildcard_iam_allowlist": frozenset(),
+        "reviewed_iam_documents": {},
         "annotations": {
             "public_s3_tag": "AllowPublicBucket",
             "wildcard_iam_tag": "AllowWildcardIam",
@@ -125,6 +140,37 @@ def _collect_violations(
     return violations
 
 
+def _stack_resource(
+    resource_type: str,
+    props: dict[str, Any],
+    *,
+    urn: str,
+    dependencies: list[Any] | None = None,
+    property_dependencies: dict[str, list[Any]] | None = None,
+) -> SimpleNamespace:
+    """Create the subset of a PolicyResource used by stack validators."""
+    return SimpleNamespace(
+        resource_type=resource_type,
+        props=props,
+        urn=urn,
+        dependencies=dependencies or [],
+        property_dependencies=property_dependencies or {},
+    )
+
+
+def _collect_stack_violations(
+    validator, *, resources: list[Any]
+) -> list[tuple[str | None, str]]:
+    """Run a stack validator and capture every reported violation."""
+    violations: list[tuple[str | None, str]] = []
+
+    def report_violation(message: str, urn: str | None = None) -> None:
+        violations.append((urn, message))
+
+    validator(SimpleNamespace(resources=resources), report_violation)
+    return violations
+
+
 def _json(document: dict[str, Any]) -> str:
     """Serialize a policy document into stable JSON."""
     return json.dumps(document, sort_keys=True)
@@ -136,12 +182,30 @@ def test_repo_policy_config_declares_expected_defaults(
     """Keep the committed policy config aligned with the documented guardrails."""
     config = policy_runtime.load_policy_config()
 
-    assert config.required_tags == ("Project", "Environment", "Owner", "CostCenter")
+    assert config.required_tags == (  # nosec B101
+        "Project",
+        "Environment",
+        "Owner",
+        "CostCenter",
+        "DataClassification",
+        "Criticality",
+        "RetentionClass",
+    )
     assert config.allowed_regions == ("eu-central-1", "eu-west-1")
     assert config.production_environments == ("prod", "production", "live")
     assert config.annotations["public_s3_tag"] == "AllowPublicBucket"
     assert config.public_s3_bucket_allowlist == frozenset()
-    assert config.wildcard_iam_allowlist == frozenset()
+    assert config.reviewed_iam_documents
+    assert all(
+        "Governance" not in identity
+        and ("GitHubCi" not in identity or "-bootstrap-infrastructure-" in identity)
+        for identity in config.reviewed_iam_documents
+    )
+    assert all(
+        len(digest) == 64
+        for digests in config.reviewed_iam_documents.values()
+        for digest in digests
+    )
 
 
 def test_load_policy_config_defaults_optional_sections(
@@ -167,7 +231,7 @@ def test_load_policy_config_defaults_optional_sections(
     assert config.production_environments == ()
     assert config.annotations == {}
     assert config.public_s3_bucket_allowlist == frozenset()
-    assert config.wildcard_iam_allowlist == frozenset()
+    assert config.reviewed_iam_documents == {}
 
 
 def test_load_policy_config_freezes_annotations_mapping(
@@ -227,6 +291,58 @@ def test_load_policy_config_rejects_invalid_documents(
 
     with pytest.raises(ValueError, match=message):
         policy_runtime.load_policy_config(path)
+
+
+@pytest.mark.parametrize("digest", ["short", "A" * 64, "z" * 64])
+def test_reviewed_policy_config_rejects_invalid_hashes(
+    policy_runtime: SimpleNamespace, tmp_path: Path, digest: str
+) -> None:
+    """A malformed review pin must fail configuration loading."""
+    path = tmp_path / "guardrails.yaml"
+    path.write_text(
+        "required_tags: []\nallowed_regions: []\nproduction_environments: []\n"
+        "reviewed_iam_documents:\n  reviewed-policy:\n    - " + digest + "\n"
+    )
+    with pytest.raises(ValueError, match="lowercase SHA256"):
+        policy_runtime.load_policy_config(path)
+
+
+@pytest.mark.parametrize("value", ["[]", "null", ""])
+def test_empty_review_pins_are_rejected(policy_runtime, tmp_path, value):
+    """An explicit identity must include at least one reviewed document digest."""
+    path = tmp_path / "guardrails.yaml"
+    path.write_text(
+        "required_tags: []\nallowed_regions: []\nproduction_environments: []\n"
+        f"reviewed_iam_documents:\n  approved-policy: {value}\n"
+    )
+    with pytest.raises(ValueError, match="must not be empty"):
+        policy_runtime.load_policy_config(path)
+
+
+def test_reviewed_policy_config_cannot_mutate_or_use_legacy_name_bypass(
+    policy_runtime: SimpleNamespace, tmp_path: Path
+) -> None:
+    """Legacy names cannot allow arbitrary policy content; pins are immutable."""
+    path = tmp_path / "guardrails.yaml"
+    path.write_text(
+        "required_tags: []\nallowed_regions: []\nproduction_environments: []\n"
+        "allowlists:\n  wildcard_iam: [formerly-allowed]\n"
+        "reviewed_iam_documents:\n  approved-policy:\n    - '" + "a" * 64 + "'\n"
+    )
+    config = policy_runtime.load_policy_config(path)
+    assert config.reviewed_iam_documents == {"approved-policy": ("a" * 64,)}
+    with pytest.raises(TypeError):
+        cast(Any, config.reviewed_iam_documents)["new"] = ("b" * 64,)
+    assert policy_runtime.wildcard_iam_violations(
+        "aws:iam/policy:Policy",
+        {
+            "name": "formerly-allowed",
+            "policy": _json(
+                {"Statement": [{"Effect": "Allow", "Action": "*", "Resource": "*"}]}
+            ),
+        },
+        config,
+    )
 
 
 def test_extract_tags_prefers_tags_all_and_merges_explicit_overrides(
@@ -643,6 +759,22 @@ def test_storage_encryption_and_logging_violations_cover_supported_resources(
         == []
     )
     assert policy_runtime.logging_violations(
+        "aws:s3/bucket:Bucket",
+        {"tags": {"Purpose": "central-logging"}},
+    ) == ["S3 buckets must send access logs to a target bucket."]
+    assert (
+        policy_runtime.logging_violations(
+            "aws:s3/bucket:Bucket",
+            {
+                "tags": {
+                    "LoggingExempt": "true",
+                    "LoggingExemptReason": "Centralized S3 access log sink",
+                }
+            },
+        )
+        == []
+    )
+    assert policy_runtime.logging_violations(
         "aws:lb/loadBalancer:LoadBalancer",
         {"accessLogs": {"enabled": False}},
     ) == ["Load balancers must enable access logs."]
@@ -652,6 +784,371 @@ def test_storage_encryption_and_logging_violations_cover_supported_resources(
             {"accessLogs": {"enabled": True}},
         )
         == []
+    )
+
+
+def test_logging_stack_violations_support_split_s3_logging(
+    policy_runtime: SimpleNamespace,
+) -> None:
+    """Allow S3 buckets covered by standalone logging resources."""
+    bucket = _stack_resource(
+        "aws:s3/bucket:Bucket",
+        props={
+            "bucket": "logs-bucket",
+            "tags": {
+                "Project": "demo",
+                "Environment": "dev",
+                "Owner": "platform",
+                "CostCenter": "engineering",
+            },
+        },
+        urn="urn:pulumi:dev::bootstrap::aws:s3/bucket:Bucket::logs-bucket",
+    )
+    logging = _stack_resource(
+        "aws:s3/bucketLogging:BucketLogging",
+        props={
+            "bucket": "logs-bucket",
+            "targetBucket": "audit-logs",
+            "targetPrefix": "server-access/logs-bucket/",
+        },
+        urn="urn:pulumi:dev::bootstrap::aws:s3/bucketLogging:BucketLogging::logs-bucket-logging",
+        dependencies=[bucket],
+        property_dependencies={"bucket": [bucket]},
+    )
+
+    assert policy_runtime.logging_stack_violations([bucket, logging]) == []  # nosec B101
+    assert (  # nosec B101
+        _collect_stack_violations(
+            policy_runtime.require_logging_stack,
+            resources=[bucket, logging],
+        )
+        == []
+    )
+
+
+def test_storage_encryption_stack_violations_cover_missing_inline_and_name_only_paths(
+    policy_runtime: SimpleNamespace,
+) -> None:
+    """Cover stack validation paths for missing and name-only S3 encryption."""
+    missing_bucket = _stack_resource(
+        "aws:s3/bucket:Bucket",
+        props={"bucket": "unencrypted-bucket"},
+        urn="urn:pulumi:dev::bootstrap::aws:s3/bucket:Bucket::unencrypted-bucket",
+    )
+    expected_violation = [
+        (
+            missing_bucket.urn,
+            "S3 buckets must enable default server-side encryption.",
+        )
+    ]
+
+    assert (  # nosec B101
+        policy_runtime.storage_encryption_stack_violations([missing_bucket])
+        == expected_violation
+    )
+    assert (  # nosec B101
+        _collect_stack_violations(
+            policy_runtime.require_storage_encryption_stack,
+            resources=[missing_bucket],
+        )
+        == expected_violation
+    )
+
+    inline_bucket = _stack_resource(
+        "aws:s3/bucket:Bucket",
+        props={
+            "bucket": "inline-encrypted-bucket",
+            "serverSideEncryptionConfiguration": {"rule": "AES256"},
+        },
+        urn=(
+            "urn:pulumi:dev::bootstrap::aws:s3/bucket:Bucket::inline-encrypted-bucket"
+        ),
+    )
+    assert (
+        policy_runtime.storage_encryption_stack_violations(  # nosec B101
+            [inline_bucket]
+        )
+        == []
+    )
+
+    non_bucket_dependency = _stack_resource(
+        "aws:iam/role:Role",
+        props={},
+        urn="urn:pulumi:dev::bootstrap::aws:iam/role:Role::not-a-bucket",
+    )
+    name_only_bucket = _stack_resource(
+        "aws:s3/bucket:Bucket",
+        props={"bucket": "name-only-encrypted-bucket"},
+        urn=(
+            "urn:pulumi:dev::bootstrap::aws:s3/bucket:Bucket::"
+            "name-only-encrypted-bucket"
+        ),
+    )
+    name_only_encryption = _stack_resource(
+        "aws:s3/bucketServerSideEncryptionConfigurationV2:BucketServerSideEncryptionConfigurationV2",
+        props={
+            "bucket": "name-only-encrypted-bucket",
+            "rule": {"applyServerSideEncryptionByDefault": {"sseAlgorithm": "AES256"}},
+        },
+        urn=(
+            "urn:pulumi:dev::bootstrap::aws:s3/"
+            "bucketServerSideEncryptionConfigurationV2:"
+            "BucketServerSideEncryptionConfigurationV2::name-only-encryption"
+        ),
+        dependencies=[non_bucket_dependency],
+    )
+    assert (  # nosec B101
+        policy_runtime.storage_encryption_stack_violations(
+            [name_only_bucket, name_only_encryption]
+        )
+        == []
+    )
+
+    dependency_only_bucket = _stack_resource(
+        "aws:s3/bucket:Bucket",
+        props={"bucket": "dependency-only-encrypted-bucket"},
+        urn=(
+            "urn:pulumi:dev::bootstrap::aws:s3/bucket:Bucket::"
+            "dependency-only-encrypted-bucket"
+        ),
+    )
+    dependency_only_encryption = _stack_resource(
+        "aws:s3/bucketServerSideEncryptionConfigurationV2:BucketServerSideEncryptionConfigurationV2",
+        props={
+            "rule": {"applyServerSideEncryptionByDefault": {"sseAlgorithm": "AES256"}},
+        },
+        urn=(
+            "urn:pulumi:dev::bootstrap::aws:s3/"
+            "bucketServerSideEncryptionConfigurationV2:"
+            "BucketServerSideEncryptionConfigurationV2::dependency-only-encryption"
+        ),
+        dependencies=[dependency_only_bucket],
+    )
+    assert (  # nosec B101
+        policy_runtime.storage_encryption_stack_violations(
+            [dependency_only_bucket, dependency_only_encryption]
+        )
+        == []
+    )
+
+
+def test_logging_stack_violations_cover_missing_inline_exempt_and_name_only_paths(
+    policy_runtime: SimpleNamespace,
+) -> None:
+    """Cover stack validation paths for missing and split S3 logging."""
+    missing_bucket = _stack_resource(
+        "aws:s3/bucket:Bucket",
+        props={"bucket": "missing-logs-bucket"},
+        urn="urn:pulumi:dev::bootstrap::aws:s3/bucket:Bucket::missing-logs-bucket",
+    )
+    expected_violation = [
+        (
+            missing_bucket.urn,
+            "S3 buckets must send access logs to a target bucket.",
+        )
+    ]
+
+    assert (  # nosec B101
+        policy_runtime.logging_stack_violations([missing_bucket]) == expected_violation
+    )
+    assert (  # nosec B101
+        _collect_stack_violations(
+            policy_runtime.require_logging_stack,
+            resources=[missing_bucket],
+        )
+        == expected_violation
+    )
+
+    exempt_bucket = _stack_resource(
+        "aws:s3/bucket:Bucket",
+        props={
+            "bucket": "exempt-logs-bucket",
+            "tags": {
+                "LoggingExempt": "true",
+                "LoggingExemptReason": "Centralized S3 access log sink",
+            },
+        },
+        urn="urn:pulumi:dev::bootstrap::aws:s3/bucket:Bucket::exempt-logs-bucket",
+    )
+    inline_bucket = _stack_resource(
+        "aws:s3/bucket:Bucket",
+        props={
+            "bucket": "inline-logs-bucket",
+            "logging": {"targetBucket": "audit-logs"},
+        },
+        urn="urn:pulumi:dev::bootstrap::aws:s3/bucket:Bucket::inline-logs-bucket",
+    )
+    assert policy_runtime.logging_stack_violations([exempt_bucket]) == []  # nosec B101
+    assert policy_runtime.logging_stack_violations([inline_bucket]) == []  # nosec B101
+
+    ignored_logging = _stack_resource(
+        "aws:s3/bucketLogging:BucketLogging",
+        props={"bucket": "missing-logs-bucket"},
+        urn="urn:pulumi:dev::bootstrap::aws:s3/bucketLogging:BucketLogging::ignored",
+        dependencies=[missing_bucket],
+    )
+    assert (  # nosec B101
+        policy_runtime.logging_stack_violations([missing_bucket, ignored_logging])
+        == expected_violation
+    )
+
+    non_bucket_dependency = _stack_resource(
+        "aws:iam/role:Role",
+        props={},
+        urn="urn:pulumi:dev::bootstrap::aws:iam/role:Role::not-a-bucket",
+    )
+    name_only_bucket = _stack_resource(
+        "aws:s3/bucket:Bucket",
+        props={"bucket": "name-only-logs-bucket"},
+        urn="urn:pulumi:dev::bootstrap::aws:s3/bucket:Bucket::name-only-logs-bucket",
+    )
+    name_only_logging = _stack_resource(
+        "aws:s3/bucketLogging:BucketLogging",
+        props={
+            "bucket": "name-only-logs-bucket",
+            "targetBucket": "audit-logs",
+        },
+        urn="urn:pulumi:dev::bootstrap::aws:s3/bucketLogging:BucketLogging::name-only",
+        dependencies=[non_bucket_dependency],
+    )
+    assert (  # nosec B101
+        policy_runtime.logging_stack_violations([name_only_bucket, name_only_logging])
+        == []
+    )
+
+    dependency_only_bucket = _stack_resource(
+        "aws:s3/bucket:Bucket",
+        props={"bucket": "dependency-only-logs-bucket"},
+        urn=(
+            "urn:pulumi:dev::bootstrap::aws:s3/bucket:Bucket::"
+            "dependency-only-logs-bucket"
+        ),
+    )
+    dependency_only_logging = _stack_resource(
+        "aws:s3/bucketLogging:BucketLogging",
+        props={"targetBucket": "audit-logs"},
+        urn=(
+            "urn:pulumi:dev::bootstrap::aws:s3/bucketLogging:BucketLogging::"
+            "dependency-only"
+        ),
+        dependencies=[dependency_only_bucket],
+    )
+    assert (  # nosec B101
+        policy_runtime.logging_stack_violations(
+            [dependency_only_bucket, dependency_only_logging]
+        )
+        == []
+    )
+
+
+def test_storage_encryption_stack_violations_require_real_split_rules(
+    policy_runtime: SimpleNamespace,
+) -> None:
+    """Split encryption resources should only count when they configure SSE."""
+    invalid_bucket = _stack_resource(
+        "aws:s3/bucket:Bucket",
+        props={"bucket": "invalid-encryption-bucket"},
+        urn=(
+            "urn:pulumi:dev::bootstrap::aws:s3/bucket:Bucket::invalid-encryption-bucket"
+        ),
+    )
+    invalid_encryption = _stack_resource(
+        "aws:s3/bucketServerSideEncryptionConfigurationV2:BucketServerSideEncryptionConfigurationV2",
+        props={"bucket": "invalid-encryption-bucket", "rules": []},
+        urn=(
+            "urn:pulumi:dev::bootstrap::aws:s3/"
+            "bucketServerSideEncryptionConfigurationV2:"
+            "BucketServerSideEncryptionConfigurationV2::invalid-encryption"
+        ),
+        dependencies=[invalid_bucket],
+        property_dependencies={"bucket": [invalid_bucket]},
+    )
+    expected_violation = [
+        (
+            invalid_bucket.urn,
+            "S3 buckets must enable default server-side encryption.",
+        )
+    ]
+
+    assert (  # nosec B101
+        policy_runtime.storage_encryption_stack_violations(
+            [invalid_bucket, invalid_encryption]
+        )
+        == expected_violation
+    )
+    assert (  # nosec B101
+        _collect_stack_violations(
+            policy_runtime.require_storage_encryption_stack,
+            resources=[invalid_bucket, invalid_encryption],
+        )
+        == expected_violation
+    )
+
+    valid_bucket = _stack_resource(
+        "aws:s3/bucket:Bucket",
+        props={"bucket": "valid-encryption-bucket"},
+        urn=(
+            "urn:pulumi:dev::bootstrap::aws:s3/bucket:Bucket::valid-encryption-bucket"
+        ),
+    )
+    valid_encryption = _stack_resource(
+        "aws:s3/bucketServerSideEncryptionConfigurationV2:BucketServerSideEncryptionConfigurationV2",
+        props={
+            "bucket": "valid-encryption-bucket",
+            "rules": [
+                {"applyServerSideEncryptionByDefault": {"sseAlgorithm": "AES256"}}
+            ],
+        },
+        urn=(
+            "urn:pulumi:dev::bootstrap::aws:s3/"
+            "bucketServerSideEncryptionConfigurationV2:"
+            "BucketServerSideEncryptionConfigurationV2::valid-encryption"
+        ),
+        dependencies=[valid_bucket],
+        property_dependencies={"bucket": [valid_bucket]},
+    )
+
+    assert (  # nosec B101
+        policy_runtime.storage_encryption_stack_violations(
+            [valid_bucket, valid_encryption]
+        )
+        == []
+    )
+
+
+def test_storage_encryption_stack_violations_ignore_invalid_rules_before_valid_one(
+    policy_runtime: SimpleNamespace,
+) -> None:
+    """Mixed split-rule payloads should only count concrete SSE defaults."""
+    bucket = _stack_resource(
+        "aws:s3/bucket:Bucket",
+        props={"bucket": "mixed-encryption-bucket"},
+        urn=(
+            "urn:pulumi:dev::bootstrap::aws:s3/bucket:Bucket::mixed-encryption-bucket"
+        ),
+    )
+    encryption = _stack_resource(
+        "aws:s3/bucketServerSideEncryptionConfigurationV2:BucketServerSideEncryptionConfigurationV2",
+        props={
+            "bucket": "mixed-encryption-bucket",
+            "rules": [
+                {},
+                {"applyServerSideEncryptionByDefault": "AES256"},
+                {"applyServerSideEncryptionByDefault": {"sseAlgorithm": ""}},
+                {"applyServerSideEncryptionByDefault": {"sseAlgorithm": "AES256"}},
+            ],
+        },
+        urn=(
+            "urn:pulumi:dev::bootstrap::aws:s3/"
+            "bucketServerSideEncryptionConfigurationV2:"
+            "BucketServerSideEncryptionConfigurationV2::mixed-encryption"
+        ),
+        dependencies=[bucket],
+        property_dependencies={"bucket": [bucket]},
+    )
+
+    assert (  # nosec B101
+        policy_runtime.storage_encryption_stack_violations([bucket, encryption]) == []
     )
 
 
@@ -667,7 +1164,18 @@ def test_wildcard_iam_violations_support_allowlists_and_inline_policies(
     )
     config = _custom_config(policy_runtime)
     allowlisted = _custom_config(
-        policy_runtime, wildcard_iam_allowlist=frozenset({"allowed-policy"})
+        policy_runtime,
+        reviewed_iam_documents={
+            "aws:iam/policy:Policy|allowed-policy": (
+                hashlib.sha256(
+                    json.dumps(
+                        json.loads(wildcard_policy),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest(),
+            )
+        },
     )
 
     violations = policy_runtime.wildcard_iam_violations(
@@ -683,7 +1191,7 @@ def test_wildcard_iam_violations_support_allowlists_and_inline_policies(
         "allowed-policy"
     )
     assert policy_runtime.iam_policy_identifier({}) is None
-    assert (
+    assert (  # nosec B101
         policy_runtime.wildcard_iam_violations(
             "aws:iam/policy:Policy",
             {"policy": wildcard_policy, "name": "allowed-policy"},
@@ -691,20 +1199,20 @@ def test_wildcard_iam_violations_support_allowlists_and_inline_policies(
         )
         == []
     )
-    assert (
-        policy_runtime.wildcard_iam_violations(
-            "aws:iam/role:Role",
-            {
-                "inlinePolicies": [{"policy": wildcard_policy}],
-                "tags": {
-                    "AllowWildcardIam": "true",
-                    "AllowWildcardIamReason": "bootstrap role",
-                },
+    assert policy_runtime.wildcard_iam_violations(
+        "aws:iam/role:Role",
+        {
+            "inlinePolicies": [{"policy": wildcard_policy}],
+            "tags": {
+                "AllowWildcardIam": "true",
+                "AllowWildcardIamReason": "bootstrap role",
             },
-            config,
-        )
-        == []
-    )
+        },
+        config,
+    ) == [
+        "inlinePolicies[0].policy must not use wildcard IAM permissions "
+        "without an explicit allowlist."
+    ]
     assert policy_runtime.wildcard_iam_violations(
         "aws:iam/role:Role",
         {
@@ -746,6 +1254,394 @@ def test_wildcard_iam_violations_support_allowlists_and_inline_policies(
                 }
             )
         },
+        config,
+    ) == ["policy must not use wildcard IAM permissions without an explicit allowlist."]
+    assert (  # nosec B101
+        policy_runtime.wildcard_iam_violations(
+            "aws:iam/policy:Policy",
+            {
+                "policy": _json(
+                    {
+                        "Version": "2012-10-17",
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": ["sts:GetCallerIdentity"],
+                                "Resource": "*",
+                            }
+                        ],
+                    }
+                )
+            },
+            config,
+        )
+        == []
+    )
+    assert (  # nosec B101
+        policy_runtime.wildcard_iam_violations(
+            "aws:iam/policy:Policy",
+            {
+                "policy": _json(
+                    {
+                        "Version": "2012-10-17",
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": ["cloudtrail:DescribeTrails"],
+                                "Resource": "*",
+                            }
+                        ],
+                    }
+                )
+            },
+            config,
+        )
+        == []
+    )
+    assert (  # nosec B101
+        policy_runtime.wildcard_iam_violations(
+            "aws:iam/policy:Policy",
+            {
+                "policy": _json(
+                    {
+                        "Version": "2012-10-17",
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": ["kms:CreateKey"],
+                                "Resource": "*",
+                                "Condition": {
+                                    "StringEquals": {
+                                        "aws:RequestTag/Environment": "test",
+                                        "aws:RequestTag/Purpose": "pulumi-secrets",
+                                    }
+                                },
+                            }
+                        ],
+                    }
+                )
+            },
+            config,
+        )
+        == []
+    )
+    assert (  # nosec B101
+        policy_runtime.wildcard_iam_violations(
+            "aws:iam/policy:Policy",
+            {
+                "policy": _json(
+                    {
+                        "Version": "2012-10-17",
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": ["billing:GetBillingViewData"],
+                                "Resource": "*",
+                            }
+                        ],
+                    }
+                )
+            },
+            config,
+        )
+        == []
+    )
+    assert (  # nosec B101
+        policy_runtime.wildcard_iam_violations(
+            "aws:iam/policy:Policy",
+            {
+                "policy": _json(
+                    {
+                        "Version": "2012-10-17",
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": [
+                                    "ce:CreateAnomalyMonitor",
+                                    "ce:CreateAnomalySubscription",
+                                ],
+                                "Resource": "*",
+                                "Condition": {
+                                    "StringEquals": {
+                                        "aws:RequestTag/Environment": "test",
+                                        "aws:RequestTag/Purpose": [
+                                            "cost-anomaly-monitor",
+                                            "cost-anomaly-subscription",
+                                        ],
+                                    }
+                                },
+                            }
+                        ],
+                    }
+                )
+            },
+            config,
+        )
+        == []
+    )
+    assert (  # nosec B101
+        policy_runtime.wildcard_iam_violations(
+            "aws:iam/policy:Policy",
+            {
+                "policy": _json(
+                    {
+                        "Version": "2012-10-17",
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": ["guardduty:ListDetectors"],
+                                "Resource": "*",
+                            }
+                        ],
+                    }
+                )
+            },
+            config,
+        )
+        == []
+    )
+    assert (  # nosec B101
+        policy_runtime.wildcard_iam_violations(
+            "aws:iam/policy:Policy",
+            {
+                "policy": _json(
+                    {
+                        "Version": "2012-10-17",
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": ["guardduty:CreateDetector"],
+                                "Resource": "*",
+                                "Condition": {
+                                    "StringEquals": {
+                                        "aws:RequestTag/Environment": "test",
+                                        "aws:RequestTag/Purpose": "security-detection",
+                                    }
+                                },
+                            }
+                        ],
+                    }
+                )
+            },
+            config,
+        )
+        == []
+    )
+    assert (  # nosec B101
+        policy_runtime.wildcard_iam_violations(
+            "aws:iam/policy:Policy",
+            {
+                "policy": _json(
+                    {
+                        "Version": "2012-10-17",
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": [
+                                    "config:DeleteDeliveryChannel",
+                                    "config:DescribeDeliveryChannels",
+                                    "config:PutDeliveryChannel",
+                                ],
+                                "Resource": "*",
+                            }
+                        ],
+                    }
+                )
+            },
+            config,
+        )
+        == []
+    )
+    assert (  # nosec B101
+        policy_runtime.wildcard_iam_violations(
+            "aws:iam/policy:Policy",
+            {
+                "policy": _json(
+                    {
+                        "Version": "2012-10-17",
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": [
+                                    "sns:GetSubscriptionAttributes",
+                                    "sns:Unsubscribe",
+                                ],
+                                "Resource": "*",
+                            }
+                        ],
+                    }
+                )
+            },
+            config,
+        )
+        == []
+    )
+    assert policy_runtime.wildcard_iam_violations(  # nosec B101
+        "aws:iam/policy:Policy",
+        {
+            "policy": _json(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": ["guardduty:CreateDetector"],
+                            "Resource": "*",
+                        }
+                    ],
+                }
+            )
+        },
+        config,
+    ) == ["policy must not use wildcard IAM permissions without an explicit allowlist."]
+    assert policy_runtime.wildcard_iam_violations(  # nosec B101
+        "aws:iam/policy:Policy",
+        {
+            "policy": _json(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": ["ce:CreateAnomalyMonitor"],
+                            "Resource": "*",
+                        }
+                    ],
+                }
+            )
+        },
+        config,
+    ) == ["policy must not use wildcard IAM permissions without an explicit allowlist."]
+    assert (  # nosec B101
+        policy_runtime.wildcard_iam_violations(
+            "aws:iam/policy:Policy",
+            {
+                "policy": _json(
+                    {
+                        "Version": "2012-10-17",
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": ["ce:ListCostAllocationTags"],
+                                "Resource": "*",
+                            }
+                        ],
+                    }
+                )
+            },
+            config,
+        )
+        == []
+    )
+    assert policy_runtime.wildcard_iam_violations(  # nosec B101
+        "aws:iam/policy:Policy",
+        {
+            "policy": _json(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": ["kms:CreateKey"],
+                            "Resource": "*",
+                        }
+                    ],
+                }
+            )
+        },
+        config,
+    ) == ["policy must not use wildcard IAM permissions without an explicit allowlist."]
+    assert policy_runtime.wildcard_iam_violations(  # nosec B101
+        "aws:iam/policy:Policy",
+        {
+            "policy": _json(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": 123,
+                            "Resource": "*",
+                        }
+                    ],
+                }
+            )
+        },
+        config,
+    ) == ["policy must not use wildcard IAM permissions without an explicit allowlist."]
+    assert policy_runtime.wildcard_iam_violations(  # nosec B101
+        "aws:iam/policy:Policy",
+        {
+            "policy": _json(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": ["kms:CreateKey"],
+                            "Resource": "*",
+                            "Condition": {"StringEquals": "invalid"},
+                        }
+                    ],
+                }
+            )
+        },
+        config,
+    ) == ["policy must not use wildcard IAM permissions without an explicit allowlist."]
+    assert policy_runtime.wildcard_iam_violations(  # nosec B101
+        "aws:iam/policy:Policy",
+        {
+            "policy": _json(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": ["kms:CreateKey"],
+                            "Resource": "*",
+                            "Condition": {
+                                "StringEquals": {"aws:RequestTag/Other": "test"}
+                            },
+                        }
+                    ],
+                }
+            )
+        },
+        config,
+    ) == ["policy must not use wildcard IAM permissions without an explicit allowlist."]
+
+
+def test_wildcard_iam_violations_ignore_targeted_resource_policy_exceptions(
+    policy_runtime: SimpleNamespace,
+) -> None:
+    """Skip known bootstrap resource-policy exceptions but scan other carriers."""
+    wildcard_policy = _json(
+        {
+            "Version": "2012-10-17",
+            "Statement": [{"Effect": "Allow", "Action": "*", "Resource": "*"}],
+        }
+    )
+    config = _custom_config(policy_runtime)
+
+    assert (
+        policy_runtime.wildcard_iam_violations(
+            "aws:s3/bucketPolicy:BucketPolicy",
+            {"policy": wildcard_policy, "bucket": "example"},
+            config,
+        )
+        == []
+    )
+    assert (
+        policy_runtime.wildcard_iam_violations(
+            "aws:kms/key:Key",
+            {"policy": wildcard_policy},
+            config,
+        )
+        == []
+    )
+    assert policy_runtime.wildcard_iam_violations(
+        "aws:custom/policyCarrier:Carrier",
+        {"policy": wildcard_policy},
         config,
     ) == ["policy must not use wildcard IAM permissions without an explicit allowlist."]
     assert policy_runtime.wildcard_iam_violations(
@@ -866,7 +1762,7 @@ def test_open_admin_ports_covers_supported_security_group_shapes(
             "protocol": "tcp",
             "fromPort": 22,
             "toPort": 22,
-            "cidrBlocks": ["0.0.0.0/00"],
+            "cidrBlocks": ["0.0.0.0/0"],
         },
     ) == [22]
     assert policy_runtime.open_admin_ports(
@@ -966,7 +1862,7 @@ def test_pack_validators_report_expected_messages(
         props={"tags": {"Project": "svc"}},
     )
     assert "Owner" in violations[0]
-    assert (
+    assert (  # nosec B101
         _collect_violations(
             policy_runtime.require_default_tags,
             resource_type="aws:s3/bucket:Bucket",
@@ -976,6 +1872,9 @@ def test_pack_validators_report_expected_messages(
                     "Environment": "dev",
                     "Owner": "platform",
                     "CostCenter": "eng",
+                    "DataClassification": "internal",
+                    "Criticality": "high",
+                    "RetentionClass": "standard",
                 }
             },
         )
@@ -1025,12 +1924,38 @@ def test_pack_validators_report_expected_messages(
     )
     assert violations == ["EBS volumes must enable encryption at rest."]
 
+    bucket = _stack_resource(
+        "aws:s3/bucket:Bucket",
+        props={"bucket": "logs-bucket"},
+        urn="urn:pulumi:dev::bootstrap::aws:s3/bucket:Bucket::logs",
+    )
+    encryption = _stack_resource(
+        "aws:s3/bucketServerSideEncryptionConfigurationV2:BucketServerSideEncryptionConfigurationV2",
+        props={
+            "bucket": "logs-bucket",
+            "rule": {"applyServerSideEncryptionByDefault": {"sseAlgorithm": "AES256"}},
+        },
+        urn="urn:pulumi:dev::bootstrap::aws:s3/bucketServerSideEncryptionConfigurationV2:BucketServerSideEncryptionConfigurationV2::logs-encryption",
+        dependencies=[bucket],
+        property_dependencies={"bucket": [bucket]},
+    )
+    assert (  # nosec B101
+        policy_runtime.storage_encryption_stack_violations([bucket, encryption]) == []
+    )
+    assert (  # nosec B101
+        _collect_stack_violations(
+            policy_runtime.require_storage_encryption_stack,
+            resources=[bucket, encryption],
+        )
+        == []
+    )
+
     violations = _collect_violations(
         policy_runtime.require_logging,
         resource_type="aws:lb/loadBalancer:LoadBalancer",
         props={"accessLogs": {"enabled": False}},
     )
-    assert violations == ["Load balancers must enable access logs."]
+    assert violations == ["Load balancers must enable access logs."]  # nosec B101
 
     violations = _collect_violations(
         policy_runtime.block_wildcard_iam,
@@ -1106,6 +2031,7 @@ def test_guardrails_support_direct_script_import(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Keep direct policy-analyzer startup working when `policy` is not a package."""
+    monkeypatch.syspath_prepend(str(POLICY_DIR))
     for module_name in (
         "config",
         "guardrails",
@@ -1133,11 +2059,14 @@ def test_guardrails_support_direct_script_import(
     monkeypatch.setitem(sys.modules, "guardrails", guardrails_module)
     guardrails_spec.loader.exec_module(guardrails_module)
 
-    assert guardrails_module.CONFIG.required_tags == (
+    assert guardrails_module.CONFIG.required_tags == (  # nosec B101
         "Project",
         "Environment",
         "Owner",
         "CostCenter",
+        "DataClassification",
+        "Criticality",
+        "RetentionClass",
     )
 
 

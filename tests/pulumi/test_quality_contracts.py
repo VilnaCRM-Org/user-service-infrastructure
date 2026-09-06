@@ -41,7 +41,7 @@ def test_pyproject_declares_quality_tooling_contracts() -> None:
 
     expected_tools = {
         "bandit[toml]>=1.8,<2",
-        "cyclonedx-bom>=4.1,<5",
+        "cyclonedx-bom>=5,<6",
         "deptry>=0.23,<0.24",
         "docstr-coverage>=2.3,<3",
         "import-linter>=2.4,<3",
@@ -56,7 +56,13 @@ def test_pyproject_declares_quality_tooling_contracts() -> None:
     assert expected_tools.issubset(dev_dependencies)
     assert "C90" in ruff["select"]
     assert data["tool"]["ruff"]["lint"]["mccabe"]["max-complexity"] == 10
-    assert deptry["known_first_party"] == ["_script_support", "app", "policy"]
+    assert {
+        "_script_support",
+        "app",
+        "policy",
+        "_pulumi_stack_config",
+        "governance_promotion",
+    } <= set(deptry["known_first_party"])
     assert deptry["package_module_name_map"]["pyyaml"] == ["yaml"]
     assert deptry["package_module_name_map"]["pulumi-policy"] == ["pulumi_policy"]
     assert deptry["per_rule_ignores"]["DEP002"] == ["pulumi-aws"]
@@ -108,6 +114,7 @@ def test_pyproject_declares_quality_tooling_contracts() -> None:
     assert contracts["Policy layering remains one-way"]["layers"] == [
         "pack",
         "guardrails",
+        "reviewed_iam",
         "config",
     ]
     assert data["tool"]["vulture"]["min_confidence"] == 80

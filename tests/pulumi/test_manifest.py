@@ -36,5 +36,8 @@ def test_policy_pack_manifest_declares_python_runtime() -> None:
         "Environment",
         "Owner",
         "CostCenter",
+        "DataClassification",
+        "Criticality",
+        "RetentionClass",
     ]
     assert "eu-central-1" in config["allowed_regions"]

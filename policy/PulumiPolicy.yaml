@@ -3,4 +3,4 @@ runtime:
   options:
     virtualenv: .venv
 version: 0.1.0
-description: Pulumi policy pack for user-service-infrastructure guardrails.
+description: Pulumi policy pack for bootstrap-infrastructure guardrails.

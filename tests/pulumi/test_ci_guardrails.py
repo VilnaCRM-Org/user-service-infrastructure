@@ -223,3 +223,17 @@ def test_scheduled_drift_uses_only_protected_main_read_roles():
         )
         assert steps[-1]["run"] == "make test-drift"
         assert "pulumi-up" not in str(job) and "deployments: write" not in str(job)
+
+
+def test_pr_destructive_gates_exclude_scheduled_execution():
+    """PR-head gates explicitly exclude schedule even before needs resolution."""
+    jobs = _workflow("self-deploy.yml")["jobs"]
+    dispatch = "github.event_name == 'repository_dispatch'"
+    for environment in ("test", "prod"):
+        job = jobs[f"{environment}_destructive_diff"]
+        expected = dispatch
+        if environment == "prod":
+            expected += " && needs.preflight.outputs.target_environment == 'prod'"
+        assert " ".join(job.get("if", "").split()) == expected
+        assert "preflight" in job["needs"]
+        assert f"{environment}_preview" in job["needs"]

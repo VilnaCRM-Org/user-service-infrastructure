@@ -76,6 +76,9 @@ def test_pulumi_stack_preview_and_up_cycle(tmp_path: Path) -> None:
             "Environment": "integration",
             "Owner": "platform",
             "CostCenter": "engineering",
+            "DataClassification": "internal",
+            "Criticality": "high",
+            "RetentionClass": "standard",
         }
     finally:
         try:

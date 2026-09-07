@@ -1,1 +1,1 @@
-"""Pulumi policy pack for user-service-infrastructure guardrails."""
+"""Pulumi policy pack for bootstrap-infrastructure guardrails."""

@@ -15,7 +15,6 @@ These checks are intended to be marked as required in branch protection:
 | --- | --- | --- |
 | `Preview` | `make test-preview` | Produces a non-destructive Pulumi preview artifact for every configured stack |
 | `Destructive Diff Gate` | `make test-destructive-diff` | Blocks deletes and replacements of critical infrastructure unless explicitly approved |
-| `IAM Validation` | `make test-iam-validation` | Validates previewed IAM policies with AWS IAM Access Analyzer |
 | `Secrets Scan` | `make test-secrets` | Runs Gitleaks against tracked Git content |
 | `Dependency Audit` | `make test-deps-security` | Audits Python dependencies with `pip-audit --strict` |
 | `Bandit` | `make test-bandit` | Lints repository Python code for common security hazards |
@@ -27,8 +26,9 @@ These checks are intended to be marked as required in branch protection:
 `make test-repo-hygiene` aggregates Actionlint, Yamllint, and Hadolint.
 `make test-guardrails` aggregates preview generation and destructive diff
 gating without requiring AWS credentials. `make ci-pr` and `make ci` include
-the credential-free guardrail battery, while IAM validation stays isolated in
-its dedicated OIDC-gated workflow/job.
+the credential-free guardrail battery. `make test-iam-validation` is a separate
+operator command requiring appropriately scoped AWS credentials, not an ordinary
+PR workflow job.
 
 ## Preview model
 
@@ -38,19 +38,15 @@ developers use:
 1. `make start`
 2. `make publish-pulumi-preview-summary`
 3. `make test-destructive-diff`
-4. `make test-iam-validation`
 
 Preview artifacts are written under `.artifacts/pulumi-preview/` and uploaded to
 GitHub Actions. The preview summary is appended to `GITHUB_STEP_SUMMARY` so
 reviewers can inspect the plan without digging through raw logs first.
 
-Stack selection follows this order:
-
-1. `PULUMI_PREVIEW_STACKS` repo variable if set
-2. committed `pulumi/Pulumi.<stack>.yaml` files
-
-The current template ships with `Pulumi.dev.yaml`, so the default preview target
-is `dev`.
+The ordinary PR workflow explicitly pins `PULUMI_PREVIEW_STACKS=dev` and a
+disposable file backend. Local preview commands can select stacks through their
+`PULUMI_PREVIEW_STACKS` environment setting; they default to `dev`. Protected
+deployment jobs obtain shared-stack selection from the governed configuration.
 
 If local Pulumi plugin downloads hit anonymous GitHub rate limits, pass a token
 explicitly only to the preview-oriented command you are running, for example:
@@ -93,79 +89,51 @@ Current behavior:
 - IAM policies in the preview without valid AWS credentials: the check fails so
   maintainers do not accidentally merge unvalidated IAM changes
 
-This complements the custom Pulumi CrossGuard pack. The policy pack blocks
-wildcard IAM permissions in repository code; Access Analyzer adds AWS-native
-semantic validation for the rendered policy documents.
+This complements the custom Pulumi CrossGuard pack. Direct S3 bucket and KMS
+key policies retain resource-local `Resource: "*"` and matching service-wide
+`s3:*` or `kms:*` compatibility. Their Allow statements still reject global
+`Action: "*"`, cross-service wide grants, and nonempty `NotAction`/`NotResource`;
+Deny semantics and exact reviewed IAM document pins remain unchanged. This does
+not certify principals or conditions; stronger resource-policy pinning is tracked
+in bootstrap-infrastructure#210. Access Analyzer adds AWS-native semantic checks.
 
-## OIDC-based AWS access
+## Protected AWS access and ordinary PR checks
 
-The guardrail workflows are OIDC-first. They do not use long-lived
-`AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` repository secrets.
+`Pulumi PR Guardrails` runs credential-free previews of the disposable `dev`
+stack on a file backend for both forks and same-repository pull requests. It
+runs the destructive diff gate on that artifact; it does not assume an AWS role
+or run privileged IAM validation. `AWS_REGION` is only its optional region
+setting, defaulting to `eu-central-1`.
 
-Required repository variables:
+`Service Self Deploy` handles protected PR-comment deployments through OIDC.
+Its trusted configuration loader requires these repository variables:
 
-| Variable | Purpose |
+| Variables | Purpose |
 | --- | --- |
-| `AWS_OIDC_ROLE_ARN` | IAM role assumed by preview, IAM validation, and drift jobs |
+| `AWS_TEST_CI_CONFIG_ROLE_ARN` | TEST configuration-read role |
+| `AWS_PROD_PREVIEW_CI_CONFIG_ROLE_ARN` | PROD preview/drift configuration-read role |
+| `AWS_PROD_CI_CONFIG_ROLE_ARN` | PROD apply configuration-read role |
+| `AWS_TEST_ACCOUNT_ID`, `AWS_PROD_ACCOUNT_ID` | Exact target account bindings |
+| `AWS_TEST_REGION`, `AWS_PROD_REGION` | Exact target region bindings |
 
-Optional or defaulted repository variables:
+The loader obtains deployment role ARNs, stack settings, the authoritative S3
+backend and cloud KMS secrets provider from the governed Secrets Manager
+configuration. Missing or mismatched account/region bindings fail closed. These
+jobs do not use static AWS keys, a shared passphrase or a Pulumi Service token.
+The configuration and deployment role trusts remain governance-owned and bind
+the repository identity, main ref, environment and exact workflow name; ordinary
+PR subjects are not a substitute for these protected environment claims.
 
-| Variable | Purpose |
-| --- | --- |
-| `AWS_REGION` | AWS region used by `configure-aws-credentials`; defaults to `eu-central-1` |
-| `PULUMI_BACKEND_URL` | Shared Pulumi backend for OIDC-backed preview and drift checks; OIDC-backed preview and IAM validation are skipped when unset |
-| `PULUMI_PREVIEW_STACKS` | Optional comma-separated stack list for preview |
-| `PULUMI_DRIFT_STACKS` | Optional comma-separated stack list for nightly drift checks |
+TEST and PROD saved applies download their original same-run preview artifact,
+fetch current PR labels and rerun the destructive diff gate immediately before
+`make pulumi-up-plan`. Removing `allow-destructive-infra-change` after preview
+therefore blocks a destructive apply; artifact or label-fetch failures also stop
+execution. This reuses the saved diff without generating a replacement plan.
 
-Optional repository secrets:
-
-| Secret | Purpose |
-| --- | --- |
-| `PULUMI_ACCESS_TOKEN` | Required only when the backend is the Pulumi Service |
-
-Shared backends should use an AWS KMS-backed Pulumi secrets provider rather
-than a passphrase-managed stack secret flow.
-
-Fork pull requests always run the unprivileged file-backend preview and the
-destructive diff gate. Same-repo pull requests also fall back to the
-unprivileged artifact when `AWS_OIDC_ROLE_ARN` or `PULUMI_BACKEND_URL` is not
-configured yet. The AWS-backed preview and IAM validation jobs remain same-repo
-only because `aws accessanalyzer validate-policy` requires AWS credentials.
-
-### Example IAM trust policy
-
-Replace the account ID, organization, repository name, and any allowed branch
-names with your own values.
-`<ACCOUNT_ID>` must be the target 12-digit AWS account ID using digits only:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com"
-      },
-      "Action": "sts:AssumeRoleWithWebIdentity",
-      "Condition": {
-        "StringEquals": {
-          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
-        },
-        "StringLike": {
-          "token.actions.githubusercontent.com:sub": [
-            "repo:VilnaCRM-Org/user-service-infrastructure:pull_request",
-            "repo:VilnaCRM-Org/user-service-infrastructure:ref:<BRANCH_REF>"
-          ]
-        }
-      }
-    }
-  ]
-}
-```
-
-Replace `<BRANCH_REF>` with each protected branch ref you authorize, for
-example `refs/heads/main`.
+`LoggingExempt` is a review-controlled IaC tag for approved logging sinks, not
+an independently authenticated exemption. The initial service backend-only role
+cannot create workload buckets. Stronger approved resource-identity pinning before
+expanding that capability remains tracked in bootstrap-infrastructure#210.
 
 ## Nightly-only checks
 
@@ -173,22 +141,18 @@ Nightly workflows are visible but do not block pull requests:
 
 | Check | Purpose |
 | --- | --- |
-| `Drift Detection` | Runs `pulumi preview --refresh --expect-no-changes` against configured shared stacks |
+| `Scheduled Test Drift`, `Scheduled Prod Drift` | Runs `pulumi preview --refresh --expect-no-changes` against configured shared stacks |
 | `Scorecard` | Runs OpenSSF Scorecard and uploads SARIF results for repository health visibility |
 
-Drift detection intentionally skips when `PULUMI_BACKEND_URL` is not configured
-for a shared backend. Running a drift job against an ephemeral file backend on a
-fresh GitHub runner would be misleading.
+Scheduled drift requires the governed S3/KMS configuration and fails when it is
+missing; it never substitutes an ephemeral backend for shared-stack evidence.
 
 ## Manual maintainer follow-up
 
-The workflows are committed in this repository, but maintainers still need to:
-
-1. create the GitHub OIDC IAM role in AWS
-2. set the repository variables and optional secrets listed above
-3. mark the required PR checks in GitHub branch protection
-4. decide whether production repositories want stricter stack lists or narrower
-   IAM role scopes than the template defaults
+Before enabling a new installation, maintainers must verify the governance-owned
+roles and configuration, set the exact repository variables above, and protect the
+deployment environments and required PR checks. Changes to stack selection or IAM
+scopes belong in the reviewed governance configuration, not ad hoc workflow roles.
 
 ## Current limitations
 
@@ -199,3 +163,16 @@ The workflows are committed in this repository, but maintainers still need to:
   the Python/uv Docker image
 - IAM validation is only as complete as the preview artifact; policies that are
   created entirely outside Pulumi still need separate review
+
+### Scheduled drift and PR commands
+
+`.github/workflows/scheduled-drift.yml` owns the daily main-only TEST/PROD
+read-only drift checks. `.github/workflows/self-deploy.yml` accepts only the
+validated repository dispatch used by PR commands. Keeping the schedule trigger
+out of the PR-head execution graph prevents that graph from sharing a scheduled
+default-branch cache context. The scheduled workflow is named
+`Service Scheduled Drift`; the dispatch controller is named `Service Self Deploy`.
+These distinct names are governance-owned OIDC workflow claims, not file-path
+claims. The scheduled file checks out only `github.sha` on main, uses the
+main-only `test-drift` and `prod-drift` environments with read-only drift roles,
+and has no apply or promotion jobs.

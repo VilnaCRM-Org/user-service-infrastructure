@@ -37,6 +37,9 @@ assert_help_target() {
     pulumi-up
     pulumi-refresh
     pulumi-destroy
+    pulumi-plan
+    pulumi-up-plan
+    initialize-stack
     report-dead-code
     report-docstrings
     report-maintainability-trends
@@ -136,59 +139,15 @@ assert_help_target() {
   [[ "$output" != *"KEY123"* ]]
 }
 
-@test "make pulumi-preview executes preview inside container" {
-  run env GITHUB_TOKEN=ghs_test_token make -n pulumi-preview
-  [ "$status" -eq 0 ]
-  assert_compose_env_file
-  [[ "$output" == *"-e GITHUB_TOKEN"* ]]
-  [[ "$output" == *"-e PULUMI_STACK"* ]]
-  [[ "$output" != *"ghs_test_token"* ]]
-  [[ "$output" == *"stack select"* ]]
-  [[ "$output" == *"./scripts/prepare_policy_pack.py"* ]]
-  [[ "$output" == *"pulumi --cwd pulumi preview --stack"* ]]
-  [[ "$output" == *"--policy-pack /workspace/policy"* ]]
-}
-
-@test "make pulumi-preview passes PULUMI_STACK via environment instead of shell interpolation" {
-  run make -n pulumi-preview "PULUMI_STACK=dev'; printf INJECTED >&2; #"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"-e PULUMI_STACK"* ]]
-  [[ "$output" != *"INJECTED"* ]]
-}
-
-@test "make pulumi-up executes deployment inside container" {
-  run make -n pulumi-up
-  [ "$status" -eq 0 ]
-  assert_compose_env_file
-  [[ "$output" == *"-e PULUMI_STACK"* ]]
-  [[ "$output" == *"stack select"* ]]
-  [[ "$output" == *"./scripts/prepare_policy_pack.py"* ]]
-  [[ "$output" == *"pulumi --cwd pulumi up --stack"* ]]
-  [[ "$output" == *"--policy-pack /workspace/policy"* ]]
-}
-
-@test "make pulumi-refresh executes refresh inside container" {
-  run env GITHUB_TOKEN=ghs_test_token make -n pulumi-refresh
-  [ "$status" -eq 0 ]
-  assert_compose_env_file
-  [[ "$output" == *"-e GITHUB_TOKEN"* ]]
-  [[ "$output" == *"-e PULUMI_STACK"* ]]
-  [[ "$output" != *"ghs_test_token"* ]]
-  [[ "$output" == *"stack select"* ]]
-  [[ "$output" != *"--create --non-interactive"* ]]
-  [[ "$output" == *"pulumi --cwd pulumi refresh --stack"* ]]
-}
-
-@test "make pulumi-destroy executes destroy inside container" {
-  run env GITHUB_TOKEN=ghs_test_token make -n pulumi-destroy
-  [ "$status" -eq 0 ]
-  assert_compose_env_file
-  [[ "$output" == *"-e GITHUB_TOKEN"* ]]
-  [[ "$output" == *"-e PULUMI_STACK"* ]]
-  [[ "$output" != *"ghs_test_token"* ]]
-  [[ "$output" == *"stack select"* ]]
-  [[ "$output" != *"--create --non-interactive"* ]]
-  [[ "$output" == *"pulumi --cwd pulumi destroy --stack"* ]]
+@test "guarded Pulumi targets use locked runtime without shell interpolation" {
+  for command in preview up refresh destroy plan up-plan; do
+    run env GITHUB_TOKEN=ghs_test_token make -n "pulumi-${command}" "PULUMI_STACK=dev'; printf INJECTED >&2; #"
+    [ "$status" -eq 0 ]
+    assert_compose_env_file
+    [[ "$output" == *"uv run --frozen python scripts/run_pulumi_command.py ${command}"* ]]
+    [[ "$output" != *"INJECTED"* ]]
+    [[ "$output" != *"ghs_test_token"* ]]
+  done
 }
 
 @test "make sh opens a throwaway shell in the Pulumi container" {
@@ -416,13 +375,12 @@ assert_help_target() {
   [[ "$output" == *"make test-cli"* ]]
 }
 
-@test "make test-drift executes the non-destructive drift helper" {
+@test "make test-drift executes the guarded drift helper" {
   run env GITHUB_TOKEN=ghs_test_token make -n test-drift
   [ "$status" -eq 0 ]
   assert_compose_env_file
-  [[ "$output" == *"-e GITHUB_TOKEN"* ]]
   [[ "$output" != *"ghs_test_token"* ]]
-  [[ "$output" == *"./scripts/run_pulumi_drift_check.py"* ]]
+  [[ "$output" == *"uv run --frozen python scripts/run_pulumi_command.py drift"* ]]
 }
 
 @test "make test-quality delegates to the Rust-based quality suite" {
@@ -541,4 +499,11 @@ assert_help_target() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"uv run cyclonedx-py environment"* ]]
   [[ "$output" == *"python-environment.cdx.json"* ]]
+}
+
+@test "make initialize-stack uses the trusted locked initializer" {
+  run make -n initialize-stack PULUMI_STACK=test
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"-e PULUMI_STACK"* ]]
+  [[ "$output" == *"uv run --frozen python scripts/initialize_service_stack.py initialize"* ]]
 }

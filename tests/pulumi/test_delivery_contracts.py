@@ -25,9 +25,7 @@ PULL_REQUEST_WORKFLOW_TIMEOUTS = {
     "pulumi-policy.yml": {"policy": 15},
     "pulumi-pr-guardrails.yml": {
         "preview": 20,
-        "preview_privileged": 20,
         "destructive_diff": 10,
-        "iam_validation": 15,
     },
     "pulumi-structural.yml": {"structural": 15},
     "pulumi-unit.yml": {"unit": 15},
@@ -144,7 +142,7 @@ def test_dockerfile_pins_base_image_and_verifies_downloads() -> None:
     """Require checksum verification for externally downloaded tooling."""
     dockerfile_text = DOCKERFILE.read_text(encoding="utf-8")
 
-    assert "python:3.11.9-slim-bookworm@" in dockerfile_text
+    assert "python:3.11.15-slim-bookworm@" in dockerfile_text
     assert "FROM ${BASE_IMAGE} AS tooling" in dockerfile_text
     assert "FROM ${BASE_IMAGE} AS runtime-base" in dockerfile_text
     assert "ARG TARGETARCH" in dockerfile_text
@@ -203,29 +201,34 @@ def test_docker_compose_keeps_workspace_and_credentials_contract() -> None:
     )
     assert not any(volume["target"] == "/home/dev/.aws" for volume in volumes)
 
-    assert service["env_file"] == [{"path": ".env", "required": False}]
-    assert service["environment"] == [
-        "PULUMI_ACCESS_TOKEN",
+    assert "env_file" not in service
+    assert aws_service["env_file"] == [{"path": ".env", "required": False}]
+    assert not {
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+    } & set(service["environment"])
+    assert {
+        "AWS_ACCOUNT_ID",
+        "PULUMI_STACK",
         "PULUMI_BACKEND_URL",
-        "PYTHONPATH=/workspace/pulumi",
-    ]
+        "PULUMI_SECRETS_PROVIDER",
+        "PULUMI_COMMIT_SHA",
+        "PULUMI_EXPECTED_SHA",
+    } <= set(service["environment"])
+    assert "PULUMI_ACCESS_TOKEN" not in service["environment"]
     assert any(
         volume["source"] == "${HOME}/.aws"
         and volume["target"] == "/home/dev/.aws"
         and volume["read_only"] is True
         for volume in aws_service["volumes"]
     )
-    assert aws_service["environment"] == [
-        "PULUMI_ACCESS_TOKEN",
-        "PULUMI_BACKEND_URL",
+    assert set(service["environment"]) | {
+        "AWS_PROFILE",
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
         "AWS_SESSION_TOKEN",
-        "AWS_PROFILE",
-        "AWS_REGION",
-        "AWS_DEFAULT_REGION",
-        "PYTHONPATH=/workspace/pulumi",
-    ]
+    } == set(aws_service["environment"])
 
 
 def test_prepare_docker_context_script_creates_expected_files(tmp_path: Path) -> None:
@@ -390,10 +393,8 @@ def test_prepare_policy_pack_script_uses_shared_uv_environment() -> None:
 
     assert PREPARE_POLICY_SCRIPT.exists()
     assert SCRIPT_SUPPORT.exists()
-    assert (
-        'default_policy_venv = Path.home() / ".venvs" / '
-        '"user-service-infrastructure"' in script_text
-    )
+    assert '"POLICY_VENV"' in script_text
+    assert ".venvs/bootstrap-infrastructure" in script_text
     assert 'policy_link = policy_dir / ".venv"' in script_text
     assert "policy_link.symlink_to(policy_venv)" in script_text
     assert 'env["UV_PROJECT_ENVIRONMENT"] = str(policy_venv)' in script_text
@@ -477,30 +478,13 @@ def test_coverage_bearing_make_targets_enforce_full_line_coverage() -> None:
 
 
 def test_makefile_keeps_pulumi_guardrails_secret_safe() -> None:
-    """Protect preview and drift targets from leaking tokens or creating typo stacks."""
-    makefile_text = (PROJECT_ROOT / "Makefile").read_text(encoding="utf-8")
-    refresh_select = (
-        'pulumi $(PULUMI_CWD_FLAG) stack select "$$stack" '
-        "--non-interactive >/dev/null; "
-        'pulumi $(PULUMI_CWD_FLAG) refresh --stack "$$stack"'
-    )
-    destroy_select = (
-        'pulumi $(PULUMI_CWD_FLAG) stack select "$$stack" '
-        "--non-interactive >/dev/null; "
-        'pulumi $(PULUMI_CWD_FLAG) destroy --stack "$$stack"'
-    )
-    direct_guardrail_runs = "$(COMPOSE_GITHUB_TOKEN) $(COMPOSE_SERVICE) bash -lc"
-    stack_guardrail_runs = (
-        "$(COMPOSE_GITHUB_TOKEN) $(COMPOSE_PULUMI_STACK) $(COMPOSE_SERVICE) bash -lc"
-    )
-
-    assert "GITHUB_TOKEN='$(GITHUB_TOKEN)'" not in makefile_text
-    assert "export GITHUB_TOKEN" in makefile_text
-    assert "export PULUMI_STACK" in makefile_text
-    assert refresh_select in makefile_text
-    assert destroy_select in makefile_text
-    assert makefile_text.count(direct_guardrail_runs) >= 2
-    assert makefile_text.count(stack_guardrail_runs) == 4
+    """Shared commands run the locked guarded helper without interpolated secrets."""
+    text = (PROJECT_ROOT / "Makefile").read_text()
+    assert "PULUMI_LOGIN_CMD" not in text
+    assert "GITHUB_TOKEN='$(GITHUB_TOKEN)'" not in text
+    for command in ("preview", "up", "refresh", "destroy", "plan", "up-plan", "drift"):
+        assert f"uv run --frozen python scripts/run_pulumi_command.py {command}" in text
+    assert ".artifacts/pulumi-preview/pull-request-event.json" in text
 
 
 def test_bats_suite_covers_every_public_make_target() -> None:
@@ -520,6 +504,9 @@ def test_bats_suite_covers_every_public_make_target() -> None:
         "make -n pulumi-up",
         "make -n pulumi-refresh",
         "make -n pulumi-destroy",
+        "make -n pulumi-plan",
+        "make -n pulumi-up-plan",
+        "make -n initialize-stack",
         "make -n report-dead-code",
         "make -n report-docstrings",
         "make -n report-maintainability-trends",
@@ -561,7 +548,20 @@ def test_bats_suite_covers_every_public_make_target() -> None:
     ]
 
     for invocation in expected_invocations:
-        assert invocation in bats_text
+        if invocation.removeprefix("make -n pulumi-") in {
+            "preview",
+            "up",
+            "refresh",
+            "destroy",
+            "plan",
+            "up-plan",
+        }:
+            loop = re.search(r"for command in ([^;]+); do", bats_text)
+            assert loop is not None
+            assert invocation.removeprefix("make -n pulumi-") in loop.group(1).split()
+            assert 'make -n "pulumi-${command}"' in bats_text
+        else:
+            assert invocation in bats_text
 
 
 def test_local_battery_workflow_avoids_duplicate_mutation_runs() -> None:
@@ -613,7 +613,6 @@ def test_ci_workflows_keep_make_entrypoints_in_sync() -> None:
         "pulumi-pr-guardrails.yml": [
             "make publish-pulumi-preview-summary",
             "make test-destructive-diff",
-            "make test-iam-validation",
         ],
         "pulumi-structural.yml": ["make test-pulumi"],
         "pulumi-unit.yml": ["make test-unit"],

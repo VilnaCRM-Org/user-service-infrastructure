@@ -171,7 +171,8 @@ def test_scheduled_drift_uses_only_protected_main_read_roles():
     assert set(_triggers(dispatch)) == {"repository_dispatch"}
     assert set(workflow["jobs"]) == {"scheduled_test_drift", "scheduled_prod_drift"}
     assert not set(workflow["jobs"]) & set(dispatch["jobs"])
-    assert workflow["name"] == dispatch["name"] == "Service Self Deploy"
+    assert workflow["name"] == "Service Scheduled Drift"
+    assert dispatch["name"] == "Service Self Deploy"
     assert workflow["concurrency"] == {
         "group": "pulumi-command-schedule",
         "cancel-in-progress": False,
@@ -188,7 +189,7 @@ def test_scheduled_drift_uses_only_protected_main_read_roles():
             job["if"]
             == "github.event_name == 'schedule' && github.ref == 'refs/heads/main'"
         )
-        assert job["environment"] == f"{environment}-preview"
+        assert job["environment"] == f"{environment}-drift"
         assert "needs" not in job
         assert job["permissions"]["id-token"] == "write"
         steps = job["steps"]
@@ -249,3 +250,43 @@ def test_pr_destructive_gates_exclude_scheduled_execution():
         assert " ".join(job.get("if", "").split()) == expected
         assert "preflight" in job["needs"]
         assert f"{environment}_preview" in job["needs"]
+
+
+def test_state_operations_share_cross_workflow_stack_mutex():
+    """A cron drift and a PR state operation cannot hold the same stack at once."""
+    load = _workflow
+    workflows = {
+        name: load(name) for name in ("self-deploy.yml", "scheduled-drift.yml")
+    }
+    operations = {"make pulumi-plan", "make pulumi-up-plan", "make test-drift"}
+    state_jobs = {
+        name: (workflow, job)
+        for workflow in workflows.values()
+        for name, job in workflow["jobs"].items()
+        if any(step.get("run") in operations for step in job["steps"])
+    }
+    assert set(state_jobs) == {
+        "test_preview",
+        "test_apply",
+        "test_post_apply_drift",
+        "prod_preview",
+        "prod_apply",
+        "prod_post_apply_drift",
+        "scheduled_test_drift",
+        "scheduled_prod_drift",
+    }
+    groups = {}
+    for name, (workflow, job) in state_jobs.items():
+        environment = "test" if "test" in name else "prod"
+        group = (
+            "pulumi-state-${{ github.repository }}-" + environment + "-" + environment
+        )
+        assert job["concurrency"] == {"group": group, "cancel-in-progress": False}
+        assert workflow["concurrency"]["group"] != group
+        if name.startswith("scheduled_"):
+            assert job["environment"] == environment + "-drift"
+        else:
+            assert job["environment"] in {environment, environment + "-preview"}
+        groups.setdefault(environment, set()).add(group)
+    assert len(groups["test"]) == len(groups["prod"]) == 1
+    assert groups["test"].isdisjoint(groups["prod"])

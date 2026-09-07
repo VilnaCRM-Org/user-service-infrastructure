@@ -71,6 +71,9 @@ jobs:
       pull-requests: read
     env:
       PULUMI_SKIP_UPDATE_CHECK: "true"
+    concurrency:
+      group: pulumi-state-${{ github.repository }}-test-test
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -239,6 +242,9 @@ jobs:
       pull-requests: read
     env:
       PULUMI_SKIP_UPDATE_CHECK: "true"
+    concurrency:
+      group: pulumi-state-${{ github.repository }}-test-test
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -330,6 +336,9 @@ jobs:
       pull-requests: read
     env:
       PULUMI_SKIP_UPDATE_CHECK: "true"
+    concurrency:
+      group: pulumi-state-${{ github.repository }}-test-test
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -403,6 +412,9 @@ jobs:
       pull-requests: read
     env:
       PULUMI_SKIP_UPDATE_CHECK: "true"
+    concurrency:
+      group: pulumi-state-${{ github.repository }}-prod-prod
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -579,6 +591,9 @@ jobs:
       pull-requests: read
     env:
       PULUMI_SKIP_UPDATE_CHECK: "true"
+    concurrency:
+      group: pulumi-state-${{ github.repository }}-prod-prod
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -681,6 +696,9 @@ jobs:
       pull-requests: read
     env:
       PULUMI_SKIP_UPDATE_CHECK: "true"
+    concurrency:
+      group: pulumi-state-${{ github.repository }}-prod-prod
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:

@@ -251,7 +251,9 @@ Existing quality, security, mutation, release and template-sync automation remai
 Earlier template documentation describing the generic OIDC/token path is
 historical; the governed TEST/PROD contract above governs shared deployments.
 
-Scheduled TEST and PROD drift runs use the protected `test-preview` and `prod-preview` environments in Service Self Deploy, with config-reader and drift OIDC roles only. These runs still require the designated reviewer; unattended drift remains an installation prerequisite, requiring dedicated main-only read-only environments and narrowly extended config-reader/drift trust subjects. Apply trust and approvals remain unchanged.
+Scheduled TEST and PROD drift runs use Service Scheduled Drift and dedicated main-only `test-drift` and `prod-drift` environments, with config-reader and drift OIDC roles only. Unattended drift requires these environments without required human reviewers and their narrowly bound read-only OIDC trust statements to be installed; source availability alone does not prove that live prerequisite. Apply trust and approvals remain unchanged.
+
+Preview, saved-plan apply, post-apply drift and scheduled drift share a repository/environment/stack concurrency group. Active state operations are never cancelled by a newer request. GitHub keeps only one pending job per group by default, so a newer pending request can replace an older pending request; this is mutual exclusion, not a FIFO delivery guarantee.
 
 The default Compose service does not load `.env` or forward AWS access keys. Cloud Make commands forward temporary credentials by variable name only in GitHub Actions when a session token exists. Local host credentials remain an explicit `ENABLE_AWS_CREDENTIALS=1` opt-in. `pulumi-plan`, `pulumi-up-plan`, `test-drift`, and `initialize-stack` export the selected `PULUMI_STACK`; GitHub tokens are forwarded only for these explicit cloud commands.
 

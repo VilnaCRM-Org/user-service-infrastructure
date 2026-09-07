@@ -1,6 +1,6 @@
-# The display name is an existing governance OIDC trust condition.
+# The dedicated display name and environments are read-only OIDC trust conditions.
 # This schedule-only file never consumes a PR revision or dispatch payload.
-name: Service Self Deploy
+name: Service Scheduled Drift
 
 on:
   schedule:
@@ -23,7 +23,7 @@ jobs:
   scheduled_test_drift:
     name: Scheduled Test Drift
     if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
-    environment: test-preview
+    environment: test-drift
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -32,6 +32,9 @@ jobs:
       pull-requests: read
     env:
       PULUMI_SKIP_UPDATE_CHECK: "true"
+    concurrency:
+      group: pulumi-state-${{ github.repository }}-test-test
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -83,7 +86,7 @@ jobs:
   scheduled_prod_drift:
     name: Scheduled Prod Drift
     if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
-    environment: prod-preview
+    environment: prod-drift
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -92,6 +95,9 @@ jobs:
       pull-requests: read
     env:
       PULUMI_SKIP_UPDATE_CHECK: "true"
+    concurrency:
+      group: pulumi-state-${{ github.repository }}-prod-prod
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:

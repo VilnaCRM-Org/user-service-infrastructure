@@ -20,6 +20,7 @@ def test_valid_boundary_has_no_all_pr_review_bottleneck():
         boundary.verification_blockers(
             environment,
             {
+                "total_count": 1,
                 "branch_policies": [{"name": "main", "type": "branch"}],
             },
         )
@@ -45,7 +46,11 @@ def test_valid_boundary_has_no_all_pr_review_bottleneck():
 )
 def test_wildcards_tags_other_branches_and_missing_policy_rejected(policies):
     assert boundary.verification_blockers(
-        boundary.payload(), {"branch_policies": policies}
+        boundary.payload(),
+        {
+            "total_count": len(policies) if isinstance(policies, list) else 0,
+            "branch_policies": policies,
+        },
     )
 
 
@@ -59,7 +64,7 @@ def test_reporter_rechecks_boundary_before_using_app_key(monkeypatch):
         promotion,
         "gh",
         lambda path: (
-            {"branch_policies": [{"name": "main", "type": "branch"}]}
+            {"total_count": 1, "branch_policies": [{"name": "main", "type": "branch"}]}
             if path.endswith("deployment-branch-policies")
             else boundary.payload()
         ),

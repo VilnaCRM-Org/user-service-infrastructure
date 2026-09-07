@@ -125,7 +125,7 @@ def test_status_items_and_nested_reviewers_require_recognized_types():
                         None,
                         {},
                         {"type": "User", "id": 7},
-                        {"reviewer": {"id": 8}},
+                        {"reviewer": {"type": "User", "id": 8}},
                     ]
                 },
             ]

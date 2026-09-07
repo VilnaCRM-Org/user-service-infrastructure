@@ -193,7 +193,7 @@ def test_configure_github_repository_controls_verification_helpers(
                 "reviewers": [
                     {
                         "type": "User",
-                        "reviewer": {"id": 9444106, "login": "Kravalg"},
+                        "reviewer": {"type": "User", "id": 9444106, "login": "Kravalg"},
                     }
                 ],
             }
@@ -239,7 +239,7 @@ def test_configure_github_repository_controls_verification_helpers(
                 "reviewers": [
                     {
                         "type": "User",
-                        "reviewer": {"id": 9444106, "login": "Kravalg"},
+                        "reviewer": {"type": "User", "id": 9444106, "login": "Kravalg"},
                     }
                 ],
             },
@@ -334,7 +334,7 @@ def test_configure_github_repository_controls_verification_helpers(
         module,
         "_run_gh_api",
         lambda _args, **_kwargs: (
-            {"branch_policies": [{"name": "main", "type": "branch"}]}
+            {"total_count": 1, "branch_policies": [{"name": "main", "type": "branch"}]}
             if _args[0].endswith("/deployment-branch-policies")
             else environment
         ),
@@ -524,7 +524,7 @@ def test_configure_github_repository_controls_apply_paths(
 
     def fake_run_gh_api(args, *, input_payload=None):
         calls.append((list(args), dict(input_payload or {})))
-        return {"branch_policies": []} if len(args) == 1 else {}
+        return {"total_count": 0, "branch_policies": []} if len(args) == 1 else {}
 
     monkeypatch.setattr(module, "_run_gh_api", fake_run_gh_api)
     monkeypatch.setattr(module, "_main_ruleset", lambda _repo: existing)
@@ -642,7 +642,10 @@ def test_configure_converges_main_only_policy(monkeypatch, existing):
 
     def api(args, **kwargs):
         calls.append((args, kwargs))
-        return {"branch_policies": policies}
+        return {
+            "total_count": len(policies) if isinstance(policies, list) else 0,
+            "branch_policies": policies,
+        }
 
     monkeypatch.setattr(controls, "_run_gh_api", api)
     controls._configure_evidence_environment("org/repo")
@@ -664,7 +667,7 @@ def test_verification_reads_environment_and_branch_policies(monkeypatch):
 
     def api(args):
         return (
-            {"branch_policies": [{"name": "main", "type": "branch"}]}
+            {"total_count": 1, "branch_policies": [{"name": "main", "type": "branch"}]}
             if args[0].endswith("deployment-branch-policies")
             else boundary.payload()
         )

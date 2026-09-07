@@ -93,9 +93,13 @@ Current behavior:
 - IAM policies in the preview without valid AWS credentials: the check fails so
   maintainers do not accidentally merge unvalidated IAM changes
 
-This complements the custom Pulumi CrossGuard pack. The policy pack blocks
-wildcard IAM permissions in repository code; Access Analyzer adds AWS-native
-semantic validation for the rendered policy documents.
+This complements the custom Pulumi CrossGuard pack. Direct S3 bucket and KMS
+key policies retain resource-local `Resource: "*"` and matching service-wide
+`s3:*` or `kms:*` compatibility. Their Allow statements still reject global
+`Action: "*"`, cross-service wide grants, and nonempty `NotAction`/`NotResource`;
+Deny semantics and exact reviewed IAM document pins remain unchanged. This does
+not certify principals or conditions; stronger resource-policy pinning is tracked
+in bootstrap-infrastructure#210. Access Analyzer adds AWS-native semantic checks.
 
 ## OIDC-based AWS access
 

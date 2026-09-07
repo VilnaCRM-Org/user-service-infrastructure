@@ -139,9 +139,9 @@ def test_guardrail_docs_are_indexed_from_root_docs() -> None:
     assert GUARDRAILS_DOC.exists()
     assert "ci-guardrails.md" in docs_index
     assert "docs/ci-guardrails.md" in root_readme
-    assert "AWS_OIDC_ROLE_ARN" in content
-    assert "<BRANCH_REF>" in content
-    assert "allowed branch" in content
+    assert "AWS_TEST_CI_CONFIG_ROLE_ARN" in content
+    assert "Service Scheduled Drift" in content
+    assert "credential-free previews" in content
     assert "allow-destructive-infra-change" in content
     assert "CodeQL" in content
     assert "Gitleaks" in content
@@ -267,7 +267,10 @@ def test_state_operations_share_cross_workflow_stack_mutex():
         name: (workflow, job)
         for workflow in workflows.values()
         for name, job in workflow["jobs"].items()
-        if any(step.get("run") in operations for step in job["steps"])
+        if any(
+            operations.intersection(step.get("run", "").splitlines())
+            for step in job["steps"]
+        )
     }
     assert set(state_jobs) == {
         "test_preview",

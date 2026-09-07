@@ -199,3 +199,15 @@ The workflows are committed in this repository, but maintainers still need to:
   the Python/uv Docker image
 - IAM validation is only as complete as the preview artifact; policies that are
   created entirely outside Pulumi still need separate review
+
+### Scheduled drift and PR commands
+
+`.github/workflows/scheduled-drift.yml` owns the daily main-only TEST/PROD
+read-only drift checks. `.github/workflows/self-deploy.yml` accepts only the
+validated repository dispatch used by PR commands. Keeping the schedule trigger
+out of the PR-head execution graph prevents that graph from sharing a scheduled
+default-branch cache context. Both files deliberately retain the display name
+`Service Self Deploy`: it is an existing governance-owned OIDC workflow claim,
+not a file-path claim. The scheduled file checks out only `github.sha` on main,
+keeps the protected preview environments and existing drift roles, and has no
+apply or promotion jobs. Use the file path and job names to distinguish the runs.

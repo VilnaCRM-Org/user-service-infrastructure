@@ -164,10 +164,22 @@ def test_new_workflows_keep_actions_pinned_to_full_shas() -> None:
 
 def test_scheduled_drift_uses_only_protected_main_read_roles():
     """Scheduled runs cannot enter comment apply or promotion jobs."""
-    workflow = _workflow("self-deploy.yml")
-    assert _triggers(workflow)["schedule"]
+    workflow = _workflow("scheduled-drift.yml")
+    dispatch = _workflow("self-deploy.yml")
+    assert set(_triggers(workflow)) == {"schedule"}
+    assert _triggers(workflow)["schedule"] == [{"cron": "17 3 * * *"}]
+    assert set(_triggers(dispatch)) == {"repository_dispatch"}
+    assert set(workflow["jobs"]) == {"scheduled_test_drift", "scheduled_prod_drift"}
+    assert not set(workflow["jobs"]) & set(dispatch["jobs"])
+    assert workflow["name"] == dispatch["name"] == "Service Self Deploy"
+    assert workflow["concurrency"] == {
+        "group": "pulumi-command-schedule",
+        "cancel-in-progress": False,
+    }
+    assert "needs.preflight" not in str(workflow)
+    assert "client_payload" not in str(workflow)
     assert (
-        workflow["jobs"]["preflight"]["if"]
+        dispatch["jobs"]["preflight"]["if"]
         == "github.event_name == 'repository_dispatch'"
     )
     for environment in ("test", "prod"):

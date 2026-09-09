@@ -359,6 +359,11 @@ def test_component_helpers_cover_listener_and_policy_paths() -> None:
     compute = object.__new__(ComputePlane)
     messaging = object.__new__(MessagingPlane)
 
+    with pytest.raises(
+        ValueError, match="^Managed compute requires caller-owned registry outputs$"
+    ):
+        compute._build_managed_outputs(Mock(), Mock(), Mock(), Mock(), None)
+
     fake_output = Mock()
     fake_output.apply.side_effect = lambda callback: callback("repo-url")
     with patch("app.compute.pulumi.Output.from_input", return_value=fake_output):

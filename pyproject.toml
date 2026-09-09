@@ -68,6 +68,7 @@ known_first_party = [
     "poc_phase_source_adapter",
     "poc_registry_phase_entrypoint",
     "poc_secret_observation",
+    "poc_source_artifact",
     "pulumi_command_preflight",
     "pulumi_pr_comment",
     "_script_support",

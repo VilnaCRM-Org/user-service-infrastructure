@@ -29,6 +29,7 @@ from typing import Any, Callable, Mapping  # noqa: E402
 
 import poc_contract  # noqa: E402
 import poc_phase_admission as admission  # noqa: E402
+import poc_phase_source_adapter as source_adapter  # noqa: E402
 import pulumi_command_preflight as preflight  # noqa: E402
 
 WORKFLOW = ".github/workflows/self-deploy.yml"
@@ -286,6 +287,40 @@ def load_verified_source(
     _artifact(gh, artifact_id, archive_sha256, run_id, sha)
     _producer(gh, run_id, sha)
     return source
+
+
+def load_verified_contract(
+    *, artifact_id: str, archive_sha256: str, source_sha256: str, gh=None, download=None
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Retrieve pinned desired bytes after authenticating transport, not prior state.
+
+    Consumers still require current review, phase admission and backend evidence.
+    The contract is returned in memory only; the CLI never prints its contents.
+    """
+    gh = gh or preflight.gh
+    source = load_verified_source(
+        artifact_id=artifact_id,
+        archive_sha256=archive_sha256,
+        source_sha256=source_sha256,
+        gh=gh,
+        download=download,
+    )
+    facts = source["source"]
+    blob_sha, raw = source_adapter._content_bytes(
+        gh(f"{API}/contents/{admission.CONTRACT_PATH}?ref={facts['head_sha']}")
+    )
+    _require(blob_sha == facts["blob_sha"])
+    contract = admission._decode_contract(raw)
+    poc_contract._shape(contract)
+    poc_contract._semantics(contract)
+    canonical = json.dumps(
+        contract, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode()
+    _require(hashlib.sha256(canonical).hexdigest() == facts["contract_sha256"])
+    run_id, sha = _context(os.environ)
+    _artifact(gh, artifact_id, archive_sha256, run_id, sha)
+    _producer(gh, run_id, sha)
+    return source, contract
 
 
 def main(argv=None) -> int:

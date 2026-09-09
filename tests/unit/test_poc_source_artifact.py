@@ -1,5 +1,6 @@
 """Authenticated same-run artifact and isolated CLI adversarial regressions."""
 
+import base64
 import copy
 import hashlib
 import importlib
@@ -151,6 +152,92 @@ def invoke(prepared, monkeypatch, *, raw=None, gh=None):
 def test_same_run_source_facts_only(prepared, monkeypatch):
     assert invoke(prepared, monkeypatch) == prepared["source"]
     assert prepared["source"]["request"]["source_run_id"] != "101"
+
+
+def _change_during_contract_fetch(prepared, case):
+    if case == "expired-during-fetch":
+        prepared["metadata"]["expired"] = True
+    if case == "completed-during-fetch":
+        prepared["run"]["status"] = "completed"
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "valid",
+        "blob",
+        "digest",
+        "foreign-producer",
+        "schema",
+        "expired-during-fetch",
+        "completed-during-fetch",
+    ],
+)
+def test_contract_refetch_requires_authenticated_artifact_and_exact_blob(
+    prepared, case
+):
+    raw = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures/poc-contract/registry.synthetic.json"
+    ).read_bytes()
+    contract = json.loads(raw)
+    if case == "schema":
+        contract["unexpected"] = True
+        raw = json.dumps(contract).encode()
+    blob = artifact.admission._git_blob_sha(raw)
+    facts = prepared["source"]["source"]
+    facts["blob_sha"] = "0" * 40 if case == "blob" else blob
+    facts["contract_sha256"] = (
+        "0" * 64
+        if case == "digest"
+        else digest(
+            json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()
+        )
+    )
+    payload = json.dumps(prepared["source"]).encode()
+    archive = zip_bytes(payload)
+    prepared["metadata"]["digest"] = f"sha256:{digest(archive)}"
+    prepared["metadata"]["size_in_bytes"] = len(archive)
+    if case == "foreign-producer":
+        prepared["run"]["id"] = 103
+    calls = []
+
+    def read(endpoint):
+        calls.append(endpoint)
+        if endpoint == f"{artifact.API}/actions/runs/101":
+            return prepared["run"]
+        if endpoint == f"{artifact.API}/actions/artifacts/102":
+            return prepared["metadata"]
+        assert endpoint == (
+            f"{artifact.API}/contents/{artifact.admission.CONTRACT_PATH}"
+            f"?ref={facts['head_sha']}"
+        )
+        _change_during_contract_fetch(prepared, case)
+        return {
+            "type": "file",
+            "path": artifact.admission.CONTRACT_PATH,
+            "sha": blob,
+            "size": len(raw),
+            "encoding": "base64",
+            "content": base64.b64encode(raw).decode(),
+        }
+
+    def load():
+        return artifact.load_verified_contract(
+            artifact_id="102",
+            archive_sha256=digest(archive),
+            source_sha256=digest(payload),
+            gh=read,
+            download=lambda _: archive,
+        )
+
+    if case == "valid":
+        assert load() == (prepared["source"], contract)
+    else:
+        with pytest.raises(ValueError):
+            load()
+    if case == "foreign-producer":
+        assert not any("/contents/" in endpoint for endpoint in calls)
 
 
 @pytest.mark.parametrize(

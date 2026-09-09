@@ -576,3 +576,57 @@ def test_stream_wait_timeout_and_output_bound(monkeypatch):
     monkeypatch.setattr(observer, "MAX_METADATA", 1)
     with pytest.raises(ValueError):
         observer._stream(process)
+
+
+def test_private_capture_returns_exact_rows_without_second_fetch(native):
+    result = observer.capture_backend(native["source"], aws=native["aws"])
+    assert type(result) is observer.PrivateBackendCapture
+    assert result.resources == native["document"]["checkpoint"]["latest"]["resources"]
+    assert result.resources[0]["outputs"]["secret"] == "PRIVATE_SENTINEL"
+    assert "PRIVATE" not in repr(result)
+    assert "resources" not in result.summary
+    assert "PRIVATE" not in json.dumps(result.summary)
+    assert result.summary["state"]["resource_count"] == len(result.resources)
+    gets = [args for _, op, args in native["calls"] if op == "get-object"]
+    assert [args["key"] for args in gets] == [".pulumi/meta.yaml", observer.CHECKPOINT]
+    assert gets[1]["version-id"] == result.summary["state"]["VersionId"]
+    assert gets[1]["if-match"] == result.summary["state"]["ETag"]
+
+
+def test_private_capture_absence_is_not_initial_authority(native):
+    del native["objects"][observer.CHECKPOINT]
+    result = observer.capture_backend(native["source"], aws=native["aws"])
+    assert result.resources == []
+    assert result.summary["state"] == {"kind": "observed_absence"}
+    assert result.summary["prior_authority"] == "not-evaluated"
+
+
+@pytest.mark.parametrize(
+    "late_operation", ["get-caller-identity", "get-bucket-versioning"]
+)
+def test_private_capture_is_not_constructed_before_final_rechecks(
+    native, monkeypatch, late_operation
+):
+    captures, calls = [], []
+    monkeypatch.setattr(
+        observer, "PrivateBackendCapture", lambda **kw: captures.append(kw)
+    )
+
+    def late_failure(service, operation, arguments, output=None):
+        calls.append(operation)
+        result = native["aws"](service, operation, arguments, output)
+        if operation == late_operation and calls.count(operation) == 2:
+            return {}
+        return result
+
+    with pytest.raises(ValueError, match="Backend observation precondition failed"):
+        observer.capture_backend(native["source"], aws=late_failure)
+    assert any(args.get("key") == observer.CHECKPOINT for _, _, args in native["calls"])
+    assert captures == []
+
+
+def test_private_capture_keeps_inventory_rejection_mandatory(native):
+    native["document"]["checkpoint"]["latest"]["pending_operations"] = [{}]
+    update_checkpoint(native)
+    with pytest.raises(ValueError, match="Backend observation precondition failed"):
+        observer.capture_backend(native["source"], aws=native["aws"])

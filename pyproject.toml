@@ -68,6 +68,7 @@ known_first_party = [
     "poc_phase_admission",
     "poc_phase_source_adapter",
     "poc_registry_phase_entrypoint",
+    "poc_registry_plan",
     "poc_secret_observation",
     "poc_source_artifact",
     "pulumi_command_preflight",

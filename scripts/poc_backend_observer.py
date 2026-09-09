@@ -26,8 +26,10 @@ import selectors  # noqa: E402
 import stat  # noqa: E402
 import subprocess  # noqa: E402  # nosec B404
 import time  # noqa: E402
+from dataclasses import dataclass  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
 from tempfile import TemporaryDirectory  # noqa: E402
+from typing import Any  # noqa: E402
 
 import poc_contract  # noqa: E402
 import poc_source_artifact as source_artifact  # noqa: E402
@@ -41,6 +43,19 @@ CHECKPOINT = f".pulumi/stacks/{PROJECT}/test.json"
 LOCKS = f".pulumi/locks/organization/{PROJECT}/test/"
 MAX_BYTES = 16 * 1024 * 1024
 MAX_METADATA = 2 * 1024 * 1024
+
+
+@dataclass(frozen=True, repr=False)
+class PrivateBackendCapture:
+    """In-memory input to trusted graph validation; never serialize this object.
+
+    Only summary is public. Resources retain complete private checkpoint values,
+    are not phase authority, and must not enter logs or job artifacts. Suppress
+    generated repr so accidental object formatting cannot expose those values.
+    """
+
+    summary: dict[str, Any]
+    resources: list[dict[str, Any]]
 
 
 def _require(condition):
@@ -305,7 +320,7 @@ def _resource(row, urns):
 
 
 def _inventory(raw):
-    """Inspect only ownership metadata; no resource values leave this function."""
+    """Validate checkpoint and return separate public inventory/private rows."""
     document = _json(raw)
     _require(type(document.get("version")) is int and document["version"] == 3)
     checkpoint = document["checkpoint"]
@@ -331,11 +346,11 @@ def _inventory(raw):
         "resource_count": len(rows),
         "inventory_sha256": _digest(inventory),
         "baseline_inventory_only": baseline,
-    }
+    }, rows
 
 
-def observe_backend(source, *, aws=None):
-    """Return authenticated observation facts, never initial/accepted authority."""
+def capture_backend(source, *, aws=None) -> PrivateBackendCapture:
+    """Return private rows only after all native end-of-observation rechecks."""
     aws = aws or aws_read
     _target(source)
     caller = _caller(aws)
@@ -349,13 +364,15 @@ def observe_backend(source, *, aws=None):
     listing = _list(aws, CHECKPOINT)
     _require(CHECKPOINT + ".gz" not in listing)
     state = {"kind": "observed_absence"}
+    resources = []
     if CHECKPOINT in listing:
         head, raw = _capture(aws, CHECKPOINT, MAX_BYTES)
+        inventory, resources = _inventory(raw)
         state = {
             "kind": "observed_checkpoint",
             **head,
             "sha256": _digest(raw),
-            **_inventory(raw),
+            **inventory,
         }
         _require(_head(aws, CHECKPOINT, MAX_BYTES) == head)
     _require(_list(aws, CHECKPOINT) == listing and _list(aws, LOCKS) == [])
@@ -366,7 +383,7 @@ def observe_backend(source, *, aws=None):
     _require(
         aws("s3api", "get-bucket-versioning", _bucket_args()).get("Status") == "Enabled"
     )
-    return {
+    summary = {
         "kind": "poc-backend-observation/v1",
         "observed_at": datetime.now(timezone.utc).isoformat(),
         "account_id": ACCOUNT,
@@ -379,6 +396,13 @@ def observe_backend(source, *, aws=None):
         "state": state,
         "prior_authority": "not-evaluated",
     }
+
+    return PrivateBackendCapture(summary=summary, resources=resources)
+
+
+def observe_backend(source, *, aws=None):
+    """Return authenticated observation facts, never initial/accepted authority."""
+    return capture_backend(source, aws=aws).summary
 
 
 def main(argv=None):

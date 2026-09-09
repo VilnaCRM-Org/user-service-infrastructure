@@ -75,6 +75,14 @@ def _configure_managed_stack(
         "environment": "integration",
         "serviceName": "user-service",
         "deploymentMode": "managed",
+        "executionRoleArn": (
+            "arn:aws:iam::123456789012:role/"
+            "user-service-infrastructure-integration-EcsExecution"
+        ),
+        "taskRoleArn": (
+            "arn:aws:iam::123456789012:role/"
+            "user-service-infrastructure-integration-EcsTask"
+        ),
         "accessLogsBucketName": "shared-alb-access-logs",
         "apiBaseUrl": "https://users.example.com",
         "apiUrl": "https://users.example.com",
@@ -87,6 +95,9 @@ def _configure_managed_stack(
             "123456789012.dkr.ecr.eu-central-1.amazonaws.com/user-service-worker:sha"
         ),
     }
+    stack.set_config(
+        "aws:allowedAccountIds", auto.ConfigValue(value='["123456789012"]')
+    )
     secret_config = {
         "documentDbPassword": "mongo-secret",
         "redisAuthToken": "redis-secret-token-1234",
@@ -391,12 +402,6 @@ def test_component_helpers_cover_listener_and_policy_paths() -> None:
         )
     assert listener["protocol"] == "HTTP"
     assert listener["default_actions"][0].type == "forward"
-
-    secret_policy = json.loads(compute._secret_access_policy_json(["secret-arn"]))
-    assert secret_policy["Statement"][0]["Resource"] == ["secret-arn"]
-
-    queue_policy = json.loads(compute._task_queue_policy_json(["queue-arn"]))
-    assert queue_policy["Statement"][0]["Resource"] == ["queue-arn"]
 
     health_policy = json.loads(messaging._health_check_policy_json("queue-arn"))
     assert health_policy["Statement"][0]["Resource"] == ["queue-arn"]

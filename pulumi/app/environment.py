@@ -138,6 +138,26 @@ class RuntimeSettings:
     emf_namespace: str
     aws_sqs_endpoint_base: str
     aws_sqs_port: str
+    execution_role_arn: str | None
+    task_role_arn: str | None
+
+
+def validate_runtime_roles(runtime: RuntimeSettings, environment: str) -> None:
+    """Bind supplied roles to the protected account and repository environment."""
+    accounts = pulumi.Config("aws").get_object("allowedAccountIds")
+    if (
+        not isinstance(accounts, list)
+        or len(accounts) != 1
+        or not isinstance(accounts[0], str)
+        or re.fullmatch(r"[0-9]{12}", accounts[0]) is None
+    ):
+        raise ValueError("Managed runtime roles require one protected AWS account.")
+    prefix = f"arn:aws:iam::{accounts[0]}:role/{pulumi.get_project()}-{environment}"
+    if (
+        runtime.execution_role_arn != f"{prefix}-EcsExecution"
+        or runtime.task_role_arn != f"{prefix}-EcsTask"
+    ):
+        raise ValueError("Managed runtime roles must match the central role contract.")
 
 
 @dataclass(frozen=True)
@@ -710,6 +730,8 @@ def resolve_stack_settings(environment_settings: EnvironmentSettings) -> StackSe
     )
 
     runtime = RuntimeSettings(
+        execution_role_arn=config.get("executionRoleArn"),
+        task_role_arn=config.get("taskRoleArn"),
         access_logs_bucket_name=_required_managed_string(
             config,
             "accessLogsBucketName",
@@ -755,6 +777,9 @@ def resolve_stack_settings(environment_settings: EnvironmentSettings) -> StackSe
             None, config.get("awsSqsPort"), default="443"
         ),
     )
+
+    if deployment_mode == "managed":
+        validate_runtime_roles(runtime, environment)
 
     social = SocialProviderSettings(
         github_client_id=resolve_config_value(

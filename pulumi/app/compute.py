@@ -10,7 +10,7 @@ import pulumi_aws as aws
 
 import pulumi
 from app.data import DataPlane
-from app.environment import StackSettings, build_resource_name
+from app.environment import StackSettings, build_resource_name, validate_runtime_roles
 from app.messaging import MessagingPlane
 from app.network import NetworkPlane
 from app.registry import RegistryOutputs
@@ -48,6 +48,8 @@ class ComputePlane(pulumi.ComponentResource):
         opts: Optional[pulumi.ResourceOptions] = None,
     ) -> None:
         """Build preview-safe outputs or provision the managed compute plane."""
+        if settings.is_managed:
+            validate_runtime_roles(settings.runtime, settings.environment)
         super().__init__("user-service-infrastructure:compute:Plane", name, None, opts)
 
         self.outputs = (
@@ -139,16 +141,6 @@ class ComputePlane(pulumi.ComponentResource):
         )
 
         runtime_secrets = self._create_runtime_secrets(settings)
-        execution_role = self._create_execution_role(
-            secret_arns=[
-                data.outputs.documentdb_url_secret_arn,
-                data.outputs.redis_url_secret_arn,
-                messaging.outputs.health_check_secret_arn,
-                *runtime_secrets.values(),
-            ]
-        )
-        task_role = self._create_task_role(messaging)
-
         web_image = self._resolve_image_uri(
             repository_url=registries.web.uri,
             image_tag=settings.images.web_image_tag,
@@ -211,8 +203,8 @@ class ComputePlane(pulumi.ComponentResource):
             memory=settings.capacity.web_memory,
             network_mode="awsvpc",
             requires_compatibilities=["FARGATE"],
-            execution_role_arn=execution_role.arn,
-            task_role_arn=task_role.arn,
+            execution_role_arn=settings.runtime.execution_role_arn,
+            task_role_arn=settings.runtime.task_role_arn,
             container_definitions=self._web_container_definitions(
                 settings=settings,
                 image=web_image,
@@ -231,8 +223,8 @@ class ComputePlane(pulumi.ComponentResource):
             memory=settings.capacity.worker_memory,
             network_mode="awsvpc",
             requires_compatibilities=["FARGATE"],
-            execution_role_arn=execution_role.arn,
-            task_role_arn=task_role.arn,
+            execution_role_arn=settings.runtime.execution_role_arn,
+            task_role_arn=settings.runtime.task_role_arn,
             container_definitions=self._worker_container_definitions(
                 settings=settings,
                 image=worker_image,
@@ -338,50 +330,6 @@ class ComputePlane(pulumi.ComponentResource):
             ),
             opts=pulumi.ResourceOptions(parent=self),
         )
-
-    def _create_execution_role(
-        self,
-        *,
-        secret_arns: list[pulumi.Input[str]],
-    ) -> aws.iam.Role:
-        """Create the ECS task execution role with ECR, logs, and secret access."""
-        execution_role = aws.iam.Role(
-            "user-service-execution-role",
-            assume_role_policy=self._assume_role_policy_json(),
-            opts=pulumi.ResourceOptions(parent=self),
-        )
-        aws.iam.RolePolicyAttachment(
-            "user-service-execution-managed-policy",
-            role=execution_role.name,
-            policy_arn="arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
-            opts=pulumi.ResourceOptions(parent=self),
-        )
-        aws.iam.RolePolicy(
-            "user-service-execution-secret-policy",
-            role=execution_role.id,
-            policy=pulumi.Output.all(*secret_arns).apply(
-                self._secret_access_policy_json
-            ),
-            opts=pulumi.ResourceOptions(parent=self),
-        )
-        return execution_role
-
-    def _create_task_role(self, messaging: MessagingPlane) -> aws.iam.Role:
-        """Create the ECS task role used by the web and worker containers."""
-        task_role = aws.iam.Role(
-            "user-service-task-role",
-            assume_role_policy=self._assume_role_policy_json(),
-            opts=pulumi.ResourceOptions(parent=self),
-        )
-        aws.iam.RolePolicy(
-            "user-service-task-sqs-policy",
-            role=task_role.id,
-            policy=pulumi.Output.all(*messaging.outputs.queue_arns.values()).apply(
-                self._task_queue_policy_json
-            ),
-            opts=pulumi.ResourceOptions(parent=self),
-        )
-        return task_role
 
     def _create_runtime_secrets(
         self,
@@ -797,61 +745,4 @@ class ComputePlane(pulumi.ComponentResource):
         """Build the Symfony SQS DSN from the full queue URL."""
         return pulumi.Output.from_input(queue_url).apply(
             lambda value: f"{value}?region={region}&auto_setup=false"
-        )
-
-    def _assume_role_policy_json(self) -> str:
-        """Return the standard ECS task assume-role policy."""
-        return json.dumps(
-            {
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Effect": "Allow",
-                        "Principal": {"Service": "ecs-tasks.amazonaws.com"},
-                        "Action": "sts:AssumeRole",
-                    }
-                ],
-            }
-        )
-
-    def _secret_access_policy_json(self, secret_arns: list[str]) -> str:
-        """Limit the execution role to fetching only runtime secrets."""
-        return json.dumps(
-            {
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Sid": "ReadRuntimeSecrets",
-                        "Effect": "Allow",
-                        "Action": ["secretsmanager:GetSecretValue"],
-                        "Resource": secret_arns,
-                    }
-                ],
-            }
-        )
-
-    def _task_queue_policy_json(self, queue_arns: list[str]) -> str:
-        """Grant the ECS task role only the SQS actions the app needs."""
-        return json.dumps(
-            {
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Sid": "AppQueueAccess",
-                        "Effect": "Allow",
-                        "Action": [
-                            "sqs:ChangeMessageVisibility",
-                            "sqs:ChangeMessageVisibilityBatch",
-                            "sqs:DeleteMessage",
-                            "sqs:DeleteMessageBatch",
-                            "sqs:GetQueueAttributes",
-                            "sqs:GetQueueUrl",
-                            "sqs:ReceiveMessage",
-                            "sqs:SendMessage",
-                            "sqs:SendMessageBatch",
-                        ],
-                        "Resource": queue_arns,
-                    }
-                ],
-            }
         )

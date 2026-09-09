@@ -8,6 +8,7 @@ import sys
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
 import pytest
@@ -28,6 +29,7 @@ from app.environment import (
     resolve_config_value,
     resolve_deployment_mode,
     resolve_stack_settings,
+    validate_runtime_roles,
 )
 from app.stack import UserServiceStack
 from pulumi.runtime import mocks, settings, stack
@@ -37,6 +39,12 @@ import pulumi
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PULUMI_MAIN = PROJECT_ROOT / "pulumi" / "__main__.py"
 _PENDING_OUTPUT_ASSERTIONS: list[Callable[[], None]] = []
+CENTRAL_EXECUTION_ROLE = (
+    "arn:aws:iam::123456789012:role/user-service-infrastructure-dev-EcsExecution"
+)
+CENTRAL_TASK_ROLE = (
+    "arn:aws:iam::123456789012:role/user-service-infrastructure-dev-EcsTask"
+)
 
 
 def _resource_mock_outputs(
@@ -259,6 +267,7 @@ def mocked_pulumi_context(
         config_mock = Mock()
         config_mock.get.side_effect = lambda key, default=None: values.get(key, default)
         config_mock.get_int.side_effect = lambda key: values.get(key)
+        config_mock.get_object.side_effect = lambda key: values.get(key)
         config_mock.get_secret.side_effect = lambda key: (
             pulumi.Output.secret(values[key]) if key in values else None
         )
@@ -867,6 +876,8 @@ def test_resolve_stack_settings_defaults_to_preview_without_credentials() -> Non
     assert settings_model is not None
     assert settings_model.deployment_mode == "preview"
     assert settings_model.region == "eu-central-1"
+    assert settings_model.runtime.execution_role_arn is None
+    assert settings_model.runtime.task_role_arn is None
     assert settings_model.runtime.app_env == "prod"
     assert settings_model.runtime.app_debug == "0"
     assert settings_model.runtime.api_base_url == "https://user.dev.internal"
@@ -1058,6 +1069,8 @@ def test_resolve_stack_settings_requires_social_secrets_for_enabled_providers() 
 
     managed_config = {
         "deploymentMode": "managed",
+        "executionRoleArn": CENTRAL_EXECUTION_ROLE.replace("-dev-", "-prod-"),
+        "taskRoleArn": CENTRAL_TASK_ROLE.replace("-dev-", "-prod-"),
         "serviceName": "user-service",
         "accessLogsBucketName": "shared-alb-access-logs",
         "githubClientId": "github-client",
@@ -1073,7 +1086,9 @@ def test_resolve_stack_settings_requires_social_secrets_for_enabled_providers() 
     }
 
     with (
-        mocked_pulumi_context(managed_config),
+        mocked_pulumi_context(
+            managed_config, aws_config_values={"allowedAccountIds": ["123456789012"]}
+        ),
         patch("app.environment.pulumi.runtime.is_dry_run", return_value=False),
     ):
         with pytest.raises(
@@ -1090,6 +1105,8 @@ def test_managed_stack_uses_preview_credential_skips_and_scoped_data_egress() ->
     """Keep provider preview skips and managed data-plane networking intentional."""
     managed_config = {
         "deploymentMode": "managed",
+        "executionRoleArn": CENTRAL_EXECUTION_ROLE,
+        "taskRoleArn": CENTRAL_TASK_ROLE,
         "serviceName": "user-service",
         "accessLogsBucketName": "shared-alb-access-logs",
         "documentDbPassword": "mongo-secret",
@@ -1110,7 +1127,10 @@ def test_managed_stack_uses_preview_credential_skips_and_scoped_data_egress() ->
 
     with mocked_pulumi_context(
         {**managed_config, "redisReplicasPerNodeGroup": 0},
-        aws_config_values={"region": "eu-central-1"},
+        aws_config_values={
+            "region": "eu-central-1",
+            "allowedAccountIds": ["123456789012"],
+        },
     ):
         _run_pulumi_program(program, test_mocks=recording_mocks)
 
@@ -1155,6 +1175,8 @@ def test_managed_stack_requires_at_least_one_documentdb_instance() -> None:
     """Reject a managed DocumentDB cluster that would expose no instances."""
     managed_config = {
         "deploymentMode": "managed",
+        "executionRoleArn": CENTRAL_EXECUTION_ROLE,
+        "taskRoleArn": CENTRAL_TASK_ROLE,
         "serviceName": "user-service",
         "accessLogsBucketName": "shared-alb-access-logs",
         "documentDbPassword": "mongo-secret",
@@ -1174,7 +1196,10 @@ def test_managed_stack_requires_at_least_one_documentdb_instance() -> None:
 
     with mocked_pulumi_context(
         {**managed_config, "documentDbInstanceCount": 0},
-        aws_config_values={"region": "eu-central-1"},
+        aws_config_values={
+            "region": "eu-central-1",
+            "allowedAccountIds": ["123456789012"],
+        },
     ):
         with pytest.raises(
             ValueError,
@@ -1190,6 +1215,8 @@ def test_managed_stack_percent_encodes_data_plane_connection_urls() -> None:
     """Percent-encode reserved credentials before exporting managed URLs."""
     managed_config = {
         "deploymentMode": "managed",
+        "executionRoleArn": CENTRAL_EXECUTION_ROLE,
+        "taskRoleArn": CENTRAL_TASK_ROLE,
         "serviceName": "user-service",
         "accessLogsBucketName": "shared-alb-access-logs",
         "documentDbUsername": "user@example.com",
@@ -1211,7 +1238,10 @@ def test_managed_stack_percent_encodes_data_plane_connection_urls() -> None:
 
     with mocked_pulumi_context(
         managed_config,
-        aws_config_values={"region": "eu-central-1"},
+        aws_config_values={
+            "region": "eu-central-1",
+            "allowedAccountIds": ["123456789012"],
+        },
     ):
         _run_pulumi_program(program, test_mocks=recording_mocks)
 
@@ -1309,6 +1339,8 @@ def test_user_service_stack_managed_mode_builds_managed_outputs_under_mocks() ->
 
     managed_config = {
         "deploymentMode": "managed",
+        "executionRoleArn": CENTRAL_EXECUTION_ROLE,
+        "taskRoleArn": CENTRAL_TASK_ROLE,
         "serviceName": "user-service",
         "accessLogsBucketName": "shared-alb-access-logs",
         "documentDbPassword": "mongo-secret",
@@ -1352,7 +1384,10 @@ def test_user_service_stack_managed_mode_builds_managed_outputs_under_mocks() ->
 
     with mocked_pulumi_context(
         managed_config,
-        aws_config_values={"region": "eu-central-1"},
+        aws_config_values={
+            "region": "eu-central-1",
+            "allowedAccountIds": ["123456789012"],
+        },
     ):
         _run_pulumi_program(program)
 
@@ -1361,6 +1396,8 @@ def test_user_service_stack_managed_mode_supports_https_and_image_overrides() ->
     """Exercise the HTTPS-listener path and explicit image overrides."""
     managed_config = {
         "deploymentMode": "managed",
+        "executionRoleArn": CENTRAL_EXECUTION_ROLE,
+        "taskRoleArn": CENTRAL_TASK_ROLE,
         "serviceName": "user-service",
         "accessLogsBucketName": "shared-alb-access-logs",
         "certificateArn": (
@@ -1399,7 +1436,10 @@ def test_user_service_stack_managed_mode_supports_https_and_image_overrides() ->
 
     with mocked_pulumi_context(
         managed_config,
-        aws_config_values={"region": "eu-central-1"},
+        aws_config_values={
+            "region": "eu-central-1",
+            "allowedAccountIds": ["123456789012"],
+        },
     ):
         _run_pulumi_program(program)
 
@@ -1457,6 +1497,8 @@ def test_registry_full_stack_owner_and_images() -> None:
 
     config = {
         "deploymentMode": "managed",
+        "executionRoleArn": CENTRAL_EXECUTION_ROLE,
+        "taskRoleArn": CENTRAL_TASK_ROLE,
         "serviceName": "user-service",
         "accessLogsBucketName": "synthetic-access-logs",
         "documentDbPassword": "synthetic",
@@ -1479,7 +1521,13 @@ def test_registry_full_stack_owner_and_images() -> None:
     def full_program() -> None:
         UserServiceStack("user-service")
 
-    with mocked_pulumi_context(config, aws_config_values={"region": "eu-central-1"}):
+    with mocked_pulumi_context(
+        config,
+        aws_config_values={
+            "region": "eu-central-1",
+            "allowedAccountIds": ["123456789012"],
+        },
+    ):
         _run_pulumi_program(full_program, test_mocks=recorder, captured_urns=full_urns)
 
     repositories = [
@@ -1497,6 +1545,21 @@ def test_registry_full_stack_owner_and_images() -> None:
         for resource in recorder.resources
         if resource["type"] == "aws:ecs/taskDefinition:TaskDefinition"
     ]
+    assert len(tasks) == 2
+    assert all(
+        resource["inputs"]["executionRoleArn"] == CENTRAL_EXECUTION_ROLE
+        and resource["inputs"]["taskRoleArn"] == CENTRAL_TASK_ROLE
+        for resource in tasks
+    )
+    assert not any(
+        resource["type"]
+        in {
+            "aws:iam/role:Role",
+            "aws:iam/rolePolicy:RolePolicy",
+            "aws:iam/rolePolicyAttachment:RolePolicyAttachment",
+        }
+        for resource in recorder.resources
+    )
     images = {
         json.loads(resource["inputs"]["containerDefinitions"])[0]["image"]
         for resource in tasks
@@ -1563,3 +1626,78 @@ def test_managed_compute_needs_registries() -> None:
     plane = object.__new__(ComputePlane)
     with pytest.raises(ValueError, match="caller-owned registry outputs"):
         plane._build_managed_outputs(None, None, None, None, None)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("executionRoleArn", None),
+        ("taskRoleArn", None),
+        ("executionRoleArn", CENTRAL_TASK_ROLE),
+        ("taskRoleArn", CENTRAL_EXECUTION_ROLE),
+        ("taskRoleArn", CENTRAL_TASK_ROLE.replace("123456789012", "999999999999")),
+        ("taskRoleArn", CENTRAL_TASK_ROLE.replace("-dev-", "-prod-")),
+        ("taskRoleArn", CENTRAL_TASK_ROLE.replace(":role/", ":role/foreign/")),
+    ],
+)
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_managed_roles_fail_before_aws_resources(field, value, dry_run):
+    """Managed dry-run does not waive missing or foreign centrally owned roles."""
+    config = {
+        "deploymentMode": "managed",
+        "accessLogsBucketName": "synthetic-logs",
+        "executionRoleArn": CENTRAL_EXECUTION_ROLE,
+        "taskRoleArn": CENTRAL_TASK_ROLE,
+        field: value,
+    }
+    recorder = RecordingMocks()
+
+    def program():
+        with pytest.raises(ValueError, match="central role contract"):
+            UserServiceStack("invalid-roles")
+
+    with (
+        mocked_pulumi_context(
+            config, aws_config_values={"allowedAccountIds": ["123456789012"]}
+        ),
+        patch("app.environment.pulumi.runtime.is_dry_run", return_value=dry_run),
+    ):
+        _run_pulumi_program(program, test_mocks=recorder)
+    assert not any(str(row["type"]).startswith("aws:") for row in recorder.resources)
+
+
+@pytest.mark.parametrize(
+    "accounts",
+    [None, [], ["123456789012", "999999999999"], [5], ["bad"], "123456789012"],
+)
+def test_managed_runtime_roles_require_protected_account(accounts):
+    """An ARN cannot supply or override the account missing from protected config."""
+    runtime = SimpleNamespace(
+        execution_role_arn=CENTRAL_EXECUTION_ROLE, task_role_arn=CENTRAL_TASK_ROLE
+    )
+    with mocked_pulumi_context(aws_config_values={"allowedAccountIds": accounts}):
+        with pytest.raises(ValueError, match="one protected AWS account"):
+            validate_runtime_roles(runtime, "dev")
+
+
+def test_direct_managed_compute_rejects_roles_before_component_registration():
+    """Direct callers cannot register a compute component before role validation."""
+    runtime = SimpleNamespace(execution_role_arn=None, task_role_arn=None)
+    config = SimpleNamespace(is_managed=True, runtime=runtime, environment="dev")
+    with (
+        mocked_pulumi_context(
+            aws_config_values={"allowedAccountIds": ["123456789012"]}
+        ),
+        patch("app.compute.pulumi.ComponentResource.__init__") as registration,
+        pytest.raises(ValueError, match="central role contract"),
+    ):
+        try:
+            ComputePlane(
+                "compute",
+                settings=config,
+                network=Mock(),
+                data=Mock(),
+                messaging=Mock(),
+            )
+        finally:
+            registration.assert_not_called()

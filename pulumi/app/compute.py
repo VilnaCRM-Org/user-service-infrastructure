@@ -250,7 +250,7 @@ class ComputePlane(pulumi.ComponentResource):
             desired_count=settings.capacity.web_desired_count,
             launch_type="FARGATE",
             platform_version="LATEST",
-            enable_execute_command=True,
+            enable_execute_command=False,
             enable_ecs_managed_tags=True,
             propagate_tags="SERVICE",
             health_check_grace_period_seconds=180,
@@ -282,7 +282,7 @@ class ComputePlane(pulumi.ComponentResource):
             desired_count=settings.capacity.worker_desired_count,
             launch_type="FARGATE",
             platform_version="LATEST",
-            enable_execute_command=True,
+            enable_execute_command=False,
             enable_ecs_managed_tags=True,
             propagate_tags="SERVICE",
             deployment_circuit_breaker=aws.ecs.ServiceDeploymentCircuitBreakerArgs(

@@ -1170,6 +1170,19 @@ def test_managed_stack_uses_preview_credential_skips_and_scoped_data_egress() ->
     ]
     assert redis_security_group["inputs"]["egress"][0]["cidrBlocks"] == ["10.42.0.0/16"]
 
+    services = [
+        resource
+        for resource in recording_mocks.resources
+        if resource["type"].endswith("service:Service")
+    ]
+    assert {service["name"] for service in services} == {
+        "user-service-web-service",
+        "user-service-worker-service",
+    }
+    assert all(
+        service["inputs"]["enableExecuteCommand"] is False for service in services
+    )
+
 
 def test_managed_stack_requires_at_least_one_documentdb_instance() -> None:
     """Reject a managed DocumentDB cluster that would expose no instances."""

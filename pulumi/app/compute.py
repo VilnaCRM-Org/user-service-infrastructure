@@ -13,6 +13,7 @@ from app.data import DataPlane
 from app.environment import StackSettings, build_resource_name
 from app.messaging import MessagingPlane
 from app.network import NetworkPlane
+from app.registry import RegistryOutputs
 
 __all__ = ["ComputePlane"]
 
@@ -31,7 +32,7 @@ class ComputeOutputs:
 
 
 class ComputePlane(pulumi.ComponentResource):
-    """Provision ECS/Fargate, ALB, ECR, and application runtime secrets."""
+    """Provision ECS/Fargate, ALB and runtime secrets using caller-owned registries."""
 
     outputs: ComputeOutputs
 
@@ -43,13 +44,14 @@ class ComputePlane(pulumi.ComponentResource):
         network: NetworkPlane,
         data: DataPlane,
         messaging: MessagingPlane,
+        registries: RegistryOutputs | None = None,
         opts: Optional[pulumi.ResourceOptions] = None,
     ) -> None:
         """Build preview-safe outputs or provision the managed compute plane."""
         super().__init__("user-service-infrastructure:compute:Plane", name, None, opts)
 
         self.outputs = (
-            self._build_managed_outputs(settings, network, data, messaging)
+            self._build_managed_outputs(settings, network, data, messaging, registries)
             if settings.is_managed
             else self._build_preview_outputs(settings)
         )
@@ -97,17 +99,18 @@ class ComputePlane(pulumi.ComponentResource):
         network: NetworkPlane,
         data: DataPlane,
         messaging: MessagingPlane,
+        registries: RegistryOutputs | None,
     ) -> ComputeOutputs:
         """Provision the managed compute plane."""
-        web_repository = self._create_repository(
+        if registries is None:
+            raise ValueError("Managed compute requires caller-owned registry outputs")
+        self._create_repository_lifecycle(
             logical_name="web-repository",
-            repository_name=settings.images.web_repository_name,
-            image_tag_mutability=settings.images.image_tag_mutability,
+            repository_name=registries.web.name,
         )
-        worker_repository = self._create_repository(
+        self._create_repository_lifecycle(
             logical_name="worker-repository",
-            repository_name=settings.images.worker_repository_name,
-            image_tag_mutability=settings.images.image_tag_mutability,
+            repository_name=registries.worker.name,
         )
 
         cluster = aws.ecs.Cluster(
@@ -147,12 +150,12 @@ class ComputePlane(pulumi.ComponentResource):
         task_role = self._create_task_role(messaging)
 
         web_image = self._resolve_image_uri(
-            repository_url=web_repository.repository_url,
+            repository_url=registries.web.uri,
             image_tag=settings.images.web_image_tag,
             override=settings.images.web_image_override,
         )
         worker_image = self._resolve_image_uri(
-            repository_url=worker_repository.repository_url,
+            repository_url=registries.worker.uri,
             image_tag=settings.images.worker_image_tag,
             override=settings.images.worker_image_override,
         )
@@ -301,33 +304,22 @@ class ComputePlane(pulumi.ComponentResource):
             cluster_name=cluster.name,
             load_balancer_dns_name=load_balancer.dns_name,
             service_url=pulumi.Output.from_input(settings.runtime.api_base_url),
-            web_repository_url=web_repository.repository_url,
-            worker_repository_url=worker_repository.repository_url,
+            web_repository_url=registries.web.uri,
+            worker_repository_url=registries.worker.uri,
             web_service_name=web_service.name,
             worker_service_name=worker_service.name,
         )
 
-    def _create_repository(
+    def _create_repository_lifecycle(
         self,
         *,
         logical_name: str,
-        repository_name: str,
-        image_tag_mutability: str,
-    ) -> aws.ecr.Repository:
-        """Create an image-scanning ECR repository plus a lifecycle policy."""
-        repository = aws.ecr.Repository(
-            f"user-service-{logical_name}",
-            name=repository_name,
-            image_tag_mutability=image_tag_mutability,
-            image_scanning_configuration=aws.ecr.RepositoryImageScanningConfigurationArgs(
-                scan_on_push=True,
-            ),
-            force_delete=False,
-            opts=pulumi.ResourceOptions(parent=self),
-        )
+        repository_name: pulumi.Input[str],
+    ) -> None:
+        """Retain existing image lifecycle policy without owning the repository."""
         aws.ecr.LifecyclePolicy(
             f"user-service-{logical_name}-lifecycle",
-            repository=repository.name,
+            repository=repository_name,
             policy=json.dumps(
                 {
                     "rules": [
@@ -346,7 +338,6 @@ class ComputePlane(pulumi.ComponentResource):
             ),
             opts=pulumi.ResourceOptions(parent=self),
         )
-        return repository
 
     def _create_execution_role(
         self,

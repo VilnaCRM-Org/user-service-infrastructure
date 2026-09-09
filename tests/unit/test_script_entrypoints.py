@@ -54,7 +54,7 @@ def test_script_support_helpers_cover_local_script_utilities(
     assert module.repo_root("/tmp/repo/scripts/tool.py") == Path("/tmp/repo")
     assert module.split_values(None) == []
     assert module.split_values('dev, "qa env"') == ["dev", "qa env"]
-    assert module.discover_stacks(pulumi_dir, None) == ["dev", "example"]
+    assert module.discover_stacks(pulumi_dir, None) == ["dev"]
     assert module.discover_stacks(pulumi_dir, "prod staging") == ["prod", "staging"]
     assert env["PULUMI_CONFIG_PASSPHRASE"] == ""
     assert preset_env["PULUMI_CONFIG_PASSPHRASE"] == "already-set"

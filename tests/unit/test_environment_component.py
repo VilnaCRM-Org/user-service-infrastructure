@@ -1,6 +1,7 @@
 """Unit tests for the user-service Pulumi configuration and stack components."""
 
 import asyncio
+import json
 import re
 import runpy
 import sys
@@ -199,6 +200,7 @@ def _run_pulumi_program(
     program: Callable[[], None],
     *,
     test_mocks: mocks.Mocks | None = None,
+    captured_urns: list[str] | None = None,
 ) -> None:
     """Execute a Pulumi program with mocks."""
     loop = asyncio.new_event_loop()
@@ -214,6 +216,8 @@ def _run_pulumi_program(
         )
         loop.run_until_complete(stack.run_pulumi_func(program))
         loop.run_until_complete(asyncio.sleep(0))
+        if captured_urns is not None:
+            captured_urns.extend(sorted(monitor.resources))
         for assertion in _PENDING_OUTPUT_ASSERTIONS:
             assertion()
     finally:
@@ -318,6 +322,9 @@ def test_default_tags_use_service_and_environment() -> None:
                 "Environment": "production",
                 "Owner": "platform",
                 "CostCenter": "engineering",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
 
@@ -344,6 +351,9 @@ def test_environment_falls_back_to_config_value() -> None:
                 "Environment": "qa",
                 "Owner": "platform",
                 "CostCenter": "engineering",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
 
@@ -355,6 +365,9 @@ def test_environment_falls_back_to_config_value() -> None:
         call("serviceName"),
         call("owner"),
         call("costCenter"),
+        call("dataClassification"),
+        call("criticality"),
+        call("retentionClass"),
     ]
 
 
@@ -378,6 +391,9 @@ def test_environment_defaults_to_dev_when_unset() -> None:
                 "Environment": "dev",
                 "Owner": "platform",
                 "CostCenter": "engineering",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
 
@@ -403,6 +419,9 @@ def test_service_name_falls_back_to_config_value() -> None:
                 "Environment": "qa",
                 "Owner": "platform",
                 "CostCenter": "engineering",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
 
@@ -428,6 +447,9 @@ def test_service_name_defaults_to_project_name() -> None:
                 "Environment": "qa",
                 "Owner": "platform",
                 "CostCenter": "engineering",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
 
@@ -449,6 +471,9 @@ def test_default_tags_allow_owner_and_cost_center_overrides() -> None:
                 "Environment": "qa",
                 "Owner": "team-platform",
                 "CostCenter": "cost-123",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
 
@@ -470,6 +495,9 @@ def test_default_tags_trim_owner_and_cost_center_config_values() -> None:
                 "Environment": "qa",
                 "Owner": "team-platform",
                 "CostCenter": "cost-123",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
 
@@ -493,6 +521,9 @@ def test_default_tags_fall_back_when_owner_and_cost_center_are_blank() -> None:
                 "Environment": "qa",
                 "Owner": "platform",
                 "CostCenter": "engineering",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
 
@@ -520,6 +551,9 @@ def test_default_tags_allow_explicit_owner_and_cost_center_overrides() -> None:
                 "Environment": "qa",
                 "Owner": "payments",
                 "CostCenter": "finops",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
 
@@ -546,6 +580,9 @@ def test_default_tags_trim_explicit_owner_and_cost_center_overrides() -> None:
                 "Environment": "qa",
                 "Owner": "payments",
                 "CostCenter": "finops",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
 
@@ -559,19 +596,30 @@ def test_resolve_config_value_preserves_explicit_configured_and_default_paths() 
     assert resolve_config_value(None, None, default="dev") == "dev"
 
 
-def test_stack_metadata_helpers_keep_the_four_field_layout() -> None:
+def test_stack_metadata_helpers_keep_the_seven_field_layout() -> None:
     """Map service, environment, owner, and cost center without index drift."""
     metadata = _stack_metadata_from_outputs(
-        ["billing", "qa", "team-platform", "cost-123"]
+        ["billing", "qa", "team-platform", "cost-123", "internal", "high", "standard"]
     )
 
-    assert metadata == ("billing", "qa", "team-platform", "cost-123")
+    assert metadata == (
+        "billing",
+        "qa",
+        "team-platform",
+        "cost-123",
+        "internal",
+        "high",
+        "standard",
+    )
     assert _stack_tag_from_parts(metadata) == "billing-qa"
     assert _default_tags_from_parts(metadata) == {
         "Project": "billing",
         "Environment": "qa",
         "Owner": "team-platform",
         "CostCenter": "cost-123",
+        "DataClassification": "internal",
+        "Criticality": "high",
+        "RetentionClass": "standard",
     }
 
 
@@ -881,6 +929,9 @@ def test_main_exports_expected_outputs() -> None:
                 "Environment": "dev",
                 "Owner": "platform",
                 "CostCenter": "engineering",
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
             },
         )
         _assert_output_value(
@@ -1351,3 +1402,164 @@ def test_user_service_stack_managed_mode_supports_https_and_image_overrides() ->
         aws_config_values={"region": "eu-central-1"},
     ):
         _run_pulumi_program(program)
+
+
+@pytest.mark.parametrize(
+    "configured,expected",
+    [
+        (
+            {
+                "dataClassification": " confidential ",
+                "criticality": " critical ",
+                "retentionClass": " regulated ",
+            },
+            {
+                "DataClassification": "confidential",
+                "Criticality": "critical",
+                "RetentionClass": "regulated",
+            },
+        ),
+        (
+            {"dataClassification": " ", "criticality": "", "retentionClass": " "},
+            {
+                "DataClassification": "internal",
+                "Criticality": "high",
+                "RetentionClass": "standard",
+            },
+        ),
+    ],
+)
+def test_required_tag_classifications_follow_config(configured, expected):
+    """Resolve all mandatory labels before exporting resource default tags."""
+
+    def program():
+        component = EnvironmentSettings(
+            "required-tags", environment="test", service_name="billing"
+        )
+        _assert_output_value(
+            component.default_tags,
+            {
+                "Project": "billing",
+                "Environment": "test",
+                "Owner": "platform",
+                "CostCenter": "engineering",
+                **expected,
+            },
+        )
+
+    with mocked_pulumi_context(configured):
+        _run_pulumi_program(program)
+
+
+def test_registry_full_stack_owner_and_images() -> None:
+    """Full compute consumes the sole registry owner's actual ECR URLs."""
+    from app.registry import RegistryPlane
+
+    config = {
+        "deploymentMode": "managed",
+        "serviceName": "user-service",
+        "accessLogsBucketName": "synthetic-access-logs",
+        "documentDbPassword": "synthetic",
+        "redisAuthToken": "synthetic",
+        "appSecret": "synthetic",
+        "mailerDsn": "smtp://mail.example.com:587",
+        "oauthEncryptionKey": "synthetic",
+        "oauthPassphrase": "synthetic",
+        "twoFactorEncryptionKey": "synthetic",
+        "oauthPrivateKeyPem": "synthetic",
+        "oauthPublicKeyPem": "synthetic",
+        "webRepositoryName": "synthetic-web",
+        "workerRepositoryName": "synthetic-worker",
+        "webImageTag": "release-web",
+        "workerImageTag": "release-worker",
+    }
+    recorder = RecordingMocks()
+    full_urns: list[str] = []
+
+    def full_program() -> None:
+        UserServiceStack("user-service")
+
+    with mocked_pulumi_context(config, aws_config_values={"region": "eu-central-1"}):
+        _run_pulumi_program(full_program, test_mocks=recorder, captured_urns=full_urns)
+
+    repositories = [
+        resource
+        for resource in recorder.resources
+        if resource["type"] == "aws:ecr/repository:Repository"
+    ]
+    assert len(repositories) == 2
+    assert all(
+        resource["inputs"]["imageTagMutability"] == "IMMUTABLE"
+        for resource in repositories
+    )
+    tasks = [
+        resource
+        for resource in recorder.resources
+        if resource["type"] == "aws:ecs/taskDefinition:TaskDefinition"
+    ]
+    images = {
+        json.loads(resource["inputs"]["containerDefinitions"])[0]["image"]
+        for resource in tasks
+    }
+    assert images == {
+        "123456789012.dkr.ecr.eu-central-1.amazonaws.com/synthetic-web:release-web",
+        "123456789012.dkr.ecr.eu-central-1.amazonaws.com/synthetic-worker:release-worker",
+    }
+    lifecycle = [
+        resource
+        for resource in recorder.resources
+        if resource["type"] == "aws:ecr/lifecyclePolicy:LifecyclePolicy"
+    ]
+    assert {resource["inputs"]["repository"] for resource in lifecycle} == {
+        "synthetic-web",
+        "synthetic-worker",
+    }
+    registry_urns: list[str] = []
+
+    def registry_program() -> None:
+        owner = pulumi.ComponentResource(
+            "user-service-infrastructure:stack:UserService", "user-service"
+        )
+        RegistryPlane(
+            "registries",
+            registries={
+                "web": {
+                    "logical_name": "user-service-web-repository",
+                    "name": "synthetic-web",
+                },
+                "worker": {
+                    "logical_name": "user-service-worker-repository",
+                    "name": "synthetic-worker",
+                },
+            },
+            opts=pulumi.ResourceOptions(parent=owner),
+        )
+
+    _run_pulumi_program(registry_program, captured_urns=registry_urns)
+    selector = "$aws:ecr/repository:Repository::"
+    assert [urn for urn in full_urns if selector in urn] == [
+        urn for urn in registry_urns if selector in urn
+    ]
+    assert all(":registry:Plane$" in urn for urn in full_urns if selector in urn)
+
+
+def test_registry_preview_has_no_aws_resources() -> None:
+    """The legacy preview projection does not instantiate a registry owner."""
+    recorder = RecordingMocks()
+
+    def program() -> None:
+        selected = UserServiceStack("preview-stack")
+        assert selected.registries is None
+
+    with mocked_pulumi_context({"deploymentMode": "preview"}):
+        _run_pulumi_program(program, test_mocks=recorder)
+    assert not any(
+        resource["type"].startswith("aws:") for resource in recorder.resources
+    )
+
+
+def test_managed_compute_needs_registries() -> None:
+    """Missing caller registry references cannot fall back to creating ECR."""
+    plane = object.__new__(ComputePlane)
+    with pytest.raises(ValueError, match="caller-owned registry outputs"):
+        plane._build_managed_outputs(None, None, None, None, None)

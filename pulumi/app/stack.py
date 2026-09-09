@@ -17,6 +17,7 @@ from app.environment import (
 )
 from app.messaging import MessagingPlane
 from app.network import NetworkPlane
+from app.registry import RegistryPlane
 
 __all__ = ["UserServiceStack"]
 
@@ -30,6 +31,7 @@ class UserServiceStack(pulumi.ComponentResource):
     data: DataPlane
     messaging: MessagingPlane
     compute: ComputePlane
+    registries: RegistryPlane | None
 
     def __init__(
         self,
@@ -55,6 +57,28 @@ class UserServiceStack(pulumi.ComponentResource):
             else pulumi.ResourceOptions(parent=self)
         )
 
+        # This legacy config projection is not shared-contract admission. The
+        # future phase dispatcher must authenticate its contract and prior state.
+        # Keep this owner/parent identical in registry and workload phases.
+        self.registries = (
+            RegistryPlane(
+                "registries",
+                registries={
+                    "web": {
+                        "logical_name": "user-service-web-repository",
+                        "name": self.settings.images.web_repository_name,
+                    },
+                    "worker": {
+                        "logical_name": "user-service-worker-repository",
+                        "name": self.settings.images.worker_repository_name,
+                    },
+                },
+                opts=component_opts,
+            )
+            if self.settings.is_managed
+            else None
+        )
+
         self.network = NetworkPlane(
             "network", settings=self.settings, opts=component_opts
         )
@@ -75,6 +99,7 @@ class UserServiceStack(pulumi.ComponentResource):
             network=self.network,
             data=self.data,
             messaging=self.messaging,
+            registries=self.registries.outputs if self.registries is not None else None,
             opts=component_opts,
         )
 

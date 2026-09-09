@@ -1,0 +1,51 @@
+{
+  "schema_version": "poc-test-v1",
+  "status": "proposed-not-installed",
+  "environment": "test",
+  "account_id": "891377212104",
+  "region": "eu-central-1",
+  "prerequisites": [
+    "independent-seed-and-boundary-enrollment-pending",
+    "runtime-secret-guard-amendment-pending",
+    "actual-service-main-controller-trust-installation-pending",
+    "application-runtime-repair-and-live-acceptance-pending"
+  ],
+  "backend": {
+    "project": "user-service-infrastructure",
+    "stack": "test",
+    "url": "s3://pulumi-user-service-infrastructure-test-state",
+    "secrets_provider": "awskms://alias/pulumi-user-service-infrastructure-test-secrets?region=eu-central-1",
+    "owner": "central-governance"
+  },
+  "source": {
+    "repository": "VilnaCRM-Org/user-service-infrastructure",
+    "repository_id": 911736693,
+    "owner_id": 114362548
+  },
+  "phase": "registry",
+  "registries": {
+    "web": {
+      "owner": "service",
+      "logical_name": "synthetic-web",
+      "name": "synthetic-poc-web",
+      "arn": "arn:aws:ecr:eu-central-1:891377212104:repository/synthetic-poc-web",
+      "uri": "891377212104.dkr.ecr.eu-central-1.amazonaws.com/synthetic-poc-web"
+    },
+    "worker": {
+      "owner": "service",
+      "logical_name": "synthetic-worker",
+      "name": "synthetic-poc-worker",
+      "arn": "arn:aws:ecr:eu-central-1:891377212104:repository/synthetic-poc-worker",
+      "uri": "891377212104.dkr.ecr.eu-central-1.amazonaws.com/synthetic-poc-worker"
+    }
+  },
+  "central": {
+    "owner": "central-governance",
+    "inventory_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "seed_enrollment_revision": "4444444444444444444444444444444444444444444444444444444444444444",
+    "publisher_role_arn": "arn:aws:iam::891377212104:role/SyntheticPocPublisher",
+    "publisher_workflow_path": ".github/workflows/synthetic-publish.yml",
+    "publisher_environment": "synthetic-poc-publish",
+    "publisher_claim_kind": "ordinary-workflow-protected-environment"
+  }
+}

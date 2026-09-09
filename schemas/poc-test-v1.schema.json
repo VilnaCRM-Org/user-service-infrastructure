@@ -1,0 +1,803 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:vilnacrm:poc-test-contract:v1",
+  "title": "Proposed TEST PoC ownership and release contract",
+  "description": "Local shape constraints only; no approval, installation, receipt or runtime authenticity is established. Unknown owner inputs must be supplied before workload validation.",
+  "$defs": {
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reviewer",
+        "source_sha",
+        "reference"
+      ],
+      "properties": {
+        "reviewer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*$"
+        },
+        "source_sha": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "reference": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^https://github\\.com/VilnaCRM-Org/[A-Za-z0-9_.-]+/(?:issues|pull)/[1-9][0-9]*(?:#[A-Za-z0-9_-]+)?$"
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "archive_sha256",
+        "file_sha256"
+      ],
+      "properties": {
+        "artifact_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "archive_sha256": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "file_sha256": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner",
+        "logical_name",
+        "name",
+        "arn",
+        "uri"
+      ],
+      "properties": {
+        "owner": {
+          "const": "service"
+        },
+        "logical_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[a-z0-9]+(?:[._/-][a-z0-9]+)*$"
+        },
+        "arn": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^arn:aws:ecr:eu-central-1:891377212104:repository/[a-z0-9._/-]+$"
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^891377212104\\.dkr\\.ecr\\.eu-central-1\\.amazonaws\\.com/[a-z0-9._/-]+$"
+        }
+      }
+    },
+    "secret": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kms_key_arn",
+        "owner"
+      ],
+      "properties": {
+        "kms_key_arn": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^arn:aws:kms:eu-central-1:891377212104:key/[0-9a-f-]{36}$"
+        },
+        "owner": {
+          "const": "service-generated"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 512,
+          "pattern": "^/user-service-infrastructure/runtime/test/[A-Za-z0-9/_+=.@-]+$"
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository_uri",
+        "digest",
+        "target"
+      ],
+      "properties": {
+        "repository_uri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "digest": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "target": {
+          "enum": [
+            "frankenphp_prod",
+            "app_workers"
+          ]
+        }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "environment",
+    "account_id",
+    "region",
+    "backend",
+    "source",
+    "prerequisites",
+    "registries",
+    "phase"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "poc-test-v1"
+    },
+    "status": {
+      "const": "proposed-not-installed"
+    },
+    "environment": {
+      "const": "test"
+    },
+    "account_id": {
+      "const": "891377212104"
+    },
+    "region": {
+      "const": "eu-central-1"
+    },
+    "backend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "stack",
+        "url",
+        "secrets_provider",
+        "owner"
+      ],
+      "properties": {
+        "project": {
+          "const": "user-service-infrastructure"
+        },
+        "stack": {
+          "const": "test"
+        },
+        "url": {
+          "const": "s3://pulumi-user-service-infrastructure-test-state"
+        },
+        "secrets_provider": {
+          "const": "awskms://alias/pulumi-user-service-infrastructure-test-secrets?region=eu-central-1"
+        },
+        "owner": {
+          "const": "central-governance"
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "repository_id",
+        "owner_id"
+      ],
+      "properties": {
+        "repository": {
+          "const": "VilnaCRM-Org/user-service-infrastructure"
+        },
+        "repository_id": {
+          "const": 911736693
+        },
+        "owner_id": {
+          "const": 114362548
+        }
+      }
+    },
+    "prerequisites": {
+      "const": [
+        "independent-seed-and-boundary-enrollment-pending",
+        "runtime-secret-guard-amendment-pending",
+        "actual-service-main-controller-trust-installation-pending",
+        "application-runtime-repair-and-live-acceptance-pending"
+      ]
+    },
+    "registries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "web",
+        "worker"
+      ],
+      "properties": {
+        "web": {
+          "$ref": "#/$defs/registry"
+        },
+        "worker": {
+          "$ref": "#/$defs/registry"
+        }
+      }
+    },
+    "phase": {
+      "enum": [
+        "registry",
+        "workload"
+      ]
+    },
+    "central": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner",
+        "inventory_sha256",
+        "seed_enrollment_revision",
+        "publisher_role_arn",
+        "publisher_workflow_path",
+        "publisher_environment",
+        "publisher_claim_kind"
+      ],
+      "properties": {
+        "owner": {
+          "const": "central-governance"
+        },
+        "inventory_sha256": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "seed_enrollment_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "publisher_role_arn": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^arn:aws:iam::891377212104:role/[A-Za-z0-9_+=,.@/-]+$"
+        },
+        "publisher_workflow_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^\\.github/workflows/[A-Za-z0-9_-]+\\.yml$"
+        },
+        "publisher_environment": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "publisher_claim_kind": {
+          "const": "ordinary-workflow-protected-environment"
+        }
+      }
+    },
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "central",
+        "release",
+        "external",
+        "secret_lifecycle",
+        "service_components",
+        "runtime"
+      ],
+      "properties": {
+        "central": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "owner",
+            "inventory_sha256",
+            "seed_enrollment_revision",
+            "publisher_role_arn",
+            "publisher_workflow_path",
+            "publisher_environment",
+            "publisher_claim_kind",
+            "execution_role_arn",
+            "task_role_arn"
+          ],
+          "properties": {
+            "owner": {
+              "const": "central-governance"
+            },
+            "inventory_sha256": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "seed_enrollment_revision": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "publisher_role_arn": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^arn:aws:iam::891377212104:role/[A-Za-z0-9_+=,.@/-]+$"
+            },
+            "publisher_workflow_path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^\\.github/workflows/[A-Za-z0-9_-]+\\.yml$"
+            },
+            "publisher_environment": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[a-z][a-z0-9-]*$"
+            },
+            "publisher_claim_kind": {
+              "const": "ordinary-workflow-protected-environment"
+            },
+            "execution_role_arn": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^arn:aws:iam::891377212104:role/[A-Za-z0-9_+=,.@/-]+$"
+            },
+            "task_role_arn": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^arn:aws:iam::891377212104:role/[A-Za-z0-9_+=,.@/-]+$"
+            }
+          }
+        },
+        "release": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schema_version",
+            "repository",
+            "repository_id",
+            "owner_id",
+            "source_sha",
+            "publisher_run_id",
+            "publisher_run_attempt",
+            "workflow_ref",
+            "platform",
+            "runtime_contract_version",
+            "provenance",
+            "quality_evidence",
+            "web",
+            "worker"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": "poc-release-v1"
+            },
+            "repository": {
+              "const": "VilnaCRM-Org/user-service"
+            },
+            "repository_id": {
+              "const": 646535009
+            },
+            "owner_id": {
+              "const": 114362548
+            },
+            "source_sha": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "publisher_run_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "publisher_run_attempt": {
+              "const": 1
+            },
+            "workflow_ref": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^VilnaCRM-Org/user-service/\\.github/workflows/[A-Za-z0-9_-]+\\.yml@refs/heads/main$"
+            },
+            "platform": {
+              "enum": [
+                "linux/amd64",
+                "linux/arm64"
+              ]
+            },
+            "runtime_contract_version": {
+              "const": "poc-test-v1"
+            },
+            "provenance": {
+              "$ref": "#/$defs/artifact"
+            },
+            "quality_evidence": {
+              "$ref": "#/$defs/artifact"
+            },
+            "web": {
+              "$ref": "#/$defs/image"
+            },
+            "worker": {
+              "$ref": "#/$defs/image"
+            }
+          }
+        },
+        "external": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "domain",
+            "mail",
+            "responder"
+          ],
+          "properties": {
+            "domain": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "fqdn",
+                "dns_authority",
+                "certificate_arn",
+                "review",
+                "account_id",
+                "hosted_zone_id"
+              ],
+              "properties": {
+                "fqdn": {
+                  "const": "user.vilnacrmtest.com"
+                },
+                "dns_authority": {
+                  "const": "aws-route53"
+                },
+                "certificate_arn": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512,
+                  "pattern": "^arn:aws:acm:eu-central-1:891377212104:certificate/[0-9a-f-]{36}$"
+                },
+                "review": {
+                  "$ref": "#/$defs/review"
+                },
+                "account_id": {
+                  "const": "891377212104"
+                },
+                "hosted_zone_id": {
+                  "const": "Z04999481RZ4UQK2NANVH"
+                }
+              }
+            },
+            "mail": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "transport",
+                "authentication",
+                "account_id",
+                "region",
+                "identity_arn",
+                "sender",
+                "recipients",
+                "action",
+                "required_iam_conditions",
+                "review"
+              ],
+              "properties": {
+                "transport": {
+                  "const": "ses-v2-api"
+                },
+                "authentication": {
+                  "const": "ecs-task-role"
+                },
+                "account_id": {
+                  "const": "891377212104"
+                },
+                "region": {
+                  "const": "eu-central-1"
+                },
+                "identity_arn": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "pattern": "^arn:aws:ses:eu-central-1:891377212104:identity/[A-Za-z0-9@._+\\-]+$"
+                },
+                "sender": {
+                  "type": "string",
+                  "minLength": 3,
+                  "maxLength": 254,
+                  "pattern": "^[A-Za-z0-9._+\\-]+@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,63}$"
+                },
+                "recipients": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 10,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 254,
+                    "pattern": "^[A-Za-z0-9._+\\-]+@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,63}$"
+                  }
+                },
+                "action": {
+                  "const": "ses:SendEmail"
+                },
+                "required_iam_conditions": {
+                  "const": [
+                    "ses:FromAddress",
+                    "ses:Recipients"
+                  ]
+                },
+                "review": {
+                  "$ref": "#/$defs/review"
+                }
+              }
+            },
+            "responder": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "identity",
+                "channel_reference",
+                "review"
+              ],
+              "properties": {
+                "identity": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "channel_reference": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "review": {
+                  "$ref": "#/$defs/review"
+                }
+              }
+            }
+          }
+        },
+        "secret_lifecycle": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "owner",
+            "namespace",
+            "generation",
+            "guard_amendment",
+            "provider_refresh_actions",
+            "review",
+            "references"
+          ],
+          "properties": {
+            "owner": {
+              "const": "service"
+            },
+            "namespace": {
+              "const": "/user-service-infrastructure/runtime/test/"
+            },
+            "generation": {
+              "const": "generate-once-persist-explicit-rotation"
+            },
+            "guard_amendment": {
+              "const": "pending-independent-reviewed-amendment"
+            },
+            "provider_refresh_actions": {
+              "const": [
+                "secretsmanager:GetSecretValue"
+              ]
+            },
+            "review": {
+              "$ref": "#/$defs/review"
+            },
+            "references": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "document_db_password",
+                "redis_auth_token",
+                "app_secret",
+                "oauth_encryption_key",
+                "oauth_passphrase",
+                "two_factor_encryption_key",
+                "oauth_private_key",
+                "oauth_public_key",
+                "document_db_url",
+                "redis_url"
+              ],
+              "properties": {
+                "document_db_password": {
+                  "$ref": "#/$defs/secret"
+                },
+                "redis_auth_token": {
+                  "$ref": "#/$defs/secret"
+                },
+                "app_secret": {
+                  "$ref": "#/$defs/secret"
+                },
+                "oauth_encryption_key": {
+                  "$ref": "#/$defs/secret"
+                },
+                "oauth_passphrase": {
+                  "$ref": "#/$defs/secret"
+                },
+                "two_factor_encryption_key": {
+                  "$ref": "#/$defs/secret"
+                },
+                "oauth_private_key": {
+                  "$ref": "#/$defs/secret"
+                },
+                "oauth_public_key": {
+                  "$ref": "#/$defs/secret"
+                },
+                "document_db_url": {
+                  "$ref": "#/$defs/secret"
+                },
+                "redis_url": {
+                  "$ref": "#/$defs/secret"
+                }
+              }
+            }
+          }
+        },
+        "service_components": {
+          "const": [
+            "registries",
+            "network",
+            "alb",
+            "ecs-fargate",
+            "documentdb",
+            "redis",
+            "sqs",
+            "log-groups",
+            "runtime-secrets"
+          ]
+        },
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "aws_auth",
+            "ecs_exec",
+            "queue_auto_setup",
+            "health_path",
+            "health_status",
+            "database_name",
+            "documentdb_tls",
+            "retry_writes",
+            "ca_bundle_path",
+            "worker_mode",
+            "worker_health_command",
+            "optional_social_providers"
+          ],
+          "properties": {
+            "aws_auth": {
+              "const": "task-role-default-chain"
+            },
+            "ecs_exec": {
+              "const": false
+            },
+            "queue_auto_setup": {
+              "const": false
+            },
+            "health_path": {
+              "const": "/api/health"
+            },
+            "health_status": {
+              "const": 204
+            },
+            "database_name": {
+              "const": "user_service"
+            },
+            "documentdb_tls": {
+              "const": true
+            },
+            "retry_writes": {
+              "const": false
+            },
+            "ca_bundle_path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^/[A-Za-z0-9_./-]+$"
+            },
+            "worker_mode": {
+              "const": "production-only"
+            },
+            "worker_health_command": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              }
+            },
+            "optional_social_providers": {
+              "const": {
+                "environment_variable": "SOCIAL_OAUTH_ENABLED",
+                "value": "false"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "phase": {
+          "const": "registry"
+        }
+      },
+      "required": [
+        "central"
+      ],
+      "not": {
+        "required": [
+          "workload"
+        ]
+      }
+    },
+    {
+      "properties": {
+        "phase": {
+          "const": "workload"
+        }
+      },
+      "required": [
+        "workload"
+      ],
+      "not": {
+        "required": [
+          "central"
+        ]
+      }
+    }
+  ]
+}

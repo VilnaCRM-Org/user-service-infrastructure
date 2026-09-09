@@ -72,7 +72,7 @@ def _configure_managed_stack(
 ) -> None:
     """Apply the baseline managed-stack config used by Automation API tests."""
     plain_config = {
-        "environment": "prod",
+        "environment": "integration",
         "serviceName": "user-service",
         "deploymentMode": "managed",
         "accessLogsBucketName": "shared-alb-access-logs",
@@ -141,6 +141,9 @@ def test_pulumi_stack_preview_and_up_cycle(tmp_path: Path) -> None:
             "Environment": "integration",
             "Owner": "platform",
             "CostCenter": "engineering",
+            "DataClassification": "internal",
+            "Criticality": "high",
+            "RetentionClass": "standard",
         }
         assert (
             up_result.outputs["serviceUrl"].value

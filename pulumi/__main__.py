@@ -1,8 +1,19 @@
 """Pulumi entrypoint for the user-service infrastructure stack."""
 
+import pulumi_aws as aws
 from app import UserServiceStack
 
 import pulumi
+
+config = pulumi.Config()
+stack_name = pulumi.get_stack()
+environment = config.get("environment")
+if stack_name in {"test", "prod"} or environment in {"test", "prod"}:
+    if environment != stack_name:
+        raise ValueError("Configured environment differs from selected shared stack")
+    expected_account = config.require("awsAccountId")
+    if aws.get_caller_identity().account_id != expected_account:
+        raise ValueError("AWS caller account differs from configured awsAccountId")
 
 stack = UserServiceStack("user-service")
 
@@ -22,3 +33,8 @@ pulumi.export("workerRepositoryUrl", stack.compute.outputs.worker_repository_url
 pulumi.export("queueUrls", stack.messaging.outputs.queue_urls)
 pulumi.export("documentDbEndpoint", stack.data.outputs.documentdb_endpoint)
 pulumi.export("redisEndpoint", stack.data.outputs.redis_endpoint)
+
+if environment in {"test", "prod"}:
+    pulumi.export("repoSlug", config.require("repoSlug"))
+    pulumi.export("pulumiBackendUrl", config.require("pulumiBackendUrl"))
+    pulumi.export("pulumiSecretsProvider", config.require("pulumiSecretsProvider"))

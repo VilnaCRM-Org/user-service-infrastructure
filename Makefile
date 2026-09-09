@@ -22,14 +22,15 @@ COMPOSE_ENV_FLAG  = $(if $(COMPOSE_ENV_FILE),--env-file $(COMPOSE_ENV_FILE),)
 COMPOSE           = $(DOCKER_COMPOSE) $(COMPOSE_ENV_FLAG)
 COMPOSE_GITHUB_TOKEN = $(if $(GITHUB_TOKEN),-e GITHUB_TOKEN,)
 COMPOSE_PULUMI_STACK = -e PULUMI_STACK
+# Forward temporary OIDC credentials by name only on explicit cloud commands.
+COMPOSE_AWS_SESSION = $(if $(filter true,$(GITHUB_ACTIONS)),$(if $(AWS_SESSION_TOKEN),-e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN,))
+COMPOSE_CLOUD_ENV = $(COMPOSE_GITHUB_TOKEN) $(COMPOSE_PULUMI_STACK) $(COMPOSE_AWS_SESSION)
 REPO_PYTHON      ?= python3
 PULUMI_CWD_FLAG   = --cwd $(PULUMI_DIR)
 POLICY_PACK_DIR   = /workspace/policy
 POLICY_PACK_FLAG  = --policy-pack $(POLICY_PACK_DIR)
 DEFAULT_PULUMI_STACK ?= $(shell find $(PULUMI_DIR) -maxdepth 1 -type f -name 'Pulumi.*.yaml' ! -name 'Pulumi.yaml' 2>/dev/null | sed -E 's#.*/Pulumi\.(.+)\.yaml$$#\1#' | sort | head -n 1)
 PULUMI_STACK     ?= $(DEFAULT_PULUMI_STACK)
-PULUMI_LOGIN_CMD  = export PULUMI_CONFIG_PASSPHRASE="$${PULUMI_CONFIG_PASSPHRASE-}"; \
-	pulumi $(PULUMI_CWD_FLAG) login "$${PULUMI_BACKEND_URL:-file:///workspace/.pulumi-backend}" >/dev/null
 COVERAGE_OPTS            ?= --cov=./pulumi --cov-report=term-missing
 UNIT_COVERAGE_INCLUDE    ?= pulumi/*,scripts/*
 UNIT_COVERAGE_OPTS       ?= $(COVERAGE_OPTS) --cov=./scripts
@@ -58,7 +59,7 @@ TOTAL_COVERAGE_ENV        = -e COVERAGE_FILE=/workspace/.coverage.total \
 .DEFAULT_GOAL     = help
 .RECIPEPREFIX    +=
 .PHONY: help doctor build start publish-pulumi-preview-summary pulumi-preview pulumi-up pulumi-refresh \
-        pulumi-destroy sh down ci ci-pr nightly-quality report-quality \
+        pulumi-destroy pulumi-plan pulumi-up-plan initialize-stack sh down ci ci-pr nightly-quality report-quality \
         report-maintainability-trends report-dead-code report-docstrings \
         report-sbom test-quality test-ruff test-ty test-maintainability \
         test-architecture test-dependency-hygiene test-lockfile test-coverage \
@@ -68,9 +69,9 @@ TOTAL_COVERAGE_ENV        = -e COVERAGE_FILE=/workspace/.coverage.total \
         test-repo-hygiene test-unit test-integration test-pulumi test-policy \
         test-crossguard test-mutation test-battery test-cli test all clean
 
-pulumi-preview pulumi-up pulumi-refresh pulumi-destroy test-preview \
+pulumi-preview pulumi-up pulumi-refresh pulumi-destroy pulumi-plan pulumi-up-plan initialize-stack test-preview \
 test-destructive-diff test-iam-validation test-drift: export GITHUB_TOKEN := $(GITHUB_TOKEN)
-pulumi-preview pulumi-up pulumi-refresh pulumi-destroy: export PULUMI_STACK := $(PULUMI_STACK)
+pulumi-preview pulumi-up pulumi-refresh pulumi-destroy pulumi-plan pulumi-up-plan test-drift initialize-stack: export PULUMI_STACK := $(PULUMI_STACK)
 
 all: help ## Display help (default goal).
 
@@ -91,17 +92,17 @@ start: ## Prepare the Docker-backed workspace and start the Pulumi development e
 publish-pulumi-preview-summary: ## Generate Pulumi preview artifacts and publish the summary for CI.
 	$(REPO_PYTHON) ./scripts/publish_pulumi_preview_summary.py
 
-pulumi-preview: ## Preview infrastructure changes from inside the Pulumi container.
-	@$(COMPOSE) run --rm $(COMPOSE_GITHUB_TOKEN) $(COMPOSE_PULUMI_STACK) $(COMPOSE_SERVICE) bash -lc '$(PULUMI_LOGIN_CMD); stack="$${PULUMI_STACK:-}"; if [ -z "$$stack" ]; then echo "error: set PULUMI_STACK or commit pulumi/Pulumi.<stack>.yaml" >&2; exit 1; fi; pulumi $(PULUMI_CWD_FLAG) stack select "$$stack" --create --non-interactive >/dev/null; $(REPO_PYTHON) ./scripts/prepare_policy_pack.py && pulumi $(PULUMI_CWD_FLAG) preview --stack "$$stack" $(POLICY_PACK_FLAG)'
+pulumi-preview: ## Run the guarded preview command.
+	$(COMPOSE) run --rm $(COMPOSE_CLOUD_ENV) $(COMPOSE_SERVICE) uv run --frozen python scripts/run_pulumi_command.py preview
 
-pulumi-up: ## Apply the current Pulumi infrastructure plan.
-	@$(COMPOSE) run --rm $(COMPOSE_GITHUB_TOKEN) $(COMPOSE_PULUMI_STACK) $(COMPOSE_SERVICE) bash -lc '$(PULUMI_LOGIN_CMD); stack="$${PULUMI_STACK:-}"; if [ -z "$$stack" ]; then echo "error: set PULUMI_STACK or commit pulumi/Pulumi.<stack>.yaml" >&2; exit 1; fi; pulumi $(PULUMI_CWD_FLAG) stack select "$$stack" --create --non-interactive >/dev/null; $(REPO_PYTHON) ./scripts/prepare_policy_pack.py && pulumi $(PULUMI_CWD_FLAG) up --stack "$$stack" $(POLICY_PACK_FLAG)'
+pulumi-up: ## Run the guarded up command.
+	$(COMPOSE) run --rm $(COMPOSE_CLOUD_ENV) $(COMPOSE_SERVICE) uv run --frozen python scripts/run_pulumi_command.py up
 
-pulumi-refresh: ## Sync the Pulumi stack with live cloud resources.
-	@$(COMPOSE) run --rm $(COMPOSE_GITHUB_TOKEN) $(COMPOSE_PULUMI_STACK) $(COMPOSE_SERVICE) bash -lc '$(PULUMI_LOGIN_CMD); stack="$${PULUMI_STACK:-}"; if [ -z "$$stack" ]; then echo "error: set PULUMI_STACK or commit pulumi/Pulumi.<stack>.yaml" >&2; exit 1; fi; pulumi $(PULUMI_CWD_FLAG) stack select "$$stack" --non-interactive >/dev/null; pulumi $(PULUMI_CWD_FLAG) refresh --stack "$$stack"'
+pulumi-refresh: ## Run the guarded refresh command.
+	$(COMPOSE) run --rm $(COMPOSE_CLOUD_ENV) $(COMPOSE_SERVICE) uv run --frozen python scripts/run_pulumi_command.py refresh
 
-pulumi-destroy: ## Tear down the Pulumi stack (irreversible; use with caution).
-	@$(COMPOSE) run --rm $(COMPOSE_GITHUB_TOKEN) $(COMPOSE_PULUMI_STACK) $(COMPOSE_SERVICE) bash -lc '$(PULUMI_LOGIN_CMD); stack="$${PULUMI_STACK:-}"; if [ -z "$$stack" ]; then echo "error: set PULUMI_STACK or commit pulumi/Pulumi.<stack>.yaml" >&2; exit 1; fi; pulumi $(PULUMI_CWD_FLAG) stack select "$$stack" --non-interactive >/dev/null; pulumi $(PULUMI_CWD_FLAG) destroy --stack "$$stack"'
+pulumi-destroy: ## Run the guarded destroy command.
+	$(COMPOSE) run --rm $(COMPOSE_CLOUD_ENV) $(COMPOSE_SERVICE) uv run --frozen python scripts/run_pulumi_command.py destroy
 
 sh: ## Open a shell inside the Pulumi container.
 	$(COMPOSE) run --rm $(COMPOSE_SERVICE) sh
@@ -149,7 +150,7 @@ test-ruff: ## Run Ruff lint and format checks against Python sources.
 # conflicting-declarations are false positives there, not blanket suppressions.
 test-ty: ## Run the Ty static type checker against Python sources.
 	$(COMPOSE) run --rm $(COMPOSE_SERVICE) uv run ty check \
-		--extra-search-path policy \
+		--extra-search-path policy --extra-search-path scripts \
 		--ignore missing-argument \
 		--ignore invalid-argument-type \
 		--ignore conflicting-declarations \
@@ -200,23 +201,25 @@ test-deps-security: ## Audit Python dependencies for known vulnerabilities.
 
 test-preview: ## Generate non-destructive Pulumi previews for configured stacks.
 	@$(COMPOSE) run --rm $(COMPOSE_GITHUB_TOKEN) $(COMPOSE_SERVICE) \
-		$(REPO_PYTHON) ./scripts/run_pulumi_preview.py
+		uv run --frozen python ./scripts/run_pulumi_preview.py
 
 test-destructive-diff: ## Fail when Pulumi previews delete or replace critical resources.
 	$(COMPOSE) run --rm $(COMPOSE_GITHUB_TOKEN) $(COMPOSE_SERVICE) bash -lc '\
 		event_arg=""; \
-		if [ -f .artifacts/github-event.json ]; then \
+		if [ -f .artifacts/pulumi-preview/pull-request-event.json ]; then \
+			event_arg="--event-path .artifacts/pulumi-preview/pull-request-event.json"; \
+		elif [ -f .artifacts/github-event.json ]; then \
 			event_arg="--event-path .artifacts/github-event.json"; \
 		fi; \
 		if ! compgen -G ".artifacts/pulumi-preview/*.json" >/dev/null; then \
-			$(REPO_PYTHON) ./scripts/run_pulumi_preview.py >/dev/null; \
+			uv run --frozen python ./scripts/run_pulumi_preview.py >/dev/null; \
 		fi; \
 		uv run python ./scripts/pulumi_ci_guardrails.py destructive-gate $$event_arg .artifacts/pulumi-preview/*.json'
 
 test-iam-validation: ## Validate previewed IAM policies with AWS IAM Access Analyzer.
 	$(COMPOSE) run --rm $(COMPOSE_GITHUB_TOKEN) $(COMPOSE_SERVICE) bash -lc '\
 		if ! compgen -G ".artifacts/pulumi-preview/*.json" >/dev/null; then \
-			$(REPO_PYTHON) ./scripts/run_pulumi_preview.py >/dev/null; \
+			uv run --frozen python ./scripts/run_pulumi_preview.py >/dev/null; \
 		fi; \
 		uv run python ./scripts/pulumi_ci_guardrails.py validate-iam .artifacts/pulumi-preview/*.json'
 
@@ -229,9 +232,8 @@ test-guardrails: ## Run the credential-free preview and destructive-diff guardra
 	$(MAKE) test-preview
 	$(MAKE) test-destructive-diff
 
-test-drift: ## Perform a non-destructive drift check against configured shared stacks.
-	@$(COMPOSE) run --rm $(COMPOSE_GITHUB_TOKEN) $(COMPOSE_SERVICE) \
-		$(REPO_PYTHON) ./scripts/run_pulumi_drift_check.py
+test-drift: ## Run the guarded drift command.
+	$(COMPOSE) run --rm $(COMPOSE_CLOUD_ENV) $(COMPOSE_SERVICE) uv run --frozen python scripts/run_pulumi_command.py drift
 
 test-quality: ## Run blocking Python quality, architecture, and dependency gates.
 	$(MAKE) test-ruff
@@ -323,3 +325,12 @@ clean: ## Remove Docker Compose artifacts, Python caches, and build artifacts.
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
 	rm -rf .venv policy/.venv dist build *.egg-info 2>/dev/null || true
+
+pulumi-plan: ## Save an exact reviewed-source plan against existing AWS state.
+	$(COMPOSE) run --rm $(COMPOSE_CLOUD_ENV) $(COMPOSE_SERVICE) uv run --frozen python scripts/run_pulumi_command.py plan
+
+pulumi-up-plan: ## Apply only the verified saved plan.
+	$(COMPOSE) run --rm $(COMPOSE_CLOUD_ENV) $(COMPOSE_SERVICE) uv run --frozen python scripts/run_pulumi_command.py up-plan
+
+initialize-stack: ## Initialize one missing shared stack through the trusted guard.
+	$(COMPOSE) run --rm $(COMPOSE_CLOUD_ENV) $(COMPOSE_SERVICE) uv run --frozen python scripts/initialize_service_stack.py initialize

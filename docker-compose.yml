@@ -12,12 +12,26 @@ x-pulumi-base: &pulumi-base
     - type: bind
       source: .
       target: /workspace
-  env_file:
-    - path: .env
-      required: false
   environment:
-    - PULUMI_ACCESS_TOKEN
+    - AWS_REGION
+    - AWS_DEFAULT_REGION
+    - PULUMI_STACK
     - PULUMI_BACKEND_URL
+    - AWS_ACCOUNT_ID
+    - PULUMI_SECRETS_PROVIDER
+    - PULUMI_PREVIEW_STACKS
+    - PULUMI_DRIFT_STACKS
+    - PULUMI_COMMIT_SHA
+    - PULUMI_EXPECTED_SHA
+    - PULUMI_DIR
+    - PULUMI_SKIP_UPDATE_CHECK
+    - INIT_ENVIRONMENT
+    - INIT_ACCOUNT_ID
+    - GITHUB_ACTIONS
+    - GITHUB_REPOSITORY
+    - GITHUB_REF
+    - GITHUB_EVENT_NAME
+    - GITHUB_SHA
     - PYTHONPATH=/workspace/pulumi
   tty: true
   stdin_open: true
@@ -30,6 +44,9 @@ services:
   # config or host-exported AWS_* variables inside the container.
   pulumi-aws:
     <<: *pulumi-base
+    env_file:
+      - path: .env
+        required: false
     build:
       context: .
       dockerfile: Dockerfile
@@ -47,8 +64,23 @@ services:
         target: "/home/dev/.aws"
         read_only: true
     environment:
-      - PULUMI_ACCESS_TOKEN
+      - PULUMI_STACK
       - PULUMI_BACKEND_URL
+      - AWS_ACCOUNT_ID
+      - PULUMI_SECRETS_PROVIDER
+      - PULUMI_PREVIEW_STACKS
+      - PULUMI_DRIFT_STACKS
+      - PULUMI_COMMIT_SHA
+      - PULUMI_EXPECTED_SHA
+      - PULUMI_DIR
+      - PULUMI_SKIP_UPDATE_CHECK
+      - INIT_ENVIRONMENT
+      - INIT_ACCOUNT_ID
+      - GITHUB_ACTIONS
+      - GITHUB_REPOSITORY
+      - GITHUB_REF
+      - GITHUB_EVENT_NAME
+      - GITHUB_SHA
       - AWS_ACCESS_KEY_ID
       - AWS_SECRET_ACCESS_KEY
       - AWS_SESSION_TOKEN

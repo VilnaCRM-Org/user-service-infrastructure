@@ -22,6 +22,7 @@ from app.environment import (
     resolve_deployment_mode,
 )
 from pulumi.automation.errors import RuntimeError as AutomationRuntimeError
+from pulumi.automation.events import EngineEvent
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PULUMI_WORKDIR = PROJECT_ROOT / "pulumi"
@@ -448,3 +449,64 @@ def test_invalid_stack_config_fails_preview(
             stack.workspace.remove_stack(stack.name)
         except Exception as exc:  # pragma: no cover - best-effort cleanup
             print(f"Pulumi stack removal failed: {exc}")
+
+
+@pytest.mark.parametrize(
+    "key,value,message",
+    [
+        ("aws:allowedAccountIds", None, "one protected AWS account"),
+        ("executionRoleArn", None, "central role contract"),
+        (
+            "taskRoleArn",
+            "arn:aws:iam::999999999999:role/foreign",
+            "central role contract",
+        ),
+        ("appEnv", "test", "Managed SQS health checks"),
+        ("healthCheckQueueName", "foreign-health", "Managed SQS health checks"),
+    ],
+)
+def test_managed_identity_and_health_validation_precedes_aws_registration(
+    tmp_path: Path, key: str, value: str | None, message: str
+) -> None:
+    """Real preview rejects invalid role/health inputs before any AWS resource event."""
+    work_dir = _copy_workdir(tmp_path, name="pulumi-managed-preview")
+    stack = auto.create_or_select_stack(
+        stack_name=_stack_name(),
+        work_dir=str(work_dir),
+        opts=_workspace_options(work_dir),
+    )
+    config = {
+        "environment": "integration",
+        "deploymentMode": "managed",
+        "accessLogsBucketName": "synthetic-access-logs",
+        "aws:allowedAccountIds": '["123456789012"]',
+        "executionRoleArn": (
+            "arn:aws:iam::123456789012:role/"
+            "user-service-infrastructure-integration-EcsExecution"
+        ),
+        "taskRoleArn": (
+            "arn:aws:iam::123456789012:role/"
+            "user-service-infrastructure-integration-EcsTask"
+        ),
+    }
+    if value is None:
+        config.pop(key)
+    else:
+        config[key] = value
+    events: list[EngineEvent] = []
+    try:
+        for config_key, config_value in config.items():
+            stack.set_config(config_key, auto.ConfigValue(value=config_value))
+        with pytest.raises(AutomationRuntimeError) as exc_info:
+            stack.preview(on_event=events.append)
+        assert message in str(exc_info.value), str(exc_info.value)
+        resource_types = [
+            event.resource_pre_event.metadata.type
+            for event in events
+            if event.resource_pre_event is not None
+        ]
+        assert "pulumi:pulumi:Stack" in resource_types
+        assert not any(kind.startswith("aws:") for kind in resource_types)
+        assert not any(kind == "pulumi:providers:aws" for kind in resource_types)
+    finally:
+        stack.workspace.remove_stack(stack.name)

@@ -30,7 +30,11 @@ def states():
             "parent": parent,
             "protect": False,
             "inputs": {},
-            "outputs": {},
+            "outputs": (
+                copy.deepcopy(plan._component_outputs(kind))
+                if kind in (plan.STACK, plan.ENVIRONMENT)
+                else {}
+            ),
         }
         if kind == plan.PROVIDER:
             row.update(
@@ -55,6 +59,7 @@ def states():
                     "imageTagMutability": "IMMUTABLE",
                     "forceDelete": False,
                     "imageScanningConfiguration": {"scanOnPush": True},
+                    "tags": copy.deepcopy(plan.DEFAULT_TAGS),
                 },
             )
             row["outputs"] = {
@@ -76,7 +81,10 @@ def case(prior_kind="baseline"):
         key: row
         for key, row in complete.items()
         if prior_kind == "repeat"
-        or (prior_kind == "baseline" and key in (plan.ROOT, plan.PROVIDER_URN))
+        or (
+            prior_kind == "baseline"
+            and key in (plan.ROOT, plan.PROVIDER_URN, plan.ENVIRONMENT_URN)
+        )
     }
     saved = {
         "manifest": {
@@ -416,5 +424,158 @@ def test_root_only_baseline_rejects_foreign_reference():
     root = states()[plan.ROOT]
     root["provider"] = "foreign"
     data["prior_resources"] = [root]
+    with pytest.raises(ValueError):
+        validate(data)
+
+
+def legacy_case(monkeypatch):
+    """Reconstruct public fields only; timestamps stay native, so isolate hash seam."""
+    data = case("baseline")
+    provider = next(
+        row for row in data["prior_resources"] if row["type"] == plan.PROVIDER
+    )
+    provider.update(
+        id=plan.LEGACY_PROVIDER_ID, inputs=copy.deepcopy(plan.LEGACY_PROVIDER_INPUTS)
+    )
+    provider["outputs"] = {
+        k: v for k, v in provider["inputs"].items() if k != "__internal"
+    }
+    record = data["saved_plan"]["resourcePlans"][plan.PROVIDER_URN]
+    goal = record["goal"]
+    desired = states()[plan.PROVIDER_URN]["inputs"]
+    desired_outputs = {k: v for k, v in desired.items() if k != "__internal"}
+    goal["inputDiff"] = _wire_diff(provider["inputs"], desired)
+    goal["outputDiff"] = _wire_diff(provider["outputs"], desired_outputs)
+    record["steps"] = ["update"]
+    for saved in data["saved_plan"]["resourcePlans"].values():
+        if saved["goal"].get("type") == plan.ECR:
+            saved["goal"]["provider"] = (
+                f"{plan.PROVIDER_URN}::{plan.LEGACY_PROVIDER_ID}"
+            )
+    for step in data["preview"]["steps"]:
+        if step["newState"]["type"] == plan.ECR:
+            step["provider"] = f"{plan.PROVIDER_URN}::{plan.LEGACY_PROVIDER_ID}"
+            step["newState"]["provider"] = step["provider"]
+    raw = json.dumps(
+        data["prior_resources"], sort_keys=True, separators=(",", ":")
+    ).encode()
+    monkeypatch.setattr(
+        plan, "LEGACY_RESOURCES_SHA256", hashlib.sha256(raw).hexdigest()
+    )
+    return data
+
+
+def _wire_diff(old, new):
+    return {
+        "adds": {k: v for k, v in new.items() if k not in old},
+        "updates": {k: v for k, v in new.items() if k in old and old[k] != v},
+        "deletes": [k for k in old if k not in new],
+    }
+
+
+def test_native_legacy_pin_is_exact_constant():
+    assert plan.LEGACY_RESOURCES_SHA256 == (
+        "57ea8229ba3becac6ffc20a74f40a2bf1f93600ca1bf2b59f5c5f6d27a8dd6f8"
+    )
+    assert plan.LEGACY_PROVIDER_ID == "f1cec252-9073-4066-a19b-b3e950b32342"
+
+
+def test_only_pinned_legacy_baseline_hardens_same_provider_identity(monkeypatch):
+    data = legacy_case(monkeypatch)
+    validate(data)
+    assert set(plan._prior(data["prior_resources"], plan._graph(projection()))) == {
+        plan.ROOT,
+        plan.PROVIDER_URN,
+        plan.ENVIRONMENT_URN,
+    }
+    monkeypatch.setattr(plan, "LEGACY_RESOURCES_SHA256", "0" * 64)
+    with pytest.raises(ValueError):
+        validate(data)
+
+
+@pytest.mark.parametrize(
+    "operation", ["same", "create", "replace", "delete", "create-replacement"]
+)
+def test_legacy_provider_requires_only_nonreplacing_hardening(monkeypatch, operation):
+    data = legacy_case(monkeypatch)
+    data["saved_plan"]["resourcePlans"][plan.PROVIDER_URN]["steps"] = [operation]
+    with pytest.raises(ValueError):
+        validate(data)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("id", "foreign"),
+        ("inputs", {**plan.LEGACY_PROVIDER_INPUTS, "profile": "foreign"}),
+        ("outputs", {"region": "eu-central-1"}),
+    ],
+)
+def test_legacy_provider_shape_never_bypasses_canonical_hash(monkeypatch, field, value):
+    data = legacy_case(monkeypatch)
+    provider = next(
+        row for row in data["prior_resources"] if row["type"] == plan.PROVIDER
+    )
+    provider[field] = value
+    with pytest.raises(ValueError):
+        validate(data)
+
+
+def test_hardening_cannot_weaken_new_account_or_validation(monkeypatch):
+    data = legacy_case(monkeypatch)
+    goal = data["saved_plan"]["resourcePlans"][plan.PROVIDER_URN]["goal"]
+    goal["inputDiff"]["adds"]["allowedAccountIds"] = '["933245420672"]'
+    with pytest.raises(ValueError):
+        validate(data)
+    data = legacy_case(monkeypatch)
+    goal = data["saved_plan"]["resourcePlans"][plan.PROVIDER_URN]["goal"]
+    goal["inputDiff"]["updates"]["skipRegionValidation"] = "true"
+    with pytest.raises(ValueError):
+        validate(data)
+
+
+@pytest.mark.parametrize("urn", [plan.ROOT, plan.ENVIRONMENT_URN])
+def test_baseline_exports_cannot_change_or_disappear(urn):
+    data = case("repeat")
+    data["saved_plan"]["resourcePlans"][urn]["goal"]["outputDiff"] = {
+        "deletes": ["defaultTags"]
+    }
+    with pytest.raises(ValueError):
+        validate(data)
+    data = case("repeat")
+    next(row for row in data["prior_resources"] if row["urn"] == urn)["outputs"] = {}
+    with pytest.raises(ValueError):
+        validate(data)
+
+
+def test_repository_tagging_is_exact_and_not_provider_default_authority():
+    data = case()
+    ecr_goal(data)["inputDiff"]["adds"]["tags"]["Owner"] = "foreign"
+    with pytest.raises(ValueError):
+        validate(data)
+    data = case()
+    ecr_goal(data)["inputDiff"]["adds"]["tagsAll"] = plan.DEFAULT_TAGS
+    with pytest.raises(ValueError):
+        validate(data)
+
+
+@pytest.mark.parametrize("mutation", ["id", "outputs", "extra-resource"])
+def test_legacy_hash_gate_does_not_replace_semantic_validation(monkeypatch, mutation):
+    data = legacy_case(monkeypatch)
+    provider = next(
+        row for row in data["prior_resources"] if row["type"] == plan.PROVIDER
+    )
+    if mutation == "extra-resource":
+        data["prior_resources"].append(states()[plan.SERVICE_URN])
+    elif mutation == "id":
+        provider["id"] = "other-provider"
+    else:
+        provider["outputs"] = {**provider["outputs"], "__internal": {}}
+    raw = json.dumps(
+        data["prior_resources"], sort_keys=True, separators=(",", ":")
+    ).encode()
+    monkeypatch.setattr(
+        plan, "LEGACY_RESOURCES_SHA256", hashlib.sha256(raw).hexdigest()
+    )
     with pytest.raises(ValueError):
         validate(data)

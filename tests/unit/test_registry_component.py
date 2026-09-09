@@ -1,10 +1,17 @@
 """Offline resource-graph checks for the proposed registry owner."""
 
 import asyncio
+import functools
+import os
+import subprocess
+import sys
 from collections.abc import Callable
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import NoReturn
 
 from app.registry import RegistryInputs, RegistryPlane
+from coverage import Coverage, CoverageData
 from pulumi.runtime import mocks, settings, stack
 
 import pulumi
@@ -51,7 +58,9 @@ def run_program(program: Callable[[], None]) -> RegistryMocks:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     recorder = RegistryMocks()
-    try:
+
+    async def invoke() -> None:
+        settings.reset_options(project=None, stack=None)
         monitor = mocks.MockMonitor(recorder)
         mocks.set_mocks(
             recorder,
@@ -59,9 +68,12 @@ def run_program(program: Callable[[], None]) -> RegistryMocks:
             stack="test",
             monitor=monitor,
         )
-        loop.run_until_complete(stack.run_pulumi_func(program))
-        loop.run_until_complete(asyncio.sleep(0))
+        await stack.run_pulumi_func(program)
+        await asyncio.sleep(0)
         recorder.urns = sorted(monitor.resources)
+
+    try:
+        loop.run_until_complete(invoke())
     finally:
         settings.reset_options(project=None, stack=None)
         loop.close()
@@ -69,6 +81,51 @@ def run_program(program: Callable[[], None]) -> RegistryMocks:
     return recorder
 
 
+def isolated(test):
+    """Keep each Pulumi mock runtime separate from pytest's active root future."""
+
+    @functools.wraps(test)
+    def invoke():
+        if os.environ.get("POC_REGISTRY_COMPONENT_CHILD") == "1":
+            return test()
+        root = Path(__file__).resolve().parents[2]
+        with TemporaryDirectory(prefix="registry-component-test-") as directory:
+            data = Path(directory) / "coverage"
+            code = (
+                "import runpy, sys\nfrom coverage import Coverage\n"
+                f"sys.path.insert(0, {str(root / 'pulumi')!r})\n"
+                "coverage = Coverage(config_file=False, branch=True, "
+                f"data_file={str(data)!r}, "
+                f"include=[{str(root / 'pulumi/app/registry.py')!r}])\n"
+                "coverage.start()\n"
+                f"runpy.run_path({__file__!r})[{test.__name__!r}]()\n"
+                "coverage.stop(); coverage.save()\n"
+            )
+            result = subprocess.run(
+                [sys.executable, "-I", "-c", code],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env={
+                    **{
+                        key: value
+                        for key, value in os.environ.items()
+                        if not key.startswith(("COV_CORE_", "COVERAGE_"))
+                    },
+                    "POC_REGISTRY_COMPONENT_CHILD": "1",
+                },
+            )
+            assert result.returncode == 0, result.stderr
+            active = Coverage.current()
+            if active is not None:
+                child = CoverageData(basename=str(data))
+                child.read()
+                active.get_data().update(child)
+
+    return invoke
+
+
+@isolated
 def test_registry_graph_is_only_two_repos() -> None:
     """No IAM, secret, network, data or compute resources accompany registries."""
 
@@ -93,6 +150,7 @@ def test_registry_graph_is_only_two_repos() -> None:
         assert resource.inputs["imageScanningConfiguration"] == {"scanOnPush": True}
 
 
+@isolated
 def test_registry_outputs_are_provider_values() -> None:
     """A declaration cannot masquerade as the actual registered resource output."""
     observed: list[str] = []
@@ -118,6 +176,7 @@ def test_registry_outputs_are_provider_values() -> None:
     )
 
 
+@isolated
 def test_consumer_keeps_registry_owner() -> None:
     """Adding an output-only consumer does not create or reparent repositories."""
     identities: list[list[str]] = []

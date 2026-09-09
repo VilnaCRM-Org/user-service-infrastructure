@@ -60,12 +60,13 @@ class RegistryPlane(pulumi.ComponentResource):
         name: str,
         *,
         registries: RegistryInputs,
+        tags: pulumi.Input[dict[str, str]] | None = None,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         """Register only the validated registry pair and expose actual outputs."""
         super().__init__("user-service-infrastructure:registry:Plane", name, None, opts)
-        web = self._repository(registries["web"])
-        worker = self._repository(registries["worker"])
+        web = self._repository(registries["web"], tags=tags)
+        worker = self._repository(registries["worker"], tags=tags)
         self.outputs = RegistryOutputs(
             web=RegistryEndpoint(web.arn, web.repository_url, web.name),
             worker=RegistryEndpoint(worker.arn, worker.repository_url, worker.name),
@@ -79,7 +80,9 @@ class RegistryPlane(pulumi.ComponentResource):
             }
         )
 
-    def _repository(self, reference: RegistryReference) -> aws.ecr.Repository:
+    def _repository(
+        self, reference: RegistryReference, *, tags: pulumi.Input[dict[str, str]] | None
+    ) -> aws.ecr.Repository:
         """Keep source-selected logical names, immutable tags and safe deletion."""
         return aws.ecr.Repository(
             reference["logical_name"],
@@ -89,5 +92,6 @@ class RegistryPlane(pulumi.ComponentResource):
                 scan_on_push=True,
             ),
             force_delete=False,
+            tags=tags,
             opts=pulumi.ResourceOptions(parent=self),
         )

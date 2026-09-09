@@ -86,11 +86,45 @@ def main():
         recorder, project="user-service-infrastructure", stack="test", monitor=monitor
     )
 
+    from pulumi.runtime import set_all_config
+
+    set_all_config(
+        {
+            "user-service-infrastructure:environment": "test",
+            "user-service-infrastructure:serviceName": "user-service-infrastructure",
+            "user-service-infrastructure:owner": "team-user-service",
+            "user-service-infrastructure:costCenter": "core",
+            "user-service-infrastructure:repoSlug": "user-service-infrastructure",
+            "user-service-infrastructure:pulumiBackendUrl": (
+                "s3://pulumi-user-service-infrastructure-test-state"
+            ),
+            "user-service-infrastructure:pulumiSecretsProvider": (
+                "awskms://alias/pulumi-user-service-infrastructure-test-secrets?region=eu-central-1"
+            ),
+        }
+    )
+
     def program():
         entrypoint.run_registry_phase(projection)
 
     loop.run_until_complete(stack.run_pulumi_func(program))
     loop.run_until_complete(asyncio.sleep(0))
+    sys.path.insert(0, str(root))
+    from types import SimpleNamespace
+
+    import pulumi
+    from policy.pack import require_default_tags
+
+    failures = []
+    for row in recorder.rows:
+        if row.custom:
+            require_default_tags(
+                SimpleNamespace(resource_type=row.typ, props=row.inputs),
+                failures.append,
+            )
+    root_outputs = loop.run_until_complete(
+        pulumi.Output.from_input(settings.get_root_resource().outputs).future()
+    )
     print(
         json.dumps(
             {
@@ -103,6 +137,8 @@ def main():
                     }
                     for row in recorder.rows
                 ],
+                "policy_failures": failures,
+                "root_outputs": root_outputs,
                 "parents": recorder.parents,
                 "urns": recorder.urns,
             },

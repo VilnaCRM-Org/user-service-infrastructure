@@ -69,8 +69,10 @@ known_first_party = [
     "poc_phase_source_adapter",
     "poc_registry_phase_entrypoint",
     "poc_registry_plan",
+    "poc_registry_runner",
     "poc_secret_observation",
     "poc_source_artifact",
+    "pulumi_ci_guardrails",
     "pulumi_command_preflight",
     "pulumi_pr_comment",
     "_script_support",
@@ -78,6 +80,7 @@ known_first_party = [
     "policy",
     "reviewed_iam",
     "reviewed_source_admission",
+    "run_pulumi_command",
 ]
 
 [tool.deptry.package_module_name_map]

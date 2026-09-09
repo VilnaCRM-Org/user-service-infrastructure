@@ -21,9 +21,11 @@ ACCOUNT, REGION, PROJECT = "891377212104", "eu-central-1", "user-service-infrast
 STACK, PROVIDER = "pulumi:pulumi:Stack", "pulumi:providers:aws"
 SERVICE, REGISTRY = f"{PROJECT}:stack:UserService", f"{PROJECT}:registry:Plane"
 ECR = "aws:ecr/repository:Repository"
+ENVIRONMENT = f"{PROJECT}:core:EnvironmentSettings"
 PREFIX = f"urn:pulumi:test::{PROJECT}::"
 ROOT = f"{PREFIX}{STACK}::{PROJECT}-test"
 PROVIDER_URN = f"{PREFIX}{PROVIDER}::default_7_23_0"
+ENVIRONMENT_URN = f"{PREFIX}{ENVIRONMENT}::environment-settings"
 SERVICE_URN = f"{PREFIX}{SERVICE}::user-service"
 REGISTRY_URN = f"{PREFIX}{SERVICE}${REGISTRY}::registries"
 UNKNOWN = "04da6b54-80e4-46f7-96ec-b56ff0331ba9"
@@ -33,6 +35,40 @@ REGISTRIES = {
         "name": f"user-service-test-{kind}",
     }
     for kind in ("web", "worker")
+}
+LEGACY_RESOURCES_SHA256 = (
+    "57ea8229ba3becac6ffc20a74f40a2bf1f93600ca1bf2b59f5c5f6d27a8dd6f8"
+)
+LEGACY_PROVIDER_ID = "f1cec252-9073-4066-a19b-b3e950b32342"
+LEGACY_PROVIDER_INPUTS = {
+    "__internal": {},
+    "region": REGION,
+    "skipCredentialsValidation": "false",
+    "skipRegionValidation": "true",
+    "version": "7.23.0",
+}
+DEFAULT_TAGS = {
+    "CostCenter": "core",
+    "Criticality": "high",
+    "DataClassification": "internal",
+    "Environment": "test",
+    "Owner": "team-user-service",
+    "Project": PROJECT,
+    "RetentionClass": "standard",
+}
+ENVIRONMENT_OUTPUTS = {
+    "environment": "test",
+    "serviceName": PROJECT,
+    "stackTag": f"{PROJECT}-test",
+    "defaultTags": DEFAULT_TAGS,
+}
+ROOT_OUTPUTS = {
+    **ENVIRONMENT_OUTPUTS,
+    "repoSlug": PROJECT,
+    "pulumiBackendUrl": f"s3://pulumi-{PROJECT}-test-state",
+    "pulumiSecretsProvider": (
+        f"awskms://alias/pulumi-{PROJECT}-test-secrets?region={REGION}"
+    ),
 }
 GOAL_FIELDS = set(
     "type name custom inputDiff outputDiff parent protect dependencies provider "
@@ -67,6 +103,7 @@ def _graph(projection):
     result = {
         ROOT: (STACK, "", False),
         PROVIDER_URN: (PROVIDER, "", True),
+        ENVIRONMENT_URN: (ENVIRONMENT, ROOT, False),
         SERVICE_URN: (SERVICE, ROOT, False),
         REGISTRY_URN: (REGISTRY, SERVICE_URN, False),
     }
@@ -133,6 +170,7 @@ def _ecr_values(row, inputs, outputs, *, new):
         "imageTagMutability": "IMMUTABLE",
         "forceDelete": False,
         "imageScanningConfiguration": {"scanOnPush": True},
+        "tags": DEFAULT_TAGS,
     }
     _require(inputs == expected)
     _computed(
@@ -155,32 +193,52 @@ def _ecr_values(row, inputs, outputs, *, new):
         _require(row.get("id", "") in ("", UNKNOWN))
 
 
-def _inputs_outputs(row, *, new):
+def _component_outputs(kind):
+    if kind == STACK:
+        return ROOT_OUTPUTS
+    if kind == ENVIRONMENT:
+        return ENVIRONMENT_OUTPUTS
+    expected = {}
+    if kind == REGISTRY:
+        for purpose, registry in REGISTRIES.items():
+            name = registry["name"]
+            expected[f"{purpose}RepositoryArn"] = (
+                f"arn:aws:ecr:{REGION}:{ACCOUNT}:repository/{name}"
+            )
+            expected[f"{purpose}RepositoryUrl"] = (
+                f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/{name}"
+            )
+    return expected
+
+
+def _provider_values(row, inputs, outputs, *, legacy):
+    public = {key: value for key, value in inputs.items() if key != "__internal"}
+    if legacy:
+        _require(row["urn"] == PROVIDER_URN and row.get("id") == LEGACY_PROVIDER_ID)
+        _require(inputs == LEGACY_PROVIDER_INPUTS and outputs == public)
+        return
+    _provider_inputs(inputs)
+    _require(outputs == public or outputs == inputs or outputs == {})
+
+
+def _inputs_outputs(row, *, new, legacy=False):
     inputs, outputs = row.get("inputs", {}), row.get("outputs", {})
     _require(type(inputs) is dict and type(outputs) is dict)
     kind = row["type"]
     if kind == PROVIDER:
-        _provider_inputs(inputs)
-        _require(outputs == {} or outputs == inputs)
+        _provider_values(row, inputs, outputs, legacy=legacy)
     elif kind == ECR:
         _ecr_values(row, inputs, outputs, new=new)
     else:
         _require(inputs == {})
-        expected = {}
-        if kind == REGISTRY:
-            for purpose, registry in REGISTRIES.items():
-                name = registry["name"]
-                expected[f"{purpose}RepositoryArn"] = (
-                    f"arn:aws:ecr:{REGION}:{ACCOUNT}:repository/{name}"
-                )
-                expected[f"{purpose}RepositoryUrl"] = (
-                    f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/{name}"
-                )
+        expected = _component_outputs(kind)
+        if not new and kind in (STACK, ENVIRONMENT):
+            _require(outputs == expected)
         _computed(outputs, expected, new=new)
         _require(not row.get("id"))
 
 
-def _state(row, graph, *, new):
+def _state(row, graph, *, new, legacy=False):
     _object(row, {"urn", "type", "custom"}, STATE_FIELDS)
     urn = row["urn"]
     _require(urn in graph)
@@ -210,11 +268,12 @@ def _state(row, graph, *, new):
     ):
         _require(not row.get(key))
     _require(type(row.get("protect", False)) is bool)
-    _inputs_outputs(row, new=new)
+    _inputs_outputs(row, new=new, legacy=legacy)
     return row
 
 
 def _references(row, graph, provider_id):
+    _require(not row.get("parent") or row["parent"] in graph)
     expected = f"{PROVIDER_URN}::{provider_id}" if row["type"] == ECR else ""
     _require(row.get("provider", "") == expected)
     dependencies = row.get("dependencies", [])
@@ -228,14 +287,35 @@ def _references(row, graph, provider_id):
         _require(type(values) is list and set(values) <= graph.keys() - {row["urn"]})
 
 
+def _legacy_snapshot(resources):
+    legacy = any(
+        row.get("type") == PROVIDER and row.get("inputs") == LEGACY_PROVIDER_INPUTS
+        for row in resources
+    )
+    if legacy:
+        raw = json.dumps(resources, sort_keys=True, separators=(",", ":")).encode()
+        _require(hashlib.sha256(raw).hexdigest() == LEGACY_RESOURCES_SHA256)
+        _require(
+            {row.get("urn") for row in resources}
+            == {ROOT, PROVIDER_URN, ENVIRONMENT_URN}
+        )
+    return legacy
+
+
 def _prior(resources, graph):
-    _require(type(resources) is list and len(resources) <= 6)
+    _require(type(resources) is list and len(resources) <= 7)
+    legacy = _legacy_snapshot(resources)
     result = {}
     for value in resources:
-        row = _state(value, graph, new=False)
+        row = _state(
+            value, graph, new=False, legacy=legacy and value.get("type") == PROVIDER
+        )
         _require(row["urn"] not in result)
         result[row["urn"]] = row
-    _require(set(result) <= {ROOT, PROVIDER_URN} or set(result) == set(graph))
+    _require(
+        set(result) <= {ROOT, PROVIDER_URN, ENVIRONMENT_URN}
+        or set(result) == set(graph)
+    )
     if PROVIDER_URN in result:
         identifier = result[PROVIDER_URN].get("id")
         _require(type(identifier) is str and identifier not in ("", UNKNOWN))
@@ -281,12 +361,12 @@ def _diff(value, old):
     }
 
 
-def _goal_values(goal, prior):
+def _goal_values(goal, prior, *, hardening=False):
     inputs = _diff(goal.get("inputDiff", {}), prior.get("inputs", {}) if prior else {})
     outputs = _diff(
         goal.get("outputDiff", {}), prior.get("outputs", {}) if prior else {}
     )
-    if prior is not None:
+    if prior is not None and not hardening:
         _require(
             not any(goal.get("inputDiff", {}).values())
             and not any(goal.get("outputDiff", {}).values())
@@ -294,11 +374,19 @@ def _goal_values(goal, prior):
     return inputs, outputs
 
 
+def _operation(urn, prior):
+    if prior is None:
+        return "create"
+    if urn == PROVIDER_URN and prior.get("inputs") == LEGACY_PROVIDER_INPUTS:
+        return "update"
+    return "same"
+
+
 def _goal(urn, plan, prior, graph):
     _object(
         plan, {"goal", "steps", "state", "seed"}, {"goal", "steps", "state", "seed"}
     )
-    operation = "same" if prior is not None else "create"
+    operation = _operation(urn, prior)
     _require(plan["steps"] == [operation])
     _require(
         plan["state"] is None or type(plan["state"]) is dict
@@ -314,7 +402,7 @@ def _goal(urn, plan, prior, graph):
         "deleteBeforeReplace",
     ):
         _require(not goal.get(key))
-    inputs, outputs = _goal_values(goal, prior)
+    inputs, outputs = _goal_values(goal, prior, hardening=operation == "update")
     desired = {key: value for key, value in goal.items() if key in STATE_FIELDS}
     desired.update(urn=urn, inputs=inputs, outputs=outputs)
     if prior:

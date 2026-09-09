@@ -111,6 +111,23 @@ def test_registry_entrypoint_owns_only_the_stable_two_repository_graph(
         "user-service-test-worker",
     }
     assert len(custom) == 2
+    assert components["environment-settings"] == (
+        "user-service-infrastructure:core:EnvironmentSettings"
+    )
+    assert (
+        parents["environment-settings"]
+        == receipt["urns"]["user-service-infrastructure-test"]
+    )
+    # Mock new_resource omits the root and implicit provider. Parent receipts
+    # separately establish the root; the saved-plan tests bind the provider.
+    assert len(receipt["resources"]) == 5
+    assert len(receipt["urns"]) == 6
+    import poc_registry_plan as graph
+
+    assert receipt["policy_failures"] == []
+    assert receipt["root_outputs"] == graph.ROOT_OUTPUTS
+    for row in custom:
+        assert row["inputs"]["tags"] == graph.DEFAULT_TAGS
 
 
 @pytest.mark.parametrize("change", ["phase", "name", "logical_name", "digest"])

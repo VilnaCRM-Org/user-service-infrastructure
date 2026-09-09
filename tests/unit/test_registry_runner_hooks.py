@@ -67,3 +67,26 @@ def test_corrupt_preview_cannot_reach_registry_gate(monkeypatch, tmp_path):
     path.write_text("tampered")
     assert module._run_up_plan_command(context, ["test"]) == 1
     assert commands == []
+
+
+def test_replay_rechecks_preview_binding_after_provider_verification(
+    monkeypatch, tmp_path
+):
+    """A preview binding lost after manifest validation cannot reach gate or apply."""
+    module, context, commands = setup_command(monkeypatch, tmp_path, preview())
+    seen = []
+
+    def forbidden(*_):
+        raise AssertionError("Missing preview must prevent graph validation")
+
+    def invalidate_preview(_prepared, entry):
+        seen.append("provider")
+        entry.pop("previewFile")
+
+    context = replace(context, registry_plan_gate=forbidden)
+    seal_existing(module, context, "test", preview())
+    monkeypatch.setattr(module, "verify_provider_identity", invalidate_preview)
+    assert module._run_up_plan_command(context, ["test"]) == 1
+    assert seen == ["provider"]
+    assert any(command[3:5] == ["stack", "select"] for command in commands)
+    assert not any("--plan" in command for command in commands)

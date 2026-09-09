@@ -820,3 +820,16 @@ def test_main_guard_runs_cli_entrypoint(
         sys.argv = original_argv
 
     assert "No IAM policy documents" in capsys.readouterr().out
+
+
+def test_destructive_gate_cli_accepts_safe_preview(
+    guardrails_module, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A valid creation passes the CLI gate without an override or warning."""
+    preview_path = _write_preview(
+        tmp_path / "safe-preview.json",
+        steps=[{"op": "create", "newState": {"type": "aws:s3/bucket:Bucket"}}],
+        summary={"create": 1},
+    )
+    assert guardrails_module.cli(["destructive-gate", str(preview_path)]) == 0
+    assert capsys.readouterr().err == ""

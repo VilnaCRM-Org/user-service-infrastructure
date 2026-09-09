@@ -26,3 +26,24 @@ After installation, runtime evidence must identify the actual policy revision
 and role ownership. A later reviewed workload contract must reference its real
 release and external inputs. Never substitute synthetic fixture values for
 unresolved runtime evidence.
+
+## Registry execution
+
+The TEST self-deploy workflow authenticates the requested source in a separate
+job, then passes its same-run artifact coordinates to the installed-main
+`poc_registry_runner.py`. Runtime dependencies are installed before assuming AWS
+credentials; execution disables dependency synchronization. The child program
+uses the fixed registry implementation and authenticated contract data.
+
+The initial migration preserves the existing stack exports, EnvironmentSettings
+component and provider identity. Only the recorded three-resource TEST checkpoint
+can use the legacy provider-hardening transition. The resulting seven-resource
+graph contains two ECR repositories and their component records, with no workload
+or service-owned IAM resources. Unknown prior state or inaccessible repositories
+fail admission.
+
+Apply rechecks requester authorization, reviewed source, backend version and the
+complete saved plan immediately before replay. Its postcondition requires the
+complete graph. Post-apply drift uses the preview identity and requires every
+resource operation to be unchanged. These source controls still require trusted
+installation and live acceptance; this document does not claim either is complete.

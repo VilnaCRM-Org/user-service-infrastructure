@@ -62,6 +62,9 @@ def scheduled(tmp_path, monkeypatch):
         monkeypatch.setenv(key, value)
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
     monkeypatch.setattr(runtime, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        runtime.providers, "verify_runtime", runtime.providers.plugin_home
+    )
     monkeypatch.setattr(runtime.sys, "prefix", str(tmp_path / ".venv"))
     (tmp_path / ".venv/bin").mkdir(parents=True)
     (tmp_path / ".venv/bin/python").touch()

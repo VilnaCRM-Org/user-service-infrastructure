@@ -9,8 +9,13 @@ from urllib.parse import quote
 import pulumi_aws as aws
 
 import pulumi
-from app.environment import StackSettings, build_resource_name
+from app.environment import (
+    StackSettings,
+    build_resource_name,
+    require_application_secrets,
+)
 from app.network import NetworkPlane
+from app.runtime_secrets import RuntimeSecrets
 
 __all__ = ["DataPlane"]
 
@@ -31,6 +36,7 @@ class DataPlane(pulumi.ComponentResource):
     """Provision preview placeholders or managed database/cache resources."""
 
     outputs: DataOutputs
+    _runtime_secrets: RuntimeSecrets | None = None
 
     def __init__(
         self,
@@ -38,9 +44,13 @@ class DataPlane(pulumi.ComponentResource):
         *,
         settings: StackSettings,
         network: NetworkPlane,
+        runtime_secrets: RuntimeSecrets | None = None,
         opts: Optional[pulumi.ResourceOptions] = None,
     ) -> None:
         """Build preview-safe outputs or provision managed data services."""
+        if settings.is_managed and runtime_secrets is None:
+            require_application_secrets(settings)
+        self._runtime_secrets = runtime_secrets
         super().__init__("user-service-infrastructure:data:Plane", name, None, opts)
 
         self.outputs = (
@@ -86,6 +96,16 @@ class DataPlane(pulumi.ComponentResource):
         network: NetworkPlane,
     ) -> DataOutputs:
         """Provision DocumentDB, Redis, and the derived connection secrets."""
+        password = (
+            self._runtime_secrets.values["document_db_password"]
+            if self._runtime_secrets is not None
+            else require_application_secrets(settings).mongodb_password
+        )
+        token = (
+            self._runtime_secrets.values["redis_auth_token"]
+            if self._runtime_secrets is not None
+            else require_application_secrets(settings).redis_auth_token
+        )
         documentdb_subnet_group = aws.docdb.SubnetGroup(
             "user-service-documentdb-subnets",
             subnet_ids=network.outputs.data_subnet_ids,
@@ -103,7 +123,7 @@ class DataPlane(pulumi.ComponentResource):
             engine="docdb",
             engine_version=settings.documentdb.engine_version,
             master_username=settings.documentdb.username,
-            master_password=settings.secrets.mongodb_password,
+            master_password=password,
             db_subnet_group_name=documentdb_subnet_group.name,
             vpc_security_group_ids=[network.outputs.documentdb_security_group_id],
             storage_encrypted=True,
@@ -146,17 +166,12 @@ class DataPlane(pulumi.ComponentResource):
                 opts=pulumi.ResourceOptions(parent=self),
             )
 
-        documentdb_url_secret = aws.secretsmanager.Secret(
+        documentdb_url_secret_arn = self._persist_url(
+            "document_db_url",
             "user-service-documentdb-url",
-            description="MongoDB connection URL for the user-service application.",
-            opts=pulumi.ResourceOptions(parent=self),
-        )
-        aws.secretsmanager.SecretVersion(
-            "user-service-documentdb-url-version",
-            secret_id=documentdb_url_secret.id,
-            secret_string=pulumi.Output.all(
+            pulumi.Output.all(
                 settings.documentdb.username,
-                settings.secrets.mongodb_password,
+                password,
                 documentdb_cluster.endpoint,
             ).apply(
                 lambda parts: (
@@ -167,7 +182,6 @@ class DataPlane(pulumi.ComponentResource):
                     "&retryWrites=false"
                 )
             ),
-            opts=pulumi.ResourceOptions(parent=self),
         )
 
         redis_subnet_group = aws.elasticache.SubnetGroup(
@@ -194,7 +208,7 @@ class DataPlane(pulumi.ComponentResource):
             at_rest_encryption_enabled=True,
             transit_encryption_enabled=True,
             transit_encryption_mode="required",
-            auth_token=settings.secrets.redis_auth_token,
+            auth_token=token,
             auth_token_update_strategy="ROTATE",  # nosec B106
             automatic_failover_enabled=settings.redis.replicas_per_node_group > 0,
             multi_az_enabled=settings.redis.replicas_per_node_group > 0,
@@ -205,16 +219,11 @@ class DataPlane(pulumi.ComponentResource):
             opts=pulumi.ResourceOptions(parent=self),
         )
 
-        redis_url_secret = aws.secretsmanager.Secret(
+        redis_url_secret_arn = self._persist_url(
+            "redis_url",
             "user-service-redis-url",
-            description="Redis connection URL for the user-service application.",
-            opts=pulumi.ResourceOptions(parent=self),
-        )
-        aws.secretsmanager.SecretVersion(
-            "user-service-redis-url-version",
-            secret_id=redis_url_secret.id,
-            secret_string=pulumi.Output.all(
-                settings.secrets.redis_auth_token,
+            pulumi.Output.all(
+                token,
                 redis_replication_group.primary_endpoint_address,
             ).apply(
                 lambda parts: (
@@ -222,14 +231,38 @@ class DataPlane(pulumi.ComponentResource):
                     f"{parts[1]}:{settings.redis.port}/0"
                 )
             ),
-            opts=pulumi.ResourceOptions(parent=self),
         )
 
         return DataOutputs(
             documentdb_endpoint=documentdb_cluster.endpoint,
             documentdb_port=pulumi.Output.from_input(settings.documentdb.port),
-            documentdb_url_secret_arn=documentdb_url_secret.arn,
+            documentdb_url_secret_arn=documentdb_url_secret_arn,
             redis_endpoint=redis_replication_group.primary_endpoint_address,
             redis_port=pulumi.Output.from_input(settings.redis.port),
-            redis_url_secret_arn=redis_url_secret.arn,
+            redis_url_secret_arn=redis_url_secret_arn,
         )
+
+    def _persist_url(
+        self, purpose: str, name: str, value: pulumi.Input[str]
+    ) -> pulumi.Output[str]:
+        """Use the contract-owned version while retaining legacy identities."""
+        if self._runtime_secrets is not None:
+            return self._runtime_secrets.persist_url(purpose, value)
+        descriptions = {
+            "document_db_url": (
+                "MongoDB connection URL for the user-service application."
+            ),
+            "redis_url": "Redis connection URL for the user-service application.",
+        }
+        secret = aws.secretsmanager.Secret(
+            name,
+            description=descriptions[purpose],
+            opts=pulumi.ResourceOptions(parent=self),
+        )
+        aws.secretsmanager.SecretVersion(
+            f"{name}-version",
+            secret_id=secret.id,
+            secret_string=value,
+            opts=pulumi.ResourceOptions(parent=self),
+        )
+        return secret.arn

@@ -263,6 +263,13 @@ def test_composite_reuses_exact_runtime_pins_and_isolates_dependency_install():
     assert 'UV_PROJECT_ENVIRONMENT="${GITHUB_WORKSPACE}/.trusted/.venv"' in script
     assert "sync --frozen --no-dev --python 3.11" in script
     assert "GITHUB_TOKEN" not in script and "GH_TOKEN" not in script
+    provider_install = (
+        '"${GITHUB_WORKSPACE}/.trusted/scripts/poc_provider_runtime.py" install'
+    )
+    assert provider_install in script
+    assert script.index("sync --frozen") < script.index(provider_install)
+    assert script.index(provider_install) < script.index('>> "${GITHUB_PATH}"')
+    assert '"${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I' in script
     assert (
         'test "$(git rev-parse --show-toplevel)" = "${GITHUB_WORKSPACE}/.trusted"'
         in script
@@ -314,3 +321,57 @@ def test_composite_checksum_failure_stops_before_tool_execution(
     extracts = log.read_text().splitlines() if log.exists() else []
     assert len(extracts) == (0 if failed_archive == "uv" else 1)
     assert all(f"/{failed_archive}.tar.gz" not in call for call in extracts)
+
+
+def test_provider_install_failure_stops_actual_composite_before_runtime_export(
+    tmp_path,
+):
+    """The real shell propagates verifier failure instead of enabling credentials."""
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    trusted_python = tmp_path / ".trusted/.venv/bin/python"
+    trusted_python.parent.mkdir(parents=True)
+    trusted_python.write_text(
+        "#!/bin/sh\n"
+        'test "$1" = -I || exit 90\n'
+        'test "$2" = "${GITHUB_WORKSPACE}/.trusted/scripts/'
+        'poc_provider_runtime.py" || exit 91\n'
+        'test "$3" = install || exit 92\n'
+        'printf verifier > "${GITHUB_WORKSPACE}/verified-step"\n'
+        "exit 23\n"
+    )
+    trusted_python.chmod(0o700)
+    stubs = {
+        "git": '#!/bin/sh\nif [ "$2" = --show-toplevel ]; then\n'
+        'printf "%s/.trusted\\n" "$GITHUB_WORKSPACE"\n'
+        'else printf "%s\\n" "$GITHUB_SHA"; fi\n',
+        "uname": "#!/bin/sh\necho x86_64\n",
+        "curl": "#!/bin/sh\nexit 0\n",
+        "sha256sum": "#!/bin/sh\ncat > /dev/null\nexit 0\n",
+        "tar": '#!/bin/sh\nwhile [ "$1" != -C ]; do shift; done\n'
+        'case "$2" in */uv) printf "#!/bin/sh\\nexit 0\\n" > "$2/uv"; '
+        'chmod 700 "$2/uv";; esac\n',
+    }
+    for name, contents in stubs.items():
+        path = binaries / name
+        path.write_text(contents)
+        path.chmod(0o700)
+    marker = tmp_path / "runtime-export"
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", runtime()["runs"]["steps"][0]["run"]],
+        env={
+            "PATH": f"{binaries}:{os.defpath}",
+            "RUNNER_TEMP": str(tmp_path),
+            "GITHUB_WORKSPACE": str(tmp_path),
+            "GITHUB_SHA": "a" * 40,
+            "GITHUB_WORKFLOW_SHA": "a" * 40,
+            "GITHUB_REF": "refs/heads/main",
+            "GITHUB_PATH": str(marker),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 23, result.stderr
+    assert (tmp_path / "verified-step").read_text() == "verifier"
+    assert not marker.exists()

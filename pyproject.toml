@@ -13,6 +13,8 @@ dependencies = [
     "pulumi>=3.200.0,<4",
     "pulumi-aws>=7.0,<8",
     "pulumi-policy>=1.20.0,<2",
+    "pulumi-random==4.19.2",
+    "pulumi-tls==5.3.1",
     "pyyaml>=6,<7",
 ]
 
@@ -67,6 +69,7 @@ known_first_party = [
     "poc_contract",
     "poc_phase_admission",
     "poc_phase_source_adapter",
+    "poc_provider_runtime",
     "poc_registry_phase_entrypoint",
     "poc_registry_plan",
     "poc_registry_runner",

@@ -23,6 +23,7 @@ from contextlib import contextmanager  # noqa: E402
 
 import poc_backend_observer as backend  # noqa: E402
 import poc_contract  # noqa: E402
+import poc_provider_runtime as providers  # noqa: E402
 import poc_registry_plan as graph  # noqa: E402
 import poc_source_artifact as artifact  # noqa: E402
 import pulumi_command_preflight as preflight  # noqa: E402
@@ -96,6 +97,7 @@ def _child_environment(source):
 
 def _runtime_environment(head_sha):
     """Only installed paths configure the runtime; GitHub tokens stay in parent."""
+    home = providers.verify_runtime(ROOT)
     removed = {
         "GH_TOKEN",
         "GITHUB_TOKEN",
@@ -118,6 +120,9 @@ def _runtime_environment(head_sha):
             "PULUMI_COMMIT_SHA": head_sha,
             "PULUMI_EXPECTED_SHA": head_sha,
             "PULUMI_SKIP_UPDATE_CHECK": "true",
+            "PULUMI_HOME": str(home),
+            "PULUMI_DISABLE_AUTOMATIC_PLUGIN_ACQUISITION": "true",
+            "PULUMI_IGNORE_AMBIENT_PLUGINS": "true",
             "PULUMI_PYTHON_CMD": str(ROOT / ".venv/bin/python"),
             "POLICY_VENV": str(ROOT / ".venv"),
             "UV_PROJECT_ENVIRONMENT": str(ROOT / ".venv"),

@@ -67,6 +67,9 @@ def driver(tmp_path, monkeypatch):
         },
     }
     monkeypatch.setattr(module, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        module.providers, "verify_runtime", module.providers.plugin_home
+    )
     monkeypatch.setenv("GITHUB_SHA", source["source"]["base_sha"])
     monkeypatch.setenv("GH_TOKEN", "PRIVATE_SENTINEL")
     monkeypatch.setenv("PYTHONPATH", "/hostile/pr")
@@ -113,6 +116,9 @@ def driver(tmp_path, monkeypatch):
         assert "PYTHONPATH" not in context.env and "PULUMI_PLAN_FILE" not in context.env
         assert context.env["PULUMI_PYTHON_CMD"] == str(tmp_path / ".venv/bin/python")
         assert context.env["UV_NO_SYNC"] == "true"
+        assert context.env["PULUMI_HOME"] == str(tmp_path / ".poc-provider-runtime")
+        assert context.env["PULUMI_DISABLE_AUTOMATIC_PLUGIN_ACQUISITION"] == "true"
+        assert context.env["PULUMI_IGNORE_AMBIENT_PLUGINS"] == "true"
         context.plan_dir.mkdir(parents=True, exist_ok=True)
         context.preview_artifact_dir.mkdir(parents=True, exist_ok=True)
         plan = context.plan_dir / "test.plan"
@@ -534,3 +540,64 @@ def test_requester_revocation_after_graph_validation_blocks_apply(driver, monkey
     with pytest.raises(ValueError):
         execute("up-plan")
     assert "accepted" not in driver["calls"]
+
+
+def test_provider_verification_failure_prevents_dispatch(driver, monkeypatch):
+    def fail(root):
+        assert root == driver["root"]
+        raise ValueError("unverified provider")
+
+    monkeypatch.setattr(module.providers, "verify_runtime", fail)
+    with pytest.raises(ValueError, match="unverified provider"):
+        execute()
+    assert "dispatch" not in driver["calls"]
+    assert not (driver["root"] / ".poc-registry").exists()
+
+
+def test_incoming_plugin_environment_cannot_override_fixed_runtime(driver, monkeypatch):
+    for key in (
+        "PULUMI_HOME",
+        "PULUMI_DISABLE_AUTOMATIC_PLUGIN_ACQUISITION",
+        "PULUMI_IGNORE_AMBIENT_PLUGINS",
+    ):
+        monkeypatch.setenv(key, "hostile")
+    assert execute() == 0
+
+
+def test_provider_environment_reaches_actual_pulumi_subprocess(driver, monkeypatch):
+    root = driver["root"]
+    binaries = root / "bin"
+    binaries.mkdir()
+    executable = binaries / "pulumi"
+    executable.write_text(
+        f"#!{sys.executable}\nimport json, os, sys\n"
+        'print(json.dumps({"args":sys.argv[1:],"env":dict(os.environ)}))\n'
+    )
+    executable.chmod(0o700)
+    monkeypatch.setenv("PATH", str(binaries))
+    env = module._child_environment(driver["source"])
+    context = module.runner.CommandContext(
+        root_dir=root,
+        env=env,
+        pulumi_dir=root / "pulumi",
+        policy_pack_dir=root / "policy",
+        plan_dir=root / "plans",
+        preview_artifact_dir=root / "previews",
+        backend_url=env["PULUMI_BACKEND_URL"],
+        secrets_provider=env["PULUMI_SECRETS_PROVIDER"],
+    )
+    output = root / "subprocess.json"
+    with output.open("w") as stream:
+        module.runner._run_stack_command(
+            context,
+            module.runner.StackCommand(
+                "plan", "test", plan_path=root / "test.plan", stdout=stream
+            ),
+        )
+    observed = json.loads(output.read_text())
+    assert observed["args"][2] == "preview"
+    assert "--save-plan" in observed["args"]
+    assert observed["env"]["PULUMI_HOME"] == str(root / ".poc-provider-runtime")
+    assert observed["env"]["PULUMI_DISABLE_AUTOMATIC_PLUGIN_ACQUISITION"] == "true"
+    assert observed["env"]["PULUMI_IGNORE_AMBIENT_PLUGINS"] == "true"
+    assert "GH_TOKEN" not in observed["env"] and "PYTHONPATH" not in observed["env"]

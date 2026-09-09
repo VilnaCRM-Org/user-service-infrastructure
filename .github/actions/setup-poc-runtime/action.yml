@@ -31,5 +31,7 @@ runs:
         tar -xzf "${runtime_directory}/pulumi.tar.gz" -C "${runtime_directory}/pulumi" --strip-components=1
         UV_PROJECT_ENVIRONMENT="${GITHUB_WORKSPACE}/.trusted/.venv" \
           "${runtime_directory}/uv/uv" sync --frozen --no-dev --python 3.11
+        "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+          "${GITHUB_WORKSPACE}/.trusted/scripts/poc_provider_runtime.py" install
         echo "${runtime_directory}/uv" >> "${GITHUB_PATH}"
         echo "${runtime_directory}/pulumi" >> "${GITHUB_PATH}"

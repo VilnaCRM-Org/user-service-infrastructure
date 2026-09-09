@@ -9,6 +9,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from coverage import Coverage, CoverageData
@@ -60,21 +61,70 @@ def _mutate(value, registries, mutation):
     return replace(value, **changes.get(mutation, {}))
 
 
+def _generated_outputs(args, values):
+    """Supply deterministic synthetic provider outputs without real generation."""
+    if args.typ == "random:index/randomPassword:RandomPassword":
+        values["result"] = "synthetic-password-unchanging"
+    if args.typ == "random:index/randomBytes:RandomBytes":
+        values.update({"hex": "ab" * 32, "base64": "YWJj"})
+    if args.typ == "tls:index/privateKey:PrivateKey":
+        values.update(
+            {
+                "privateKeyPem": "synthetic-private",
+                "publicKeyPem": "synthetic-public",
+            }
+        )
+    if args.typ == "aws:secretsmanager/secret:Secret":
+        values["arn"] = (
+            f"arn:aws:secretsmanager:eu-central-1:891377212104:secret:{args.inputs['name']}-abcdef"
+        )
+    if args.typ == "aws:secretsmanager/secretVersion:SecretVersion":
+        values["versionId"] = "1" * 32
+    return values
+
+
+def _fixture_contract(root, config):
+    """Bind synthetic declarations to this exact mocked workload target."""
+    contract = json.loads(
+        (root / "tests/fixtures/poc-contract/workload.synthetic.json").read_text()
+    )
+    central = contract["workload"]["central"]
+    central["execution_role_arn"] = config["executionRoleArn"]
+    central["task_role_arn"] = config["taskRoleArn"]
+    for kind in ("web", "worker"):
+        name = REGISTRIES[kind]["name"]
+        registry = contract["registries"][kind]
+        registry.update(REGISTRIES[kind])
+        registry["arn"] = f"arn:aws:ecr:eu-central-1:891377212104:repository/{name}"
+        registry["uri"] = f"891377212104.dkr.ecr.eu-central-1.amazonaws.com/{name}"
+        contract["workload"]["release"][kind]["repository_uri"] = registry["uri"]
+    return contract
+
+
 def _probe(root, mode, mutation, coverage_path):
     """Run both actual component compositions in independent Python runtimes."""
-    sys.path[:0] = [str(root / "pulumi"), str(root / "tests/unit")]
+    sys.path[:0] = [
+        str(root / "pulumi"),
+        str(root / "tests/unit"),
+        str(root / "scripts"),
+    ]
     coverage = Coverage(
         config_file=False,
         branch=True,
         include=[
             str(root / "pulumi/app/workload_phase.py"),
             str(root / "pulumi/app/registry_phase.py"),
+            str(root / "pulumi/app/runtime_secrets.py"),
+            str(root / "pulumi/app/data.py"),
+            str(root / "pulumi/app/compute.py"),
+            str(root / "pulumi/app/environment.py"),
         ],
         data_file=str(coverage_path),
     )
     coverage.start()
     from app.environment import resolve_stack_settings
     from app.registry_phase import RegistryPhaseStack
+    from app.runtime_secrets import RuntimeSecretsDescriptor
     from app.workload_phase import WorkloadPhaseStack
     from pulumi.runtime import mocks, rpc, set_all_config, settings, stack
     from test_environment_component import SimpleMocks
@@ -92,6 +142,9 @@ def _probe(root, mode, mutation, coverage_path):
                 "type": request.type,
                 "custom": request.custom,
                 "inputs": rpc.deserialize_properties(request.object),
+                "protect": request.protect,
+                "version": request.version,
+                "additional_secret_outputs": list(request.additionalSecretOutputs),
             }
             return result
 
@@ -101,7 +154,14 @@ def _probe(root, mode, mutation, coverage_path):
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    recorder = SimpleMocks()
+
+    class GeneratedMocks(SimpleMocks):
+        def new_resource(self, args):
+            resource_id, values = super().new_resource(args)
+            values = _generated_outputs(args, values)
+            return resource_id, values
+
+    recorder = GeneratedMocks()
     mocks.set_mocks(
         recorder,
         project="user-service-infrastructure",
@@ -113,7 +173,8 @@ def _probe(root, mode, mutation, coverage_path):
         "serviceName": "user-service-infrastructure",
         "owner": "team-user-service",
         "costCenter": "core",
-        "deploymentMode": "preview",
+        "deploymentMode": "managed",
+        "accessLogsBucketName": "synthetic-test-access-logs",
         "repoSlug": "user-service-infrastructure",
         "pulumiBackendUrl": "s3://pulumi-user-service-infrastructure-test-state",
         "pulumiSecretsProvider": "awskms://alias/pulumi-user-service-infrastructure-test-secrets?region=eu-central-1",
@@ -128,6 +189,9 @@ def _probe(root, mode, mutation, coverage_path):
         ),
         "appEnv": "prod",
     }
+    config["mailSender"] = _fixture_contract(root, config)["workload"]["external"][
+        "mail"
+    ]["sender"]
     aws_config = {
         "region": "eu-central-1",
         "allowedAccountIds": '["891377212104"]',
@@ -156,18 +220,22 @@ def _probe(root, mode, mutation, coverage_path):
             owner="team-user-service",
             cost_center="core",
         )
-        value = resolve_stack_settings(metadata)
-        value = replace(
-            value,
-            deployment_mode="managed",
-            default_tags=dict(TAGS),
-            runtime=replace(
-                value.runtime, access_logs_bucket_name="synthetic-test-access-logs"
-            ),
-        )
+        contract = _fixture_contract(root, config)
+        with patch(
+            "app.environment._secret_value",
+            side_effect=AssertionError("manual secret lookup"),
+        ):
+            value = resolve_stack_settings(metadata, generated_secrets=True)
+        assert value.is_managed and value.secrets is None
         registries = copy.deepcopy(REGISTRIES)
         value = _mutate(value, registries, mutation)
-        WorkloadPhaseStack(settings=value, registries=registries)
+        descriptor = RuntimeSecretsDescriptor(contract)
+        if mutation == "descriptor":
+            descriptor = None
+        if mutation == "descriptor-role":
+            contract["workload"]["central"]["task_role_arn"] += "-foreign"
+            descriptor = RuntimeSecretsDescriptor(contract)
+        WorkloadPhaseStack(settings=value, registries=registries, secrets=descriptor)
 
     error = None
     try:
@@ -297,6 +365,8 @@ def test_workload_extends_actual_registry_registrations_without_changing_baselin
         "images",
         "role",
         "runtime",
+        "descriptor",
+        "descriptor-role",
     ],
 )
 def test_bad_internal_settings_fail_before_any_aws_registration(tmp_path, mutation):

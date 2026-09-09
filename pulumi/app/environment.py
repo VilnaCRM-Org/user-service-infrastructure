@@ -225,7 +225,7 @@ class StackSettings:
     queues: QueueSettings
     runtime: RuntimeSettings
     social: SocialProviderSettings
-    secrets: ApplicationSecretInputs
+    secrets: ApplicationSecretInputs | None
 
     @property
     def is_managed(self) -> bool:
@@ -517,8 +517,52 @@ class EnvironmentSettings(pulumi.ComponentResource):
         )
 
 
-def resolve_stack_settings(environment_settings: EnvironmentSettings) -> StackSettings:
-    """Resolve the full stack contract from Pulumi config and repo defaults."""
+def require_application_secrets(settings: StackSettings) -> ApplicationSecretInputs:
+    """Reject unconfigured legacy material before workload resource registration."""
+    if settings.secrets is None:
+        raise ValueError("Legacy managed workload requires application secrets")
+    return settings.secrets
+
+
+def _settings_default_tags(
+    config: pulumi.Config,
+    parts: tuple[str, str, str, str],
+    generated_secrets: bool,
+) -> dict[str, str]:
+    """Keep legacy tags or retain the full registry metadata on the new path."""
+    service_name, environment, owner, cost_center = parts
+    default_tags = {
+        "Project": service_name,
+        "Environment": environment,
+        "Owner": owner,
+        "CostCenter": cost_center,
+    }
+    if generated_secrets:
+        default_tags = _default_tags_from_parts(
+            (
+                service_name,
+                environment,
+                owner,
+                cost_center,
+                _normalize_tag_value(
+                    config.get("dataClassification") or "", default="internal"
+                ),
+                _normalize_tag_value(config.get("criticality") or "", default="high"),
+                _normalize_tag_value(
+                    config.get("retentionClass") or "", default="standard"
+                ),
+            )
+        )
+
+    return default_tags
+
+
+def resolve_stack_settings(
+    environment_settings: EnvironmentSettings, *, generated_secrets: bool = False
+) -> StackSettings:
+    """Resolve settings; generated secrets are an internal Python-only option."""
+    if type(generated_secrets) is not bool:
+        raise ValueError("generated_secrets must be a boolean")
     config = pulumi.Config()
     aws_config = pulumi.Config("aws")
 
@@ -528,12 +572,9 @@ def resolve_stack_settings(environment_settings: EnvironmentSettings) -> StackSe
     cost_center = environment_settings.cost_center
 
     stack_tag = f"{service_name}-{environment}"
-    default_tags = {
-        "Project": service_name,
-        "Environment": environment,
-        "Owner": owner,
-        "CostCenter": cost_center,
-    }
+    default_tags = _settings_default_tags(
+        config, (service_name, environment, owner, cost_center), generated_secrets
+    )
 
     region = resolve_config_value(
         config.get("region"),
@@ -548,6 +589,9 @@ def resolve_stack_settings(environment_settings: EnvironmentSettings) -> StackSe
         ),
         credentials_present=has_aws_credentials(),
     )
+
+    if generated_secrets and deployment_mode != "managed":
+        raise ValueError("Generated secrets require managed deployment mode")
 
     network = _validate_parallel_lengths(
         NetworkSettings(
@@ -833,86 +877,89 @@ def resolve_stack_settings(environment_settings: EnvironmentSettings) -> StackSe
         ),
     )
 
-    secrets = ApplicationSecretInputs(
-        mongodb_password=_secret_value(
-            config,
-            "documentDbPassword",
-            managed=deployment_mode == "managed",
-            preview_default=_preview_placeholder("documentdb-password"),
-        ),
-        redis_auth_token=_secret_value(
-            config,
-            "redisAuthToken",
-            managed=deployment_mode == "managed",
-            preview_default=_preview_placeholder("redis-auth-token"),
-        ),
-        app_secret=_secret_value(
-            config,
-            "appSecret",
-            managed=deployment_mode == "managed",
-            preview_default=_preview_placeholder("app-secret"),
-        ),
-        mailer_dsn=_secret_value(
-            config,
-            "mailerDsn",
-            managed=deployment_mode == "managed",
-            preview_default="smtp://mailer.internal:587",
-        ),
-        oauth_encryption_key=_secret_value(
-            config,
-            "oauthEncryptionKey",
-            managed=deployment_mode == "managed",
-            preview_default=_preview_placeholder("oauth-encryption-key"),
-        ),
-        oauth_passphrase=_secret_value(
-            config,
-            "oauthPassphrase",
-            managed=deployment_mode == "managed",
-            preview_default=_preview_placeholder("oauth-passphrase"),
-        ),
-        two_factor_encryption_key=_secret_value(
-            config,
-            "twoFactorEncryptionKey",
-            managed=deployment_mode == "managed",
-            preview_default=_preview_placeholder("two-factor-encryption-key"),
-        ),
-        oauth_private_key_pem=_secret_value(
-            config,
-            "oauthPrivateKeyPem",
-            managed=deployment_mode == "managed",
-            preview_default="preview-private-key",
-        ),
-        oauth_public_key_pem=_secret_value(
-            config,
-            "oauthPublicKeyPem",
-            managed=deployment_mode == "managed",
-            preview_default="preview-public-key",
-        ),
-        github_client_secret=_secret_value(
-            config,
-            "githubClientSecret",
-            managed=deployment_mode == "managed" and bool(social.github_client_id),
-            preview_default="",
-        ),
-        google_client_secret=_secret_value(
-            config,
-            "googleClientSecret",
-            managed=deployment_mode == "managed" and bool(social.google_client_id),
-            preview_default="",
-        ),
-        facebook_client_secret=_secret_value(
-            config,
-            "facebookClientSecret",
-            managed=deployment_mode == "managed" and bool(social.facebook_client_id),
-            preview_default="",
-        ),
-        twitter_client_secret=_secret_value(
-            config,
-            "twitterClientSecret",
-            managed=deployment_mode == "managed" and bool(social.twitter_client_id),
-            preview_default="",
-        ),
-    )
+    secrets = None
+    if not generated_secrets:
+        secrets = ApplicationSecretInputs(
+            mongodb_password=_secret_value(
+                config,
+                "documentDbPassword",
+                managed=deployment_mode == "managed",
+                preview_default=_preview_placeholder("documentdb-password"),
+            ),
+            redis_auth_token=_secret_value(
+                config,
+                "redisAuthToken",
+                managed=deployment_mode == "managed",
+                preview_default=_preview_placeholder("redis-auth-token"),
+            ),
+            app_secret=_secret_value(
+                config,
+                "appSecret",
+                managed=deployment_mode == "managed",
+                preview_default=_preview_placeholder("app-secret"),
+            ),
+            mailer_dsn=_secret_value(
+                config,
+                "mailerDsn",
+                managed=deployment_mode == "managed",
+                preview_default="smtp://mailer.internal:587",
+            ),
+            oauth_encryption_key=_secret_value(
+                config,
+                "oauthEncryptionKey",
+                managed=deployment_mode == "managed",
+                preview_default=_preview_placeholder("oauth-encryption-key"),
+            ),
+            oauth_passphrase=_secret_value(
+                config,
+                "oauthPassphrase",
+                managed=deployment_mode == "managed",
+                preview_default=_preview_placeholder("oauth-passphrase"),
+            ),
+            two_factor_encryption_key=_secret_value(
+                config,
+                "twoFactorEncryptionKey",
+                managed=deployment_mode == "managed",
+                preview_default=_preview_placeholder("two-factor-encryption-key"),
+            ),
+            oauth_private_key_pem=_secret_value(
+                config,
+                "oauthPrivateKeyPem",
+                managed=deployment_mode == "managed",
+                preview_default="preview-private-key",
+            ),
+            oauth_public_key_pem=_secret_value(
+                config,
+                "oauthPublicKeyPem",
+                managed=deployment_mode == "managed",
+                preview_default="preview-public-key",
+            ),
+            github_client_secret=_secret_value(
+                config,
+                "githubClientSecret",
+                managed=deployment_mode == "managed" and bool(social.github_client_id),
+                preview_default="",
+            ),
+            google_client_secret=_secret_value(
+                config,
+                "googleClientSecret",
+                managed=deployment_mode == "managed" and bool(social.google_client_id),
+                preview_default="",
+            ),
+            facebook_client_secret=_secret_value(
+                config,
+                "facebookClientSecret",
+                managed=deployment_mode == "managed"
+                and bool(social.facebook_client_id),
+                preview_default="",
+            ),
+            twitter_client_secret=_secret_value(
+                config,
+                "twitterClientSecret",
+                managed=deployment_mode == "managed" and bool(social.twitter_client_id),
+                preview_default="",
+            ),
+        )
 
     return StackSettings(
         environment=environment,

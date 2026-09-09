@@ -60,3 +60,19 @@ matching the protected account, project and environment. Compute consumes those
 central identities and does not create ECS roles or policies. Their existence,
 trust, effective permissions and PassRole authorization must still be verified
 through the controller before enabling the workload phase.
+
+The internal workload composition generates stable Random/TLS resources and
+persists the ten declared secret purposes under their exact names and KMS keys.
+Database and Redis connection strings use the same generated credentials as the
+services. ECS receives eight distinct consumed secret references through nine
+environment names, pinned to their versions. `REDIS_LOCKOUT_URL` explicitly uses
+the same ARN and version as `REDIS_URL`; compiled application defaults do not
+recompute that alias. SES uses task-role credentials; social OAuth is disabled.
+This source path still needs authenticated secret-history checks and workload
+dispatch admission before it can establish first-deployment or rollback acceptance.
+
+The trusted runtime installs AWS 7.23.0, Random 4.19.2 and TLS 5.3.1 before AWS
+credentials, using fixed archive and executable SHA-256 pins. Execution rechecks
+those binaries and SDK versions, uses a private plugin home, and disables automatic
+and ambient plugin acquisition. Installing these binaries does not add provider
+resources to the registry graph.

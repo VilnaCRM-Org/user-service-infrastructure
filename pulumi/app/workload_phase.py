@@ -25,6 +25,7 @@ from app.messaging import MessagingPlane
 from app.network import NetworkPlane
 from app.registry import RegistryInputs
 from app.registry_phase import RegistryPhaseStack
+from app.runtime_secrets import RuntimeSecrets, RuntimeSecretsDescriptor
 
 # Closed taggable resource types used by the four installed workload planes.
 # SecretVersion, lifecycle policies and route associations do not accept tags.
@@ -68,22 +69,39 @@ def _merge_tags(existing, baseline: dict[str, str]) -> dict[str, str]:
 class WorkloadPhaseStack(RegistryPhaseStack):
     """Add workload children under the existing user-service owner and provider."""
 
-    def __init__(self, *, settings: StackSettings, registries: RegistryInputs) -> None:
+    def __init__(
+        self,
+        *,
+        settings: StackSettings,
+        registries: RegistryInputs,
+        secrets: RuntimeSecretsDescriptor,
+    ) -> None:
         if type(settings) is not StackSettings or not settings.is_managed:
             raise ValueError("Workload composition requires explicit managed settings")
         self._validate_target(settings, registries)
         self._validate_metadata(settings)
         validate_runtime_roles(settings.runtime, settings.environment)
         validate_health_check_runtime(settings.runtime, settings.queues)
+        if type(secrets) is not RuntimeSecretsDescriptor:
+            raise ValueError("Workload composition requires a secret declaration")
+        secrets.validate_target(settings)
         super().__init__(registries=registries)
         self.settings = settings
         # No provider override: preserve the installed default AWS provider,
         # including the existing ECR provider links and canonical account pins.
         opts = pulumi.ResourceOptions(parent=self, transformations=[self._tag_resource])
+        self.runtime_secrets = RuntimeSecrets(
+            "runtime-secrets", descriptor=secrets, opts=opts
+        )
         self.network = NetworkPlane("network", settings=settings, opts=opts)
         self.data = DataPlane(
-            "data", settings=settings, network=self.network, opts=opts
+            "data",
+            settings=settings,
+            network=self.network,
+            runtime_secrets=self.runtime_secrets,
+            opts=opts,
         )
+        self.runtime_secrets.complete()
         self.messaging = MessagingPlane("messaging", settings=settings, opts=opts)
         self.compute = ComputePlane(
             "compute",
@@ -92,6 +110,7 @@ class WorkloadPhaseStack(RegistryPhaseStack):
             data=self.data,
             messaging=self.messaging,
             registries=self.registries.outputs,
+            runtime_secrets=self.runtime_secrets,
             opts=opts,
         )
         # Keep existing root/UserService outputs unchanged. New child components

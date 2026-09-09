@@ -69,6 +69,21 @@ Validation workflows use `contents: read`. Release and synchronization workflows
 ask for broader access only where automation actually needs to write tags,
 releases, or pull requests.
 
+## Trusted PoC provider runtime
+
+The TEST PoC setup action installs AWS 7.23.0, Random 4.19.2 and TLS 5.3.1
+before AWS credentials are acquired. The installed trusted source fixes each
+release URL, archive SHA256 and executable SHA256, and checks the frozen SDK
+versions. Provider installation uses a fresh private `.trusted/.poc-provider-runtime`
+directory; a partial or existing cache is rejected.
+
+Before Pulumi dispatch, the runner verifies the provider executables again and
+passes that fixed `PULUMI_HOME` to the CLI. Automatic plugin acquisition and
+ambient plugin lookup are disabled. A missing or modified provider fails the run;
+it must be repaired in the trusted runtime rather than downloaded with deployment
+credentials. Installing the Random/TLS binaries does not activate the internal
+workload phase or change registry resource ownership.
+
 ## Local Parity
 
 The repository intentionally avoids workflow-only logic for the core validation

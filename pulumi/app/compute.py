@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import pulumi_aws as aws
 
@@ -13,12 +13,14 @@ from app.data import DataPlane
 from app.environment import (
     StackSettings,
     build_resource_name,
+    require_application_secrets,
     validate_health_check_runtime,
     validate_runtime_roles,
 )
 from app.messaging import MessagingPlane
 from app.network import NetworkPlane
 from app.registry import RegistryOutputs
+from app.runtime_secrets import RuntimeSecrets
 
 __all__ = ["ComputePlane"]
 
@@ -40,6 +42,7 @@ class ComputePlane(pulumi.ComponentResource):
     """Provision ECS/Fargate, ALB and runtime secrets using caller-owned registries."""
 
     outputs: ComputeOutputs
+    _runtime_secrets: RuntimeSecrets | None = None
 
     def __init__(
         self,
@@ -50,12 +53,16 @@ class ComputePlane(pulumi.ComponentResource):
         data: DataPlane,
         messaging: MessagingPlane,
         registries: RegistryOutputs | None = None,
+        runtime_secrets: RuntimeSecrets | None = None,
         opts: Optional[pulumi.ResourceOptions] = None,
     ) -> None:
         """Build preview-safe outputs or provision the managed compute plane."""
         if settings.is_managed:
             validate_runtime_roles(settings.runtime, settings.environment)
             validate_health_check_runtime(settings.runtime, settings.queues)
+            if runtime_secrets is None:
+                require_application_secrets(settings)
+        self._runtime_secrets = runtime_secrets
         super().__init__("user-service-infrastructure:compute:Plane", name, None, opts)
 
         self.outputs = (
@@ -146,7 +153,11 @@ class ComputePlane(pulumi.ComponentResource):
             opts=pulumi.ResourceOptions(parent=self),
         )
 
-        runtime_secrets = self._create_runtime_secrets(settings)
+        runtime_secrets = (
+            {}
+            if self._runtime_secrets is not None
+            else self._create_runtime_secrets(settings)
+        )
         web_image = self._resolve_image_uri(
             repository_url=registries.web.uri,
             image_tag=settings.images.web_image_tag,
@@ -342,18 +353,19 @@ class ComputePlane(pulumi.ComponentResource):
         settings: StackSettings,
     ) -> dict[str, pulumi.Input[str]]:
         """Persist application secrets to Secrets Manager for ECS injection."""
+        material = require_application_secrets(settings)
         definitions = {
-            "app-secret": settings.secrets.app_secret,
-            "mailer-dsn": settings.secrets.mailer_dsn,
-            "oauth-encryption-key": settings.secrets.oauth_encryption_key,
-            "oauth-passphrase": settings.secrets.oauth_passphrase,
-            "twofactor-encryption-key": settings.secrets.two_factor_encryption_key,
-            "oauth-private-key": settings.secrets.oauth_private_key_pem,
-            "oauth-public-key": settings.secrets.oauth_public_key_pem,
-            "github-client-secret": settings.secrets.github_client_secret,
-            "google-client-secret": settings.secrets.google_client_secret,
-            "facebook-client-secret": settings.secrets.facebook_client_secret,
-            "twitter-client-secret": settings.secrets.twitter_client_secret,
+            "app-secret": material.app_secret,
+            "mailer-dsn": material.mailer_dsn,
+            "oauth-encryption-key": material.oauth_encryption_key,
+            "oauth-passphrase": material.oauth_passphrase,
+            "twofactor-encryption-key": material.two_factor_encryption_key,
+            "oauth-private-key": material.oauth_private_key_pem,
+            "oauth-public-key": material.oauth_public_key_pem,
+            "github-client-secret": material.github_client_secret,
+            "google-client-secret": material.google_client_secret,
+            "facebook-client-secret": material.facebook_client_secret,
+            "twitter-client-secret": material.twitter_client_secret,
         }
         secret_arns: dict[str, pulumi.Input[str]] = {}
         for key, value in definitions.items():
@@ -666,6 +678,29 @@ class ComputePlane(pulumi.ComponentResource):
                     ),
                 }
             )
+        if self._runtime_secrets is not None:
+            descriptor = self._runtime_secrets.descriptor
+            environment = [
+                item
+                for item in environment
+                if item["name"] != "MAIL_SENDER"
+                and not cast(str, item["name"]).startswith(
+                    (
+                        "OAUTH_GITHUB_",
+                        "OAUTH_GOOGLE_",
+                        "OAUTH_FACEBOOK_",
+                        "OAUTH_TWITTER_",
+                    )
+                )
+            ]
+            environment.extend(
+                [
+                    {"name": "MAIL_SENDER", "value": descriptor.mail_sender},
+                    {"name": "MAILER_DSN", "value": descriptor.mailer_dsn},
+                    {"name": "SOCIAL_OAUTH_ENABLED", "value": "false"},
+                    {"name": "OAUTH_ENCRYPTION_KEY_TYPE", "value": "plain"},
+                ]
+            )
         return environment
 
     def _common_secrets(
@@ -674,6 +709,8 @@ class ComputePlane(pulumi.ComponentResource):
         runtime_secret_arns: dict[str, pulumi.Input[str]],
     ) -> list[dict[str, pulumi.Input[str]]]:
         """Build the ECS secrets mapping used by both services."""
+        if self._runtime_secrets is not None:
+            return self._runtime_secrets.ecs_secrets()
         return [
             {
                 "name": "MONGODB_URL",

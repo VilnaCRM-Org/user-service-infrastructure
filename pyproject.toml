@@ -70,6 +70,7 @@ known_first_party = [
     "poc_registry_phase_entrypoint",
     "poc_registry_plan",
     "poc_registry_runner",
+    "poc_scheduled_registry_drift",
     "poc_secret_observation",
     "poc_source_artifact",
     "pulumi_ci_guardrails",

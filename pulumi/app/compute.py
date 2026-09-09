@@ -10,7 +10,12 @@ import pulumi_aws as aws
 
 import pulumi
 from app.data import DataPlane
-from app.environment import StackSettings, build_resource_name, validate_runtime_roles
+from app.environment import (
+    StackSettings,
+    build_resource_name,
+    validate_health_check_runtime,
+    validate_runtime_roles,
+)
 from app.messaging import MessagingPlane
 from app.network import NetworkPlane
 from app.registry import RegistryOutputs
@@ -50,6 +55,7 @@ class ComputePlane(pulumi.ComponentResource):
         """Build preview-safe outputs or provision the managed compute plane."""
         if settings.is_managed:
             validate_runtime_roles(settings.runtime, settings.environment)
+            validate_health_check_runtime(settings.runtime, settings.queues)
         super().__init__("user-service-infrastructure:compute:Plane", name, None, opts)
 
         self.outputs = (
@@ -460,7 +466,7 @@ class ComputePlane(pulumi.ComponentResource):
                 messaging,
                 include_worker_name=False,
             ),
-            secrets=self._common_secrets(data, messaging, runtime_secret_arns),
+            secrets=self._common_secrets(data, runtime_secret_arns),
             port_mappings=[
                 {
                     "containerPort": settings.capacity.container_port,
@@ -498,7 +504,7 @@ class ComputePlane(pulumi.ComponentResource):
                 messaging,
                 include_worker_name=True,
             ),
-            secrets=self._common_secrets(data, messaging, runtime_secret_arns),
+            secrets=self._common_secrets(data, runtime_secret_arns),
             port_mappings=None,
         )
 
@@ -567,10 +573,6 @@ class ComputePlane(pulumi.ComponentResource):
             {
                 "name": "AWS_SQS_ENDPOINT_BASE",
                 "value": settings.runtime.aws_sqs_endpoint_base,
-            },
-            {
-                "name": "AWS_SQS_KEY",
-                "value": messaging.outputs.health_check_access_key_id,
             },
             {"name": "LOCALSTACK_PORT", "value": settings.runtime.aws_sqs_port},
             {
@@ -669,7 +671,6 @@ class ComputePlane(pulumi.ComponentResource):
     def _common_secrets(
         self,
         data: DataPlane,
-        messaging: MessagingPlane,
         runtime_secret_arns: dict[str, pulumi.Input[str]],
     ) -> list[dict[str, pulumi.Input[str]]]:
         """Build the ECS secrets mapping used by both services."""
@@ -681,10 +682,6 @@ class ComputePlane(pulumi.ComponentResource):
             {"name": "REDIS_URL", "valueFrom": data.outputs.redis_url_secret_arn},
             {"name": "APP_SECRET", "valueFrom": runtime_secret_arns["app-secret"]},
             {"name": "MAILER_DSN", "valueFrom": runtime_secret_arns["mailer-dsn"]},
-            {
-                "name": "AWS_SQS_SECRET",
-                "valueFrom": messaging.outputs.health_check_secret_arn,
-            },
             {
                 "name": "OAUTH_ENCRYPTION_KEY",
                 "valueFrom": runtime_secret_arns["oauth-encryption-key"],

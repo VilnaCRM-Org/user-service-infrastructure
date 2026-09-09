@@ -21,13 +21,14 @@ permissions:
 
 jobs:
   scheduled_test_drift:
-    name: Scheduled Test Drift
+    name: Scheduled Test Registry Diagnostic
     if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
     environment: test-drift
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: read
+      actions: read
       id-token: write
       pull-requests: read
     env:
@@ -36,25 +37,22 @@ jobs:
       group: pulumi-state-${{ github.repository }}-test-test
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Check out trusted credential helper
+      - name: Check out trusted registry diagnostic
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           ref: ${{ github.sha }}
           path: .trusted
           persist-credentials: false
 
-      - name: Verify trusted scheduled revision before credentials
+      - name: Set up trusted registry runtime before credentials
+        uses: ./.trusted/.github/actions/setup-poc-runtime
+
+      - name: Verify native scheduled run and installed contract before credentials
         env:
-          EXPECTED_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          test "${GITHUB_EVENT_NAME}" = schedule
-          test "${GITHUB_REF}" = refs/heads/main
-          test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_scheduled_registry_drift.py" verify
 
       - name: Load test AWS CI configuration
         id: ci_config
@@ -67,7 +65,7 @@ jobs:
           purpose: Scheduled test drift
           required-keys: >-
             AWS_ACCOUNT_ID,AWS_REGION,AWS_DRIFT_ROLE_ARN,
-            PULUMI_BACKEND_URL,PULUMI_SECRETS_PROVIDER,PULUMI_DRIFT_STACKS
+            PULUMI_BACKEND_URL,PULUMI_SECRETS_PROVIDER
 
       - name: Configure AWS drift credentials via OIDC
         uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
@@ -77,11 +75,12 @@ jobs:
           aws-region: ${{ steps.ci_config.outputs.aws-region }}
           allowed-account-ids: ${{ vars.AWS_TEST_ACCOUNT_ID }}
 
-      - name: Start development environment
-        run: make start
-
-      - name: Run scheduled test drift detection
-        run: make test-drift
+      - name: Check installed TEST registry without phase acceptance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_scheduled_registry_drift.py" check
 
   scheduled_prod_drift:
     name: Scheduled Prod Drift

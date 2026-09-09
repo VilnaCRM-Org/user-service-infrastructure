@@ -1,4 +1,4 @@
-"""SQS queues and narrowly scoped health-check credentials."""
+"""SQS queues consumed through centrally owned ECS task roles."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Optional
 import pulumi_aws as aws
 
 import pulumi
-from app.environment import StackSettings, build_resource_name
+from app.environment import StackSettings, validate_health_check_runtime
 
 __all__ = ["MessagingPlane"]
 
@@ -20,12 +20,10 @@ class MessagingOutputs:
 
     queue_urls: dict[str, pulumi.Input[str]]
     queue_arns: dict[str, pulumi.Input[str]]
-    health_check_access_key_id: pulumi.Input[str]
-    health_check_secret_arn: pulumi.Input[str]
 
 
 class MessagingPlane(pulumi.ComponentResource):
-    """Provision application queues and the health-check IAM user."""
+    """Provision application queues, including the read-only health-check target."""
 
     outputs: MessagingOutputs
 
@@ -37,6 +35,8 @@ class MessagingPlane(pulumi.ComponentResource):
         opts: Optional[pulumi.ResourceOptions] = None,
     ) -> None:
         """Build preview-safe outputs or provision managed queue resources."""
+        if settings.is_managed:
+            validate_health_check_runtime(settings.runtime, settings.queues)
         super().__init__(
             "user-service-infrastructure:messaging:Plane",
             name,
@@ -53,13 +53,11 @@ class MessagingPlane(pulumi.ComponentResource):
             {
                 "queueUrls": self.outputs.queue_urls,
                 "queueArns": self.outputs.queue_arns,
-                "healthCheckAccessKeyId": self.outputs.health_check_access_key_id,
-                "healthCheckSecretArn": self.outputs.health_check_secret_arn,
             }
         )
 
     def _build_preview_outputs(self, settings: StackSettings) -> MessagingOutputs:
-        """Return deterministic queue URLs and secret placeholders."""
+        """Return deterministic queue URLs without credentials."""
         queue_names = self._queue_names(settings)
         queue_urls = {
             key: pulumi.Output.from_input(
@@ -76,17 +74,10 @@ class MessagingPlane(pulumi.ComponentResource):
         return MessagingOutputs(
             queue_urls=queue_urls,
             queue_arns=queue_arns,
-            health_check_access_key_id=pulumi.Output.from_input(
-                build_resource_name(settings.stack_tag, "healthcheck-key")
-            ),
-            health_check_secret_arn=pulumi.Output.from_input(
-                f"arn:aws:secretsmanager:{settings.region}:preview:"
-                f"{build_resource_name(settings.stack_tag, 'healthcheck-secret')}"
-            ),
         )
 
     def _build_managed_outputs(self, settings: StackSettings) -> MessagingOutputs:
-        """Create queue topology plus a dedicated health-check IAM user."""
+        """Create the six queues without service-owned IAM or credentials."""
         failed_send_email = self._create_queue(
             logical_name="failed-send-email",
             queue_name=settings.queues.failed_send_email,
@@ -139,40 +130,9 @@ class MessagingPlane(pulumi.ComponentResource):
             "healthCheck": health_check.arn,
         }
 
-        health_check_user = aws.iam.User(
-            "user-service-healthcheck-user",
-            name=build_resource_name(settings.stack_tag, "healthcheck", max_length=64),
-            opts=pulumi.ResourceOptions(parent=self),
-        )
-        aws.iam.UserPolicy(
-            "user-service-healthcheck-policy",
-            user=health_check_user.name,
-            policy=health_check.arn.apply(self._health_check_policy_json),
-            opts=pulumi.ResourceOptions(parent=self),
-        )
-
-        access_key = aws.iam.AccessKey(
-            "user-service-healthcheck-access-key",
-            user=health_check_user.name,
-            opts=pulumi.ResourceOptions(parent=self),
-        )
-        health_check_secret = aws.secretsmanager.Secret(
-            "user-service-healthcheck-secret",
-            description="Static SQS secret used only by the app health-check client.",
-            opts=pulumi.ResourceOptions(parent=self),
-        )
-        aws.secretsmanager.SecretVersion(
-            "user-service-healthcheck-secret-version",
-            secret_id=health_check_secret.id,
-            secret_string=access_key.secret,
-            opts=pulumi.ResourceOptions(parent=self),
-        )
-
         return MessagingOutputs(
             queue_urls=queue_urls,
             queue_arns=queue_arns,
-            health_check_access_key_id=access_key.id,
-            health_check_secret_arn=health_check_secret.arn,
         )
 
     def _create_queue(
@@ -216,23 +176,4 @@ class MessagingPlane(pulumi.ComponentResource):
                     "maxReceiveCount": 3,
                 }
             )
-        )
-
-    def _health_check_policy_json(self, queue_arn: str) -> str:
-        """Limit the health-check IAM user to readonly queue access."""
-        return json.dumps(
-            {
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Sid": "HealthCheckQueueAccess",
-                        "Effect": "Allow",
-                        "Action": [
-                            "sqs:GetQueueAttributes",
-                            "sqs:GetQueueUrl",
-                        ],
-                        "Resource": [queue_arn],
-                    }
-                ],
-            }
         )

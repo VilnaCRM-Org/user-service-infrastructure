@@ -47,3 +47,16 @@ complete saved plan immediately before replay. Its postcondition requires the
 complete graph. Post-apply drift uses the preview identity and requires every
 resource operation to be unchanged. These source controls still require trusted
 installation and live acceptance; this document does not claim either is complete.
+
+The scheduled TEST job uses a separate diagnostic entrypoint. It verifies the
+native GitHub schedule run and current main revision before AWS configuration,
+then uses the central Drift identity to check the complete seven-resource graph.
+Missing or partial state fails before preview. A successful no-change result is
+diagnostic only: it cannot authorize initialization, a workload transition or
+promotion. The scheduled PROD route remains outside this TEST registry change.
+
+Managed workload settings require explicit `executionRoleArn` and `taskRoleArn`
+matching the protected account, project and environment. Compute consumes those
+central identities and does not create ECS roles or policies. Their existence,
+trust, effective permissions and PassRole authorization must still be verified
+through the controller before enabling the workload phase.

@@ -55,6 +55,11 @@ def _git(*arguments):
 def _trusted_root():
     """Bind the executed checkout and interpreter to this main workflow revision."""
     _, sha = artifact._context(os.environ)
+    return _verify_checkout(sha)
+
+
+def _verify_checkout(sha, *, extra_paths=()):
+    """Verify installed bytes after the caller authenticates its own run context."""
     _require(_git("rev-parse", "--show-toplevel").decode().strip() == str(ROOT))
     _require(_git("rev-parse", "HEAD").decode().strip() == sha)
     _require(
@@ -65,10 +70,9 @@ def _trusted_root():
             f"git@github.com:{artifact.REPOSITORY}.git",
         }
     )
-    _git("diff", "--quiet", "--no-ext-diff", "HEAD", "--", *TRUSTED_PATHS)
-    _require(
-        not _git("ls-files", "--others", "--exclude-standard", "--", *TRUSTED_PATHS)
-    )
+    paths = (*TRUSTED_PATHS, *extra_paths)
+    _git("diff", "--quiet", "--no-ext-diff", "HEAD", "--", *paths)
+    _require(not _git("ls-files", "--others", "--exclude-standard", "--", *paths))
     _require(Path(sys.prefix).resolve() == (ROOT / ".venv").resolve())
     _require((ROOT / ".venv/bin/python").is_file())
     return sha
@@ -87,6 +91,10 @@ def _review(source):
 
 
 def _child_environment(source):
+    return _runtime_environment(source["source"]["head_sha"])
+
+
+def _runtime_environment(head_sha):
     """Only installed paths configure the runtime; GitHub tokens stay in parent."""
     removed = {
         "GH_TOKEN",
@@ -107,8 +115,8 @@ def _child_environment(source):
         {
             "PULUMI_BACKEND_URL": f"s3://{backend.BUCKET}",
             "PULUMI_SECRETS_PROVIDER": backend.PROVIDER,
-            "PULUMI_COMMIT_SHA": source["source"]["head_sha"],
-            "PULUMI_EXPECTED_SHA": source["source"]["head_sha"],
+            "PULUMI_COMMIT_SHA": head_sha,
+            "PULUMI_EXPECTED_SHA": head_sha,
             "PULUMI_SKIP_UPDATE_CHECK": "true",
             "PULUMI_PYTHON_CMD": str(ROOT / ".venv/bin/python"),
             "POLICY_VENV": str(ROOT / ".venv"),

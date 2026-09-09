@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import uuid
@@ -22,7 +21,6 @@ from app.environment import (
     build_resource_name,
     resolve_deployment_mode,
 )
-from app.messaging import MessagingPlane
 from pulumi.automation.errors import RuntimeError as AutomationRuntimeError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -368,7 +366,6 @@ def test_component_helpers_cover_listener_and_policy_paths() -> None:
     # These checks bypass full constructors on purpose so coverage reaches helper
     # branches that the public stack lifecycle does not expose directly.
     compute = object.__new__(ComputePlane)
-    messaging = object.__new__(MessagingPlane)
 
     with pytest.raises(
         ValueError, match="^Managed compute requires caller-owned registry outputs$"
@@ -402,13 +399,6 @@ def test_component_helpers_cover_listener_and_policy_paths() -> None:
         )
     assert listener["protocol"] == "HTTP"
     assert listener["default_actions"][0].type == "forward"
-
-    health_policy = json.loads(messaging._health_check_policy_json("queue-arn"))
-    assert health_policy["Statement"][0]["Resource"] == ["queue-arn"]
-    assert health_policy["Statement"][0]["Action"] == [
-        "sqs:GetQueueAttributes",
-        "sqs:GetQueueUrl",
-    ]
 
 
 @pytest.mark.parametrize(

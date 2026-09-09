@@ -172,6 +172,7 @@ def _operation_identity(operation):
     identities = {
         "plan": ("AWS_PREVIEW_ROLE_ARN", "Preview", "preview"),
         "up-plan": ("AWS_APPLY_ROLE_ARN", "Apply", "apply"),
+        "scheduled-drift": ("AWS_DRIFT_ROLE_ARN", "Drift", "drift"),
     }
     _require(type(operation) is str and operation in identities)
     return identities[operation]
@@ -180,6 +181,12 @@ def _operation_identity(operation):
 def _target(source, operation="plan"):
     """Cross-check fixed installed constants with authenticated source and loader."""
     _require(source["request"]["target_environment"] == "test")
+    _require(operation in ("plan", "up-plan"))
+    _target_coordinates(operation)
+
+
+def _target_coordinates(operation):
+    """Check the same finite target for independently admitted read-only runs."""
     role_key, role_kind, _ = _operation_identity(operation)
     expected = {
         "AWS_ACCOUNT_ID": ACCOUNT,
@@ -208,9 +215,14 @@ def _caller(aws, operation="plan"):
     _, role_kind, purpose = _operation_identity(operation)
     run_id = os.environ["GITHUB_RUN_ID"]
     caller = aws("sts", "get-caller-identity", {})
+    session = (
+        f"gha-scheduled-test-drift-{run_id}"
+        if operation == "scheduled-drift"
+        else f"gha-pr-test-{purpose}-{run_id}"
+    )
     arn = (
         f"arn:aws:sts::{ACCOUNT}:assumed-role/GitHubCi{role_kind}-{PROJECT}-test/"
-        f"gha-pr-test-{purpose}-{run_id}"
+        f"{session}"
     )
     _require(caller.get("Account") == ACCOUNT and caller.get("Arn") == arn)
     return arn
@@ -401,8 +413,24 @@ def _inventory(raw, head):
 
 def capture_backend(source, *, aws=None, operation="plan") -> PrivateBackendCapture:
     """Return private rows only after all native end-of-observation rechecks."""
-    aws = aws or aws_read
     _target(source, operation)
+    return _capture_backend(
+        source["source"]["contract_sha256"], aws or aws_read, operation
+    )
+
+
+def capture_scheduled_backend(contract_sha256, *, aws=None) -> PrivateBackendCapture:
+    """Observe with the scheduled Drift identity; this never admits a transition."""
+    _require(
+        type(contract_sha256) is str
+        and re.fullmatch(r"[0-9a-f]{64}", contract_sha256) is not None
+    )
+    _target_coordinates("scheduled-drift")
+    return _capture_backend(contract_sha256, aws or aws_read, "scheduled-drift")
+
+
+def _capture_backend(contract_sha256, aws, operation) -> PrivateBackendCapture:
+    """Share native observations without conflating PR and scheduled authority."""
     caller = _caller(aws, operation)
     _require(
         aws("s3api", "get-bucket-versioning", _bucket_args()).get("Status") == "Enabled"
@@ -442,7 +470,7 @@ def capture_backend(source, *, aws=None, operation="plan") -> PrivateBackendCapt
         "key": CHECKPOINT,
         "kms_key_arn": key_arn,
         "backend_metadata": meta_head,
-        "source_contract_sha256": source["source"]["contract_sha256"],
+        "source_contract_sha256": contract_sha256,
         "state": state,
         "prior_authority": "not-evaluated",
     }

@@ -15,7 +15,9 @@ observer = importlib.import_module("poc_backend_observer")
 prepared = source_tests.prepared
 
 
-@pytest.mark.parametrize("operation", ["up", "destroy", "drift", "prod", "", None])
+@pytest.mark.parametrize(
+    "operation", ["up", "destroy", "drift", "scheduled-drift", "prod", "", None]
+)
 def test_capture_rejects_unknown_operation_before_aws(native, operation):
     with pytest.raises(ValueError):
         observer.capture_backend(
@@ -45,6 +47,87 @@ def test_apply_capture_requires_exact_apply_role_and_session(native, monkeypatch
     assert captured.resources
     with pytest.raises(ValueError):
         observer.capture_backend(native["source"], aws=native["aws"], operation="plan")
+
+
+@pytest.fixture
+def scheduled_native(native, monkeypatch):
+    monkeypatch.setenv(
+        "AWS_DRIFT_ROLE_ARN",
+        f"arn:aws:iam::{observer.ACCOUNT}:role/GitHubCiDrift-{observer.PROJECT}-test",
+    )
+    native["caller"]["Arn"] = (
+        f"arn:aws:sts::{observer.ACCOUNT}:assumed-role/"
+        f"GitHubCiDrift-{observer.PROJECT}-test/gha-scheduled-test-drift-101"
+    )
+    return native
+
+
+def test_scheduled_capture_uses_native_drift_without_pr_source(scheduled_native):
+    captured = observer.capture_scheduled_backend("a" * 64, aws=scheduled_native["aws"])
+    assert captured.summary["source_contract_sha256"] == "a" * 64
+    assert captured.summary["prior_authority"] == "not-evaluated"
+    assert captured.resources
+    assert [call[1] for call in scheduled_native["calls"]].count(
+        "get-caller-identity"
+    ) == 2
+    assert [call[1] for call in scheduled_native["calls"]].count(
+        "get-bucket-versioning"
+    ) == 2
+    assert all(
+        call[1] not in ("put-object", "delete-object", "decrypt")
+        for call in scheduled_native["calls"]
+    )
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        "gha-pr-test-drift-101",
+        "gha-scheduled-test-drift-102",
+        "gha-scheduled-prod-drift-101",
+    ],
+)
+def test_scheduled_caller_session_is_exact(scheduled_native, suffix):
+    scheduled_native["caller"]["Arn"] = (
+        scheduled_native["caller"]["Arn"].rsplit("/", 1)[0] + "/" + suffix
+    )
+    with pytest.raises(ValueError):
+        observer.capture_scheduled_backend("a" * 64, aws=scheduled_native["aws"])
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("AWS_DRIFT_ROLE_ARN", "foreign"),
+        ("AWS_ACCOUNT_ID", "933245420672"),
+        ("AWS_REGION", "eu-west-1"),
+    ],
+)
+def test_scheduled_role_and_account_pins_precede_cloud(
+    scheduled_native, monkeypatch, key, value
+):
+    monkeypatch.setenv(key, value)
+    with pytest.raises(ValueError):
+        observer.capture_scheduled_backend("a" * 64, aws=scheduled_native["aws"])
+    assert scheduled_native["calls"] == []
+
+
+@pytest.mark.parametrize("digest", [None, True, "A" * 64, "a" * 63, "../source"])
+def test_scheduled_digest_never_accepts_unclosed_source(scheduled_native, digest):
+    with pytest.raises(ValueError):
+        observer.capture_scheduled_backend(digest, aws=scheduled_native["aws"])
+    assert scheduled_native["calls"] == []
+
+
+def test_scheduled_capture_rechecks_caller_and_versioning(scheduled_native):
+    def raced(service, operation, arguments, output=None):
+        result = scheduled_native["aws"](service, operation, arguments, output)
+        if operation == "get-caller-identity" and len(scheduled_native["calls"]) > 1:
+            result["Arn"] = result["Arn"].replace("GitHubCiDrift", "GitHubCiApply")
+        return result
+
+    with pytest.raises(ValueError):
+        observer.capture_scheduled_backend("a" * 64, aws=raced)
 
 
 @pytest.fixture

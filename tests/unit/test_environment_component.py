@@ -31,6 +31,7 @@ from app.environment import (
     resolve_stack_settings,
     validate_runtime_roles,
 )
+from app.messaging import MessagingPlane
 from app.stack import UserServiceStack
 from pulumi.runtime import mocks, settings, stack
 
@@ -1034,7 +1035,6 @@ def test_compute_common_environment_uses_runtime_app_flags() -> None:
     settings_model.social.twitter_redirect_uri = "https://users.example.com/twitter"
 
     messaging = Mock()
-    messaging.outputs.health_check_access_key_id = "access-key-id"
     messaging.outputs.queue_urls = {
         "sendEmail": "https://queue/send-email",
         "failedSendEmail": "https://queue/failed-send-email",
@@ -1552,14 +1552,28 @@ def test_registry_full_stack_owner_and_images() -> None:
         for resource in tasks
     )
     assert not any(
-        resource["type"]
-        in {
-            "aws:iam/role:Role",
-            "aws:iam/rolePolicy:RolePolicy",
-            "aws:iam/rolePolicyAttachment:RolePolicyAttachment",
-        }
-        for resource in recorder.resources
+        str(resource["type"]).startswith("aws:iam/") for resource in recorder.resources
     )
+    assert not any(
+        "healthcheck-secret" in str(row["name"]) for row in recorder.resources
+    )
+    queues = [row for row in recorder.resources if row["type"] == "aws:sqs/queue:Queue"]
+    assert len(queues) == 6
+    assert "health-check-queue" in {row["inputs"]["name"] for row in queues}
+    for resource in tasks:
+        container = json.loads(resource["inputs"]["containerDefinitions"])[0]
+        environment = {row["name"]: row["value"] for row in container["environment"]}
+        secret_names = {row["name"] for row in container["secrets"]}
+        assert "AWS_SQS_KEY" not in environment
+        assert "AWS_SQS_SECRET" not in secret_names
+        assert environment["AWS_SQS_REGION"] == "eu-central-1"
+        assert environment["AWS_SQS_VERSION"] == "latest"
+        assert environment["APP_ENV"] == "prod"
+        assert all(
+            value.endswith("?region=eu-central-1&auto_setup=false")
+            for name, value in environment.items()
+            if name.endswith("TRANSPORT_DSN")
+        )
     images = {
         json.loads(resource["inputs"]["containerDefinitions"])[0]["image"]
         for resource in tasks
@@ -1701,3 +1715,91 @@ def test_direct_managed_compute_rejects_roles_before_component_registration():
             )
         finally:
             registration.assert_not_called()
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("appEnv", "test"),
+        ("appEnv", "dev"),
+        ("appEnv", ""),
+        ("healthCheckQueueName", "foreign-health"),
+    ],
+)
+def test_managed_health_contract_rejects_incompatible_application_config(
+    field, value, dry_run
+):
+    """Reject configurations requiring static credentials or an unbound queue name."""
+    config = {
+        "deploymentMode": "managed",
+        "accessLogsBucketName": "synthetic-logs",
+        "executionRoleArn": CENTRAL_EXECUTION_ROLE,
+        "taskRoleArn": CENTRAL_TASK_ROLE,
+        field: value,
+    }
+    recorder = RecordingMocks()
+
+    def program():
+        with pytest.raises(ValueError, match="Managed SQS health checks"):
+            UserServiceStack("invalid-health")
+
+    with (
+        mocked_pulumi_context(
+            config, aws_config_values={"allowedAccountIds": ["123456789012"]}
+        ),
+        patch("app.environment.pulumi.runtime.is_dry_run", return_value=dry_run),
+    ):
+        _run_pulumi_program(program, test_mocks=recorder)
+    assert not any(str(row["type"]).startswith("aws:") for row in recorder.resources)
+
+
+@pytest.mark.parametrize("component", [MessagingPlane, ComputePlane])
+def test_direct_health_consumers_validate_before_component_registration(component):
+    """Direct managed callers cannot bypass the production health-check contract."""
+    runtime = SimpleNamespace(
+        execution_role_arn=CENTRAL_EXECUTION_ROLE,
+        task_role_arn=CENTRAL_TASK_ROLE,
+        app_env="test",
+    )
+    config = SimpleNamespace(
+        is_managed=True,
+        runtime=runtime,
+        environment="dev",
+        queues=SimpleNamespace(health_check="health-check-queue"),
+    )
+    arguments = (
+        {}
+        if component is MessagingPlane
+        else {"network": Mock(), "data": Mock(), "messaging": Mock()}
+    )
+    with (
+        mocked_pulumi_context(
+            aws_config_values={"allowedAccountIds": ["123456789012"]},
+            project_name="user-service-infrastructure",
+        ),
+        patch("pulumi.ComponentResource.__init__") as registration,
+        pytest.raises(ValueError, match="Managed SQS health checks"),
+    ):
+        try:
+            component("plane", settings=config, **arguments)
+        finally:
+            registration.assert_not_called()
+
+
+def test_offline_preview_keeps_local_app_and_queue_configuration():
+    """Local preview can model local application settings without creating AWS IAM."""
+    recorder = RecordingMocks()
+
+    def program():
+        UserServiceStack("offline-health")
+
+    with mocked_pulumi_context(
+        {
+            "deploymentMode": "preview",
+            "appEnv": "test",
+            "healthCheckQueueName": "local-health",
+        }
+    ):
+        _run_pulumi_program(program, test_mocks=recorder)
+    assert not any(str(row["type"]).startswith("aws:") for row in recorder.resources)

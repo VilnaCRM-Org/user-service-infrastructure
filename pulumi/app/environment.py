@@ -160,6 +160,17 @@ def validate_runtime_roles(runtime: RuntimeSettings, environment: str) -> None:
         raise ValueError("Managed runtime roles must match the central role contract.")
 
 
+def validate_health_check_runtime(
+    runtime: RuntimeSettings, queues: QueueSettings
+) -> None:
+    """Require the application's production role-chain and fixed health queue."""
+    if runtime.app_env != "prod" or queues.health_check != "health-check-queue":
+        raise ValueError(
+            "Managed SQS health checks require appEnv=prod and "
+            "healthCheckQueueName=health-check-queue."
+        )
+
+
 @dataclass(frozen=True)
 class SocialProviderSettings:
     """OAuth provider identifiers and callback URLs."""
@@ -780,6 +791,7 @@ def resolve_stack_settings(environment_settings: EnvironmentSettings) -> StackSe
 
     if deployment_mode == "managed":
         validate_runtime_roles(runtime, environment)
+        validate_health_check_runtime(runtime, queues)
 
     social = SocialProviderSettings(
         github_client_id=resolve_config_value(

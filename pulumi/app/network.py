@@ -167,7 +167,7 @@ class NetworkPlane(pulumi.ComponentResource):
                 f"user-service-nat-{index + 1}",
                 allocation_id=eip.id,
                 subnet_id=public_subnet.id,
-                opts=pulumi.ResourceOptions(parent=self),
+                opts=pulumi.ResourceOptions(parent=self, depends_on=[internet_gateway]),
             )
             nat_gateways.append(nat_gateway)
 

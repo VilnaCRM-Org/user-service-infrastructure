@@ -58,12 +58,89 @@ jobs:
         id: resolve
         run: python3 scripts/pulumi_command_preflight.py --service
 
+  poc_prepare_source:
+    name: Prepare TEST PoC Source Facts
+    needs:
+      - preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+      pull-requests: read
+    outputs:
+      artifact_id: ${{ steps.source_artifact.outputs.artifact-id }}
+      archive_sha256: ${{ steps.source_artifact.outputs.artifact-digest }}
+      source_sha256: ${{ steps.prepare.outputs.source_sha256 }}
+    steps:
+      - name: Require the TEST-only PoC source route
+        env:
+          TARGET_ENVIRONMENT: ${{ needs.preflight.outputs.target_environment }}
+        run: |
+          if [[ "${TARGET_ENVIRONMENT}" != test ]]; then
+            echo "error: PoC source preparation supports TEST only; PROD promotion is unavailable." >&2
+            exit 1
+          fi
+
+      - name: Check out immutable trusted source adapter
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install the pinned trusted Python runtime
+        env:
+          UV_PYTHON_PREFERENCE: only-managed
+          UV_NO_PROGRESS: "1"
+        run: |
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "${GITHUB_WORKFLOW_SHA}" = "${GITHUB_SHA}"
+          uv_directory="$(mktemp -d "${RUNNER_TEMP}/poc-source-uv.XXXXXX")"
+          uv_archive="${uv_directory}/uv.tar.gz"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            https://github.com/astral-sh/uv/releases/download/0.9.21/uv-x86_64-unknown-linux-gnu.tar.gz \
+            --output "${uv_archive}"
+          echo "0a1ab27383c28ef1c041f85cbbc609d8e3752dfb4b238d2ad97b208a52232baf  ${uv_archive}" \
+            | sha256sum --check --status
+          tar -xzf "${uv_archive}" -C "${uv_directory}" --strip-components=1
+          "${uv_directory}/uv" sync --frozen --no-dev --python 3.11
+
+      - name: Prepare authenticated source facts without phase admission
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_PULL_REQUEST_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          REQUEST_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
+          REQUEST_COMMENT_ID: ${{ needs.preflight.outputs.comment_id }}
+          REQUEST_SOURCE_RUN_ID: ${{ needs.preflight.outputs.source_run_id }}
+          REQUEST_COMMAND: ${{ needs.preflight.outputs.command }}
+          REQUEST_TARGET_ENVIRONMENT: ${{ needs.preflight.outputs.target_environment }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/poc-phase-source"
+          "${GITHUB_WORKSPACE}/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/scripts/poc_phase_source_adapter.py" \
+            > "${RUNNER_TEMP}/poc-phase-source/source.json"
+          source_sha256="$(sha256sum "${RUNNER_TEMP}/poc-phase-source/source.json" | cut -d ' ' -f 1)"
+          echo "source_sha256=${source_sha256}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload immutable same-run source facts
+        id: source_artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: poc-phase-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/poc-phase-source/source.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 7
+
   test_preview:
     name: Test Preview
     environment: test-preview
     runs-on: ubuntu-latest
     needs:
       - preflight
+      - poc_prepare_source
     timeout-minutes: 25
     permissions:
       contents: read
@@ -1175,6 +1252,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - preflight
+      - poc_prepare_source
       - platform_promotion
       - test_preview
       - test_destructive_diff
@@ -1207,6 +1285,7 @@ jobs:
             echo "| Stage | Result |"
             echo "| --- | --- |"
             echo "| Preflight | \`${{ needs.preflight.result }}\` |"
+            echo "| TEST PoC source facts | \`${{ needs.poc_prepare_source.result }}\` |"
             echo "| Test preview | \`${{ needs.test_preview.result }}\` |"
             echo "| Test destructive diff | \`${{ needs.test_destructive_diff.result }}\` |"
             echo "| Test apply | \`${{ needs.test_apply.result }}\` |"
@@ -1216,6 +1295,7 @@ jobs:
             echo "| Production apply | \`${{ needs.prod_apply.result }}\` |"
             echo "| Production post-apply drift | \`${{ needs.prod_post_apply_drift.result }}\` |"
             echo
+            echo "PoC source preparation supports TEST only; PROD requests are rejected before cloud execution."
             echo "Production stages are gated behind a successful test apply and test post-apply drift check for the same PR head SHA."
           } > "${body_file}"
 

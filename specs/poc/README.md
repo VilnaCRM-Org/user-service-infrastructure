@@ -10,9 +10,9 @@ The central references identify proposed source, not completed installation:
 - `inventory_sha256` is the canonical hash of bootstrap's proposed
   `pulumi/seed/catalogs/poc-runtime-test.json` (local source commit `d41c019`).
 - `seed_enrollment_revision` pins the proposed TEST policy catalog in bootstrap
-  source commit `82cb347`, including the bounded ECR capability and bucket
-  versioning read for preview and apply. It is not evidence that those policies
-  have been installed.
+  source commit `4a0bd14`, including the bounded ECR capability and bucket
+  versioning read for preview, apply and scheduled drift. It is not evidence that
+  those policies have been installed.
 - The publisher role, workflow and environment are declared by that inventory.
   Registry creation does not establish their existence or activate image publishing.
 

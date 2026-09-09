@@ -42,7 +42,7 @@
   "central": {
     "owner": "central-governance",
     "inventory_sha256": "23d26bb7dcb097d8c2f66ee114346b63cafca1857125ea5ae81af83b44e4b4e9",
-    "seed_enrollment_revision": "4e29d3723711641a5f2d425598d2477d623199be0a6b920b4f5a5a37848469c6",
+    "seed_enrollment_revision": "8fc035d59e5e6622b9fc69336991f1ee83a9a2e035358acb7a7738f4b8790841",
     "publisher_role_arn": "arn:aws:iam::891377212104:role/user-service-test-ImagePublisher",
     "publisher_workflow_path": ".github/workflows/publish-poc-images.yml",
     "publisher_environment": "poc-test-images",

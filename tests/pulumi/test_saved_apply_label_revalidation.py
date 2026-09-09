@@ -60,6 +60,7 @@ def test_apply_reuses_matching_same_run_preview(path: Path, environment: str) ->
     assert "pull_request_number" in preview["with"]["name"]
     assert set(preview["with"]) == {"name", "path"}  # Default transport is this run.
     assert steps.index(preview) < steps.index(apply)
+    assert "/labels" not in apply["run"]
     assert (
         apply["run"]
         .rstrip()
@@ -86,13 +87,13 @@ def test_apply_reuses_matching_same_run_preview(path: Path, environment: str) ->
     ("case", "operation", "labels", "expected"),
     [
         ("removed", "delete", [], False),
-        ("retained", "delete", [{"name": "allow-destructive-infra-change"}], True),
+        ("retained", "delete", [{"name": "allow-destructive-infra-change"}], False),
         ("nondestructive", "same", [], True),
         (
             "second-page",
             "delete",
             [{"name": "ordinary"}] * 30 + [{"name": "allow-destructive-infra-change"}],
-            True,
+            False,
         ),
         ("closed", "same", [], False),
         ("merged", "same", [], False),
@@ -100,7 +101,7 @@ def test_apply_reuses_matching_same_run_preview(path: Path, environment: str) ->
         ("base-moved", "same", [], False),
         ("retargeted", "same", [], False),
         ("pr-unavailable", "same", [], False),
-        ("labels-unavailable", "same", [], False),
+        ("labels-unavailable", "same", [], True),
         ("missing-preview", "same", [], False),
         ("empty-preview", "same", [], False),
     ],

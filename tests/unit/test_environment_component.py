@@ -1,22 +1,38 @@
-"""Unit tests for the EnvironmentSettings Pulumi component."""
+"""Unit tests for the user-service Pulumi configuration and stack components."""
 
 import asyncio
+import json
 import re
 import runpy
 import sys
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from unittest.mock import call, patch
+from types import SimpleNamespace
+from unittest.mock import Mock, call, patch
 
 import pytest
+from app.compute import ComputePlane
 from app.environment import (
     EnvironmentSettings,
+    NetworkSettings,
     _default_tags_from_parts,
+    _get_int,
+    _normalize_choice,
+    _normalize_csv,
+    _secret_value,
     _stack_metadata_from_outputs,
     _stack_tag_from_parts,
+    _validate_parallel_lengths,
+    build_resource_name,
+    has_aws_credentials,
     resolve_config_value,
+    resolve_deployment_mode,
+    resolve_stack_settings,
+    validate_runtime_roles,
 )
+from app.messaging import MessagingPlane
+from app.stack import UserServiceStack
 from pulumi.runtime import mocks, settings, stack
 
 import pulumi
@@ -24,26 +40,183 @@ import pulumi
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PULUMI_MAIN = PROJECT_ROOT / "pulumi" / "__main__.py"
 _PENDING_OUTPUT_ASSERTIONS: list[Callable[[], None]] = []
+CENTRAL_EXECUTION_ROLE = (
+    "arn:aws:iam::123456789012:role/user-service-infrastructure-dev-EcsExecution"
+)
+CENTRAL_TASK_ROLE = (
+    "arn:aws:iam::123456789012:role/user-service-infrastructure-dev-EcsTask"
+)
+
+
+def _resource_mock_outputs(
+    args: mocks.MockResourceArgs,
+    outputs: dict[str, object],
+    *,
+    resource_id: str,
+) -> tuple[str, dict[str, object]]:
+    """Inject computed provider outputs needed by the managed stack tests."""
+    resource_id, outputs = _apply_data_plane_outputs(
+        args,
+        outputs,
+        resource_id=resource_id,
+    )
+    resource_id, outputs = _apply_identity_outputs(
+        args,
+        outputs,
+        resource_id=resource_id,
+    )
+    resource_id, outputs = _apply_edge_outputs(
+        args,
+        outputs,
+        resource_id=resource_id,
+    )
+    outputs.setdefault("id", resource_id)
+    return resource_id, outputs
+
+
+def _apply_data_plane_outputs(
+    args: mocks.MockResourceArgs,
+    outputs: dict[str, object],
+    *,
+    resource_id: str,
+) -> tuple[str, dict[str, object]]:
+    """Provide computed outputs for data-plane resources."""
+    if args.typ.endswith("logGroup:LogGroup"):
+        outputs["arn"] = f"arn:aws:logs:eu-central-1:123456789012:log-group:{args.name}"
+    elif args.typ.endswith("cluster:Cluster") and "/docdb/" in args.typ:
+        outputs["arn"] = f"arn:aws:rds:eu-central-1:123456789012:cluster:{args.name}"
+        outputs["clusterIdentifier"] = args.inputs.get("clusterIdentifier", args.name)
+        outputs["endpoint"] = f"{args.name}.cluster.local"
+    elif args.typ.endswith("subnetGroup:SubnetGroup") and "/docdb/" in args.typ:
+        outputs["name"] = f"{args.name}-subnets"
+    elif args.typ.endswith("replicationGroup:ReplicationGroup"):
+        outputs["arn"] = (
+            "arn:aws:elasticache:eu-central-1:123456789012:replicationgroup:"
+            f"{args.name}"
+        )
+        outputs["primaryEndpointAddress"] = f"{args.name}.cache.local"
+    elif args.typ.endswith("subnetGroup:SubnetGroup") and "/elasticache/" in args.typ:
+        outputs["name"] = f"{args.name}-subnets"
+    return resource_id, outputs
+
+
+def _apply_identity_outputs(
+    args: mocks.MockResourceArgs,
+    outputs: dict[str, object],
+    *,
+    resource_id: str,
+) -> tuple[str, dict[str, object]]:
+    """Provide computed outputs for IAM, ECS, ECR, and Secrets Manager."""
+    if args.typ.endswith("cluster:Cluster") and "/ecs/" in args.typ:
+        outputs["arn"] = f"arn:aws:ecs:eu-central-1:123456789012:cluster/{args.name}"
+    elif args.typ.endswith("service:Service"):
+        outputs["arn"] = f"arn:aws:ecs:eu-central-1:123456789012:service/{args.name}"
+    elif args.typ.endswith("taskDefinition:TaskDefinition"):
+        outputs["arn"] = (
+            f"arn:aws:ecs:eu-central-1:123456789012:task-definition/{args.name}:1"
+        )
+    elif args.typ.endswith("repository:Repository"):
+        outputs["arn"] = (
+            f"arn:aws:ecr:eu-central-1:123456789012:repository/{outputs['name']}"
+        )
+        outputs["repositoryUrl"] = (
+            f"123456789012.dkr.ecr.eu-central-1.amazonaws.com/{outputs['name']}"
+        )
+    elif args.typ.endswith("accessKey:AccessKey"):
+        outputs["secret"] = pulumi.Output.secret("mock-secret-access-key")
+    elif args.typ.endswith("role:Role"):
+        outputs["arn"] = f"arn:aws:iam::123456789012:role/{outputs['name']}"
+    elif args.typ.endswith("user:User"):
+        outputs["arn"] = f"arn:aws:iam::123456789012:user/{outputs['name']}"
+    elif args.typ.endswith("secret:Secret"):
+        outputs["arn"] = (
+            f"arn:aws:secretsmanager:eu-central-1:123456789012:secret:{args.name}"
+        )
+    return resource_id, outputs
+
+
+def _apply_edge_outputs(
+    args: mocks.MockResourceArgs,
+    outputs: dict[str, object],
+    *,
+    resource_id: str,
+) -> tuple[str, dict[str, object]]:
+    """Provide computed outputs for network edge resources and queues."""
+    if args.typ.endswith("securityGroup:SecurityGroup"):
+        outputs["arn"] = (
+            f"arn:aws:ec2:eu-central-1:123456789012:security-group/{args.name}"
+        )
+    elif args.typ.endswith("listener:Listener"):
+        outputs["arn"] = (
+            "arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/"
+            f"{args.name}"
+        )
+    elif args.typ.endswith("loadBalancer:LoadBalancer"):
+        outputs["arn"] = (
+            "arn:aws:elasticloadbalancing:eu-central-1:123456789012:"
+            f"loadbalancer/app/{args.name}/123"
+        )
+        outputs["dnsName"] = f"{args.name}.elb.amazonaws.com"
+        outputs["zoneId"] = "ZTEST123"
+    elif args.typ.endswith("targetGroup:TargetGroup"):
+        outputs["arn"] = (
+            "arn:aws:elasticloadbalancing:eu-central-1:123456789012:"
+            f"targetgroup/{args.name}/123"
+        )
+    elif args.typ.endswith("queue:Queue"):
+        resource_id = (
+            f"https://sqs.eu-central-1.amazonaws.com/123456789012/{outputs['name']}"
+        )
+        outputs["arn"] = f"arn:aws:sqs:eu-central-1:123456789012:{outputs['name']}"
+    return resource_id, outputs
 
 
 class SimpleMocks(mocks.Mocks):
     """Pulumi mocks that echo inputs for unit testing."""
 
     def new_resource(self, args: mocks.MockResourceArgs) -> tuple[str, dict]:
-        """Return a synthetic resource ID and echo inputs."""
-        return f"{args.name}_id", args.inputs
+        """Return synthetic outputs for the resource types used in the stack."""
+        resource_id = f"{args.name}_id"
+        outputs = dict(args.inputs)
+        outputs.setdefault("name", args.inputs.get("name", args.name))
+        return _resource_mock_outputs(args, outputs, resource_id=resource_id)
 
     def call(self, args: mocks.MockCallArgs) -> dict:
         """Return inputs directly for mocked invoke calls."""
         return args.inputs
 
 
-def _run_pulumi_program(program: Callable[[], None]) -> None:
+class RecordingMocks(SimpleMocks):
+    """Pulumi mocks that retain resource inputs for focused assertions."""
+
+    def __init__(self) -> None:
+        """Initialize the in-memory resource call log."""
+        self.resources: list[dict[str, object]] = []
+
+    def new_resource(self, args: mocks.MockResourceArgs) -> tuple[str, dict]:
+        """Record resource inputs before delegating to the default mock outputs."""
+        self.resources.append(
+            {
+                "name": args.name,
+                "type": args.typ,
+                "inputs": dict(args.inputs),
+                "provider": args.provider,
+            }
+        )
+        return super().new_resource(args)
+
+
+def _run_pulumi_program(
+    program: Callable[[], None],
+    *,
+    test_mocks: mocks.Mocks | None = None,
+    captured_urns: list[str] | None = None,
+) -> None:
     """Execute a Pulumi program with mocks."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        test_mocks = SimpleMocks()
+        test_mocks = test_mocks or SimpleMocks()
         monitor = mocks.MockMonitor(test_mocks)
         mocks.set_mocks(
             test_mocks,
@@ -53,6 +226,8 @@ def _run_pulumi_program(program: Callable[[], None]) -> None:
         )
         loop.run_until_complete(stack.run_pulumi_func(program))
         loop.run_until_complete(asyncio.sleep(0))
+        if captured_urns is not None:
+            captured_urns.extend(sorted(monitor.resources))
         for assertion in _PENDING_OUTPUT_ASSERTIONS:
             assertion()
     finally:
@@ -80,15 +255,44 @@ def _assert_output_value(output: pulumi.Output, expected: object) -> None:
 
 @contextmanager
 def mocked_pulumi_context(
-    config_values: dict[str, object] | None = None, *, project_name: str | None = None
-) -> Iterator[object]:
+    config_values: dict[str, object] | None = None,
+    *,
+    aws_config_values: dict[str, object] | None = None,
+    credentials_present: bool = False,
+    project_name: str | None = None,
+) -> Iterator[Mock]:
     """Patch Pulumi config/project helpers for deterministic tests."""
     config_values = config_values or {}
+    aws_config_values = aws_config_values or {}
+
+    def config_methods(values: dict[str, object]) -> Mock:
+        config_mock = Mock()
+        config_mock.get.side_effect = lambda key, default=None: values.get(key, default)
+        config_mock.get_int.side_effect = lambda key: values.get(key)
+        config_mock.get_object.side_effect = lambda key: values.get(key)
+        config_mock.get_secret.side_effect = lambda key: (
+            pulumi.Output.secret(values[key]) if key in values else None
+        )
+        return config_mock
+
     with ExitStack() as stack:
         config_patch = stack.enter_context(patch("app.environment.pulumi.Config"))
-        config_instance = config_patch.return_value
-        config_instance.get.side_effect = lambda key, default=None: config_values.get(
-            key, default
+        config_instances = {
+            "": config_methods(config_values),
+            "aws": config_methods(aws_config_values),
+        }
+        config_patch.side_effect = lambda namespace="": config_instances[namespace]
+        stack.enter_context(
+            patch(
+                "app.environment.has_aws_credentials",
+                return_value=credentials_present,
+            )
+        )
+        stack.enter_context(
+            patch(
+                "app.stack.has_aws_credentials",
+                return_value=credentials_present,
+            )
         )
 
         if project_name is not None:
@@ -96,7 +300,7 @@ def mocked_pulumi_context(
                 patch("app.environment.pulumi.get_project", return_value=project_name)
             )
 
-        yield config_instance
+        yield config_instances[""]
 
 
 def test_stack_tag_combines_service_and_environment() -> None:
@@ -495,6 +699,232 @@ def test_component_registers_expected_type_token() -> None:
     )
 
 
+def test_build_resource_name_hashes_when_length_limit_is_applied() -> None:
+    """Keep AWS-length truncation deterministic for resource naming."""
+    short_name = build_resource_name("user-service-dev", "alb", max_length=32)
+    tiny_name = build_resource_name(
+        "user-service-with-a-very-long-environment-name",
+        "load-balancer",
+        max_length=6,
+    )
+
+    assert short_name.startswith("user-service-dev-alb")
+    assert len(tiny_name) == 6
+    assert build_resource_name(
+        "user-service-with-a-very-long-environment-name",
+        "load-balancer",
+        max_length=32,
+    ) == build_resource_name(
+        "user-service-with-a-very-long-environment-name",
+        "load-balancer",
+        max_length=32,
+    )
+    assert (
+        len(
+            build_resource_name(
+                "user-service-with-a-very-long-environment-name",
+                "load-balancer",
+                max_length=32,
+            )
+        )
+        <= 32
+    )
+
+
+def test_resolve_deployment_mode_handles_auto_and_explicit_modes() -> None:
+    """Keep deployment mode resolution stable for preview and managed paths."""
+    assert resolve_deployment_mode("auto", credentials_present=False) == "preview"
+    assert resolve_deployment_mode("auto", credentials_present=True) == "managed"
+    assert resolve_deployment_mode("preview", credentials_present=True) == "preview"
+    assert resolve_deployment_mode("managed", credentials_present=False) == "managed"
+
+
+def test_normalize_choice_rejects_unknown_values() -> None:
+    """Reject invalid enumerated config values with a clear error."""
+    with pytest.raises(
+        ValueError,
+        match=r"^deployment mode must be one of: managed, preview\.$",
+    ):
+        _normalize_choice(
+            "invalid",
+            allowed={"managed", "preview"},
+            label="deployment mode",
+        )
+
+
+def test_normalize_csv_ignores_empty_entries_and_falls_back_to_default() -> None:
+    """Trim CSV segments and preserve defaults when no concrete values remain."""
+    assert _normalize_csv(" one, ,two ", default=("default",)) == ("one", "two")
+    assert _normalize_csv(" , ", default=("default",)) == ("default",)
+
+
+def test_get_int_preserves_explicit_zero_and_defaults_missing_values() -> None:
+    """Return configured zero values instead of replacing them with defaults."""
+    config = Mock()
+    config.get_int.side_effect = lambda key: {"zero": 0}.get(key)
+
+    assert _get_int(config, "zero", default=42) == 0
+    assert _get_int(config, "missing", default=42) == 42
+
+
+def test_secret_value_supports_preview_plaintext_and_rejects_managed_plaintext() -> (
+    None
+):
+    """Allow preview-only plaintext while rejecting managed plain-text secrets."""
+    config_with_plaintext = Mock()
+    config_with_plaintext.get_secret.return_value = None
+    config_with_plaintext.get.return_value = "plaintext-secret"
+
+    with patch(
+        "app.environment.pulumi.Output.secret",
+        side_effect=lambda value: f"secret:{value}",
+    ):
+        plaintext_secret = _secret_value(
+            config_with_plaintext,
+            "appSecret",
+            managed=False,
+            preview_default="preview-secret",
+        )
+    assert plaintext_secret == "secret:plaintext-secret"
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"^appSecret is configured as plain text; re-set it with "
+            r"`pulumi -C pulumi config set --secret appSecret <value>` for "
+            r"managed "
+            r"deployments\.$"
+        ),
+    ):
+        _secret_value(
+            config_with_plaintext,
+            "appSecret",
+            managed=True,
+            preview_default="preview-secret",
+        )
+
+
+def test_secret_value_rejects_missing_managed_apply() -> None:
+    """Fail fast when managed deployments omit required secret inputs."""
+    config_without_secret = Mock()
+    config_without_secret.get_secret.return_value = None
+    config_without_secret.get.return_value = None
+
+    with patch("app.environment.pulumi.runtime.is_dry_run", return_value=False):
+        with pytest.raises(
+            ValueError,
+            match=(
+                r"^appSecret must be configured as a secret for managed "
+                r"deployments\.$"
+            ),
+        ):
+            _secret_value(
+                config_without_secret,
+                "appSecret",
+                managed=True,
+                preview_default="preview-secret",
+            )
+
+
+def test_validate_parallel_lengths_rejects_misaligned_subnet_sets() -> None:
+    """Reject network config where AZs and subnet partitions drift apart."""
+    with pytest.raises(
+        ValueError,
+        match=(
+            "^availability zones, public subnets, app subnets, and data subnets "
+            "must have the same number of entries\\.$"
+        ),
+    ):
+        _validate_parallel_lengths(
+            NetworkSettings(
+                vpc_cidr="10.42.0.0/16",
+                availability_zones=("eu-central-1a", "eu-central-1b"),
+                public_subnet_cidrs=("10.42.0.0/24",),
+                app_subnet_cidrs=("10.42.10.0/24", "10.42.11.0/24"),
+                data_subnet_cidrs=("10.42.20.0/24", "10.42.21.0/24"),
+            )
+        )
+
+
+def test_has_aws_credentials_detects_supported_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Detect both static-key and profile-based AWS credential contexts."""
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+
+    assert has_aws_credentials() is False
+
+    monkeypatch.setenv("AWS_PROFILE", "default")
+    assert has_aws_credentials() is True
+
+
+def test_resolve_stack_settings_defaults_to_preview_without_credentials() -> None:
+    """Resolve the full stack contract for the repo's no-credential CI path."""
+    captured: dict[str, object] = {}
+
+    def program() -> None:
+        """Resolve stack settings inside the mocked Pulumi runtime."""
+        env_settings = EnvironmentSettings("unit", environment="dev")
+        captured["settings"] = resolve_stack_settings(env_settings)
+
+    with mocked_pulumi_context(
+        {"apiBaseUrl": "https://user.dev.internal", "serviceName": "user-service"}
+    ):
+        _run_pulumi_program(program)
+
+    settings_model = captured["settings"]
+
+    assert settings_model is not None
+    assert settings_model.deployment_mode == "preview"
+    assert settings_model.region == "eu-central-1"
+    assert settings_model.runtime.execution_role_arn is None
+    assert settings_model.runtime.task_role_arn is None
+    assert settings_model.runtime.app_env == "prod"
+    assert settings_model.runtime.app_debug == "0"
+    assert settings_model.runtime.api_base_url == "https://user.dev.internal"
+    assert settings_model.runtime.api_url == "https://user.dev.internal"
+    assert (
+        settings_model.runtime.access_logs_bucket_name == "preview-only-alb-access-logs"
+    )
+    assert settings_model.queues.health_check == "health-check-queue"
+    assert settings_model.network.availability_zones == (
+        "eu-central-1a",
+        "eu-central-1b",
+    )
+    assert settings_model.social.github_redirect_uri.endswith(
+        "/api/auth/social/github/callback"
+    )
+
+
+@pytest.mark.parametrize("access_logs_bucket_name", [None, "", "   "])
+def test_resolve_stack_settings_rejects_managed_apply_without_required_inputs(
+    access_logs_bucket_name: str | None,
+) -> None:
+    """Reject missing or blank managed access-log bucket configuration."""
+    error_pattern = (
+        r"^accessLogsBucketName must be configured for managed deployments\.$"
+    )
+
+    def program() -> None:
+        """Resolve managed settings inside the mocked runtime."""
+        env_settings = EnvironmentSettings("unit", environment="prod")
+        resolve_stack_settings(env_settings)
+
+    config = {"deploymentMode": "managed"}
+    if access_logs_bucket_name is not None:
+        config["accessLogsBucketName"] = access_logs_bucket_name
+    with (
+        mocked_pulumi_context(config),
+        patch("app.environment.pulumi.runtime.is_dry_run", return_value=False),
+    ):
+        with pytest.raises(
+            ValueError,
+            match=error_pattern,
+        ):
+            _run_pulumi_program(program)
+
+
 def test_main_exports_expected_outputs() -> None:
     """Execute the Pulumi entrypoint and validate exported outputs."""
 
@@ -506,14 +936,15 @@ def test_main_exports_expected_outputs() -> None:
         finally:
             sys.path.pop(0)
 
-        env_settings = module_globals["settings"]
+        stack_component = module_globals["stack"]
+        env_settings = stack_component.environment_settings
         _assert_output_value(env_settings.environment, "dev")
-        _assert_output_value(env_settings.service_name, "user-service-infrastructure")
-        _assert_output_value(env_settings.stack_tag, "user-service-infrastructure-dev")
+        _assert_output_value(env_settings.service_name, "user-service")
+        _assert_output_value(env_settings.stack_tag, "user-service-dev")
         _assert_output_value(
             env_settings.default_tags,
             {
-                "Project": "user-service-infrastructure",
+                "Project": "user-service",
                 "Environment": "dev",
                 "Owner": "platform",
                 "CostCenter": "engineering",
@@ -522,9 +953,350 @@ def test_main_exports_expected_outputs() -> None:
                 "RetentionClass": "standard",
             },
         )
+        _assert_output_value(
+            stack_component.compute.outputs.service_url, "https://user.dev.internal"
+        )
+        _assert_output_value(
+            stack_component.compute.outputs.web_repository_url,
+            "123456789012.dkr.ecr.eu-central-1.amazonaws.com/user-service",
+        )
 
-    with mocked_pulumi_context():
+    with mocked_pulumi_context(
+        {
+            "deploymentMode": "preview",
+            "serviceName": "user-service",
+            "apiBaseUrl": "https://user.dev.internal",
+        }
+    ):
         _run_pulumi_program(program)
+
+
+def test_resolve_stack_settings_preserves_zero_capacity_overrides() -> None:
+    """Keep explicit zero-valued numeric config instead of falling back to defaults."""
+    captured: dict[str, object] = {}
+
+    def program() -> None:
+        """Resolve stack settings with zero-valued capacity and data overrides."""
+        env_settings = EnvironmentSettings("unit", environment="dev")
+        captured["settings"] = resolve_stack_settings(env_settings)
+
+    with mocked_pulumi_context(
+        {
+            "serviceName": "user-service",
+            "containerPort": 0,
+            "webDesiredCount": 0,
+            "workerDesiredCount": 0,
+            "documentDbInstanceCount": 0,
+            "documentDbPort": 0,
+            "documentDbBackupRetentionDays": 0,
+            "redisReplicasPerNodeGroup": 0,
+            "redisPort": 0,
+            "redisSnapshotRetentionLimit": 0,
+            "appEnv": "staging",
+            "appDebug": "1",
+        }
+    ):
+        _run_pulumi_program(program)
+
+    settings_model = captured["settings"]
+    assert settings_model is not None
+    assert settings_model.capacity.container_port == 0
+    assert settings_model.capacity.web_desired_count == 0
+    assert settings_model.capacity.worker_desired_count == 0
+    assert settings_model.documentdb.instance_count == 0
+    assert settings_model.documentdb.port == 0
+    assert settings_model.documentdb.backup_retention_days == 0
+    assert settings_model.redis.replicas_per_node_group == 0
+    assert settings_model.redis.port == 0
+    assert settings_model.redis.snapshot_retention_limit == 0
+    assert settings_model.runtime.app_env == "staging"
+    assert settings_model.runtime.app_debug == "1"
+
+
+def test_compute_common_environment_uses_runtime_app_flags() -> None:
+    """Populate APP_ENV and APP_DEBUG from runtime settings instead of literals."""
+    compute = object.__new__(ComputePlane)
+    settings_model = Mock()
+    settings_model.region = "eu-central-1"
+    settings_model.runtime.app_env = "staging"
+    settings_model.runtime.app_debug = "1"
+    settings_model.runtime.api_base_url = "https://users.example.com"
+    settings_model.runtime.api_url = "https://users.example.com"
+    settings_model.runtime.cors_allow_origin = "^https://users\\.example\\.com$"
+    settings_model.runtime.mail_sender = "noreply@example.com"
+    settings_model.runtime.jwt_issuer = "issuer"
+    settings_model.runtime.jwt_audience = "audience"
+    settings_model.runtime.emf_namespace = "UserService/Test"
+    settings_model.runtime.aws_sqs_endpoint_base = (
+        "https://sqs.eu-central-1.amazonaws.com"
+    )
+    settings_model.runtime.aws_sqs_port = "443"
+    settings_model.social.github_client_id = "github-client"
+    settings_model.social.github_redirect_uri = "https://users.example.com/github"
+    settings_model.social.google_client_id = "google-client"
+    settings_model.social.google_redirect_uri = "https://users.example.com/google"
+    settings_model.social.facebook_client_id = "facebook-client"
+    settings_model.social.facebook_redirect_uri = "https://users.example.com/facebook"
+    settings_model.social.facebook_graph_api_version = "v19.0"
+    settings_model.social.twitter_client_id = "twitter-client"
+    settings_model.social.twitter_redirect_uri = "https://users.example.com/twitter"
+
+    messaging = Mock()
+    messaging.outputs.queue_urls = {
+        "sendEmail": "https://queue/send-email",
+        "failedSendEmail": "https://queue/failed-send-email",
+        "insertUserBatch": "https://queue/insert-user-batch",
+        "domainEvents": "https://queue/domain-events",
+        "failedDomainEvents": "https://queue/failed-domain-events",
+    }
+
+    with patch.object(
+        compute,
+        "_queue_dsn",
+        side_effect=lambda queue_url, region: f"{region}:{queue_url}",
+    ):
+        environment = compute._common_environment(
+            settings_model,
+            messaging,
+            include_worker_name=False,
+        )
+    values = {entry["name"]: entry["value"] for entry in environment}
+
+    assert values["APP_ENV"] == "staging"
+    assert values["APP_DEBUG"] == "1"
+
+
+def test_resolve_stack_settings_requires_social_secrets_for_enabled_providers() -> None:
+    """Require managed social-provider secrets only when a provider is enabled."""
+
+    def program() -> None:
+        """Resolve managed settings with GitHub OAuth enabled but no secret set."""
+        env_settings = EnvironmentSettings("unit", environment="prod")
+        resolve_stack_settings(env_settings)
+
+    managed_config = {
+        "deploymentMode": "managed",
+        "executionRoleArn": CENTRAL_EXECUTION_ROLE.replace("-dev-", "-prod-"),
+        "taskRoleArn": CENTRAL_TASK_ROLE.replace("-dev-", "-prod-"),
+        "serviceName": "user-service",
+        "accessLogsBucketName": "shared-alb-access-logs",
+        "githubClientId": "github-client",
+        "documentDbPassword": "mongo-secret",
+        "redisAuthToken": "redis-secret",
+        "appSecret": "app-secret",
+        "mailerDsn": "smtp://mail.example.com:587",
+        "oauthEncryptionKey": "oauth-encryption-key",
+        "oauthPassphrase": "oauth-passphrase",
+        "twoFactorEncryptionKey": "two-factor-key",
+        "oauthPrivateKeyPem": "private-key",
+        "oauthPublicKeyPem": "public-key",
+    }
+
+    with (
+        mocked_pulumi_context(
+            managed_config, aws_config_values={"allowedAccountIds": ["123456789012"]}
+        ),
+        patch("app.environment.pulumi.runtime.is_dry_run", return_value=False),
+    ):
+        with pytest.raises(
+            ValueError,
+            match=(
+                r"^githubClientSecret must be configured as a secret for managed "
+                r"deployments\.$"
+            ),
+        ):
+            _run_pulumi_program(program)
+
+
+def test_managed_stack_uses_preview_credential_skips_and_scoped_data_egress() -> None:
+    """Keep provider preview skips and managed data-plane networking intentional."""
+    managed_config = {
+        "deploymentMode": "managed",
+        "executionRoleArn": CENTRAL_EXECUTION_ROLE,
+        "taskRoleArn": CENTRAL_TASK_ROLE,
+        "serviceName": "user-service",
+        "accessLogsBucketName": "shared-alb-access-logs",
+        "documentDbPassword": "mongo-secret",
+        "redisAuthToken": "redis-secret",
+        "appSecret": "app-secret",
+        "mailerDsn": "smtp://mail.example.com:587",
+        "oauthEncryptionKey": "oauth-encryption-key",
+        "oauthPassphrase": "oauth-passphrase",
+        "twoFactorEncryptionKey": "two-factor-key",
+        "oauthPrivateKeyPem": "private-key",
+        "oauthPublicKeyPem": "public-key",
+    }
+    recording_mocks = RecordingMocks()
+
+    def program() -> None:
+        """Instantiate a managed stack with a single-node Redis topology."""
+        UserServiceStack("managed-stack")
+
+    with mocked_pulumi_context(
+        {**managed_config, "redisReplicasPerNodeGroup": 0},
+        aws_config_values={
+            "region": "eu-central-1",
+            "allowedAccountIds": ["123456789012"],
+        },
+    ):
+        _run_pulumi_program(program, test_mocks=recording_mocks)
+
+    provider = next(
+        resource
+        for resource in recording_mocks.resources
+        if resource["name"] == "managed-provider"
+    )
+    provider_inputs = provider["inputs"]
+    assert provider_inputs["skipCredentialsValidation"] == "false"
+    assert provider_inputs["skipMetadataApiCheck"] == "false"
+    assert provider_inputs["skipRequestingAccountId"] == "false"
+    assert provider_inputs["skipRegionValidation"] == "false"
+    managed_resources = [
+        resource
+        for resource in recording_mocks.resources
+        if resource["type"].startswith("aws:")
+        and resource["name"] != "managed-provider"
+    ]
+    assert managed_resources
+    assert all(
+        resource["provider"] is not None and "managed-provider" in resource["provider"]
+        for resource in managed_resources
+    )
+
+    redis_replication_group = next(
+        resource
+        for resource in recording_mocks.resources
+        if resource["name"] == "user-service-redis"
+    )
+    redis_inputs = redis_replication_group["inputs"]
+    assert redis_inputs["automaticFailoverEnabled"] is False
+    assert redis_inputs["multiAzEnabled"] is False
+    assert redis_inputs["numCacheClusters"] == 1
+
+    documentdb_security_group = next(
+        resource
+        for resource in recording_mocks.resources
+        if resource["name"] == "user-service-documentdb-sg"
+    )
+    redis_security_group = next(
+        resource
+        for resource in recording_mocks.resources
+        if resource["name"] == "user-service-redis-sg"
+    )
+    assert documentdb_security_group["inputs"]["egress"][0]["cidrBlocks"] == [
+        "10.42.0.0/16"
+    ]
+    assert redis_security_group["inputs"]["egress"][0]["cidrBlocks"] == ["10.42.0.0/16"]
+
+    services = [
+        resource
+        for resource in recording_mocks.resources
+        if resource["type"].endswith("service:Service")
+    ]
+    assert {service["name"] for service in services} == {
+        "user-service-web-service",
+        "user-service-worker-service",
+    }
+    assert all(
+        service["inputs"]["enableExecuteCommand"] is False for service in services
+    )
+
+
+def test_managed_stack_requires_at_least_one_documentdb_instance() -> None:
+    """Reject a managed DocumentDB cluster that would expose no instances."""
+    managed_config = {
+        "deploymentMode": "managed",
+        "executionRoleArn": CENTRAL_EXECUTION_ROLE,
+        "taskRoleArn": CENTRAL_TASK_ROLE,
+        "serviceName": "user-service",
+        "accessLogsBucketName": "shared-alb-access-logs",
+        "documentDbPassword": "mongo-secret",
+        "redisAuthToken": "redis-secret",
+        "appSecret": "app-secret",
+        "mailerDsn": "smtp://mail.example.com:587",
+        "oauthEncryptionKey": "oauth-encryption-key",
+        "oauthPassphrase": "oauth-passphrase",
+        "twoFactorEncryptionKey": "two-factor-key",
+        "oauthPrivateKeyPem": "private-key",
+        "oauthPublicKeyPem": "public-key",
+    }
+
+    def program() -> None:
+        """Instantiate a managed stack with an invalid zero-instance topology."""
+        UserServiceStack("managed-stack")
+
+    with mocked_pulumi_context(
+        {**managed_config, "documentDbInstanceCount": 0},
+        aws_config_values={
+            "region": "eu-central-1",
+            "allowedAccountIds": ["123456789012"],
+        },
+    ):
+        with pytest.raises(
+            ValueError,
+            match=(
+                r"^documentDbInstanceCount must be at least 1 for managed "
+                r"deployments\.$"
+            ),
+        ):
+            _run_pulumi_program(program)
+
+
+def test_managed_stack_percent_encodes_data_plane_connection_urls() -> None:
+    """Percent-encode reserved credentials before exporting managed URLs."""
+    managed_config = {
+        "deploymentMode": "managed",
+        "executionRoleArn": CENTRAL_EXECUTION_ROLE,
+        "taskRoleArn": CENTRAL_TASK_ROLE,
+        "serviceName": "user-service",
+        "accessLogsBucketName": "shared-alb-access-logs",
+        "documentDbUsername": "user@example.com",
+        "documentDbPassword": "mongo:/?#@secret",
+        "redisAuthToken": "redis:/?#@token",
+        "appSecret": "app-secret",
+        "mailerDsn": "smtp://mail.example.com:587",
+        "oauthEncryptionKey": "oauth-encryption-key",
+        "oauthPassphrase": "oauth-passphrase",
+        "twoFactorEncryptionKey": "two-factor-key",
+        "oauthPrivateKeyPem": "private-key",
+        "oauthPublicKeyPem": "public-key",
+    }
+    recording_mocks = RecordingMocks()
+
+    def program() -> None:
+        """Instantiate a managed stack and record the derived data secrets."""
+        UserServiceStack("managed-stack")
+
+    with mocked_pulumi_context(
+        managed_config,
+        aws_config_values={
+            "region": "eu-central-1",
+            "allowedAccountIds": ["123456789012"],
+        },
+    ):
+        _run_pulumi_program(program, test_mocks=recording_mocks)
+
+    documentdb_secret_version = next(
+        resource
+        for resource in recording_mocks.resources
+        if resource["name"] == "user-service-documentdb-url-version"
+    )
+    redis_secret_version = next(
+        resource
+        for resource in recording_mocks.resources
+        if resource["name"] == "user-service-redis-url-version"
+    )
+    documentdb_secret_string = documentdb_secret_version["inputs"]["secretString"][
+        "value"
+    ]
+    redis_secret_string = redis_secret_version["inputs"]["secretString"]["value"]
+
+    assert documentdb_secret_string.startswith(
+        "mongodb://user%40example.com:mongo%3A%2F%3F%23%40secret@"
+    )
+    assert "user@example.com:mongo:/?#@secret@" not in documentdb_secret_string
+    assert redis_secret_string.startswith("rediss://:redis%3A%2F%3F%23%40token@")
+    assert ":redis:/?#@token@" not in redis_secret_string
 
 
 def test_register_outputs_maps_component_properties() -> None:
@@ -563,6 +1335,144 @@ def test_register_outputs_maps_component_properties() -> None:
     assert outputs["serviceName"] is resource.service_name
     assert outputs["stackTag"] is resource.stack_tag
     assert outputs["defaultTags"] is resource.default_tags
+
+
+def test_user_service_stack_preview_mode_exports_runtime_contract() -> None:
+    """Exercise the preview-only stack path used by local and PR guardrail jobs."""
+
+    def program() -> None:
+        """Instantiate the top-level stack in preview mode."""
+        stack_component = UserServiceStack("unit-stack")
+        _assert_output_value(
+            stack_component.compute.outputs.cluster_name, "user-service-dev-ecs"
+        )
+        _assert_output_value(
+            stack_component.compute.outputs.load_balancer_dns_name,
+            "user-service-dev-alb.elb.amazonaws.com",
+        )
+        _assert_output_value(
+            stack_component.messaging.outputs.queue_urls["sendEmail"],
+            "https://sqs.eu-central-1.amazonaws.com/preview/send-email",
+        )
+        _assert_output_value(
+            stack_component.data.outputs.documentdb_endpoint,
+            "user-service-dev-documentdb.local",
+        )
+
+    with mocked_pulumi_context(
+        {"deploymentMode": "preview", "serviceName": "user-service"}
+    ):
+        _run_pulumi_program(program)
+
+
+def test_user_service_stack_managed_mode_builds_managed_outputs_under_mocks() -> None:
+    """Exercise the managed resource graph under Pulumi mocks."""
+
+    managed_config = {
+        "deploymentMode": "managed",
+        "executionRoleArn": CENTRAL_EXECUTION_ROLE,
+        "taskRoleArn": CENTRAL_TASK_ROLE,
+        "serviceName": "user-service",
+        "accessLogsBucketName": "shared-alb-access-logs",
+        "documentDbPassword": "mongo-secret",
+        "redisAuthToken": "redis-secret",
+        "appSecret": "app-secret",
+        "mailerDsn": "smtp://mail.example.com:587",
+        "oauthEncryptionKey": "oauth-encryption-key",
+        "oauthPassphrase": "oauth-passphrase",
+        "twoFactorEncryptionKey": "two-factor-key",
+        "oauthPrivateKeyPem": "private-key",
+        "oauthPublicKeyPem": "public-key",
+        "githubClientSecret": "github-secret",
+        "googleClientSecret": "google-secret",
+        "facebookClientSecret": "facebook-secret",
+        "twitterClientSecret": "twitter-secret",
+    }
+
+    def program() -> None:
+        """Instantiate the managed stack under mocks and assert key outputs."""
+        stack_component = UserServiceStack("managed-stack")
+        _assert_output_value(
+            stack_component.compute.outputs.web_repository_url,
+            "123456789012.dkr.ecr.eu-central-1.amazonaws.com/user-service",
+        )
+        _assert_output_value(
+            stack_component.compute.outputs.worker_repository_url,
+            "123456789012.dkr.ecr.eu-central-1.amazonaws.com/user-service-workers",
+        )
+        _assert_output_value(
+            stack_component.compute.outputs.load_balancer_dns_name,
+            "user-service-alb.elb.amazonaws.com",
+        )
+        _assert_output_value(
+            stack_component.messaging.outputs.queue_urls["domainEvents"],
+            "https://sqs.eu-central-1.amazonaws.com/123456789012/domain-events",
+        )
+        _assert_output_value(
+            stack_component.data.outputs.redis_endpoint,
+            "user-service-redis.cache.local",
+        )
+
+    with mocked_pulumi_context(
+        managed_config,
+        aws_config_values={
+            "region": "eu-central-1",
+            "allowedAccountIds": ["123456789012"],
+        },
+    ):
+        _run_pulumi_program(program)
+
+
+def test_user_service_stack_managed_mode_supports_https_and_image_overrides() -> None:
+    """Exercise the HTTPS-listener path and explicit image overrides."""
+    managed_config = {
+        "deploymentMode": "managed",
+        "executionRoleArn": CENTRAL_EXECUTION_ROLE,
+        "taskRoleArn": CENTRAL_TASK_ROLE,
+        "serviceName": "user-service",
+        "accessLogsBucketName": "shared-alb-access-logs",
+        "certificateArn": (
+            "arn:aws:acm:eu-central-1:123456789012:certificate/user-service"
+        ),
+        "webImage": "123456789012.dkr.ecr.eu-central-1.amazonaws.com/custom-web:sha",
+        "workerImage": (
+            "123456789012.dkr.ecr.eu-central-1.amazonaws.com/custom-worker:sha"
+        ),
+        "documentDbPassword": "mongo-secret",
+        "redisAuthToken": "redis-secret",
+        "appSecret": "app-secret",
+        "mailerDsn": "smtp://mail.example.com:587",
+        "oauthEncryptionKey": "oauth-encryption-key",
+        "oauthPassphrase": "oauth-passphrase",
+        "twoFactorEncryptionKey": "two-factor-key",
+        "oauthPrivateKeyPem": "private-key",
+        "oauthPublicKeyPem": "public-key",
+        "githubClientSecret": "github-secret",
+        "googleClientSecret": "google-secret",
+        "facebookClientSecret": "facebook-secret",
+        "twitterClientSecret": "twitter-secret",
+    }
+
+    def program() -> None:
+        """Instantiate the managed stack with HTTPS and explicit image URIs."""
+        stack_component = UserServiceStack("managed-stack-https")
+        _assert_output_value(
+            stack_component.compute.outputs.load_balancer_dns_name,
+            "user-service-alb.elb.amazonaws.com",
+        )
+        _assert_output_value(
+            stack_component.compute.outputs.web_service_name,
+            "user-service-dev-web",
+        )
+
+    with mocked_pulumi_context(
+        managed_config,
+        aws_config_values={
+            "region": "eu-central-1",
+            "allowedAccountIds": ["123456789012"],
+        },
+    ):
+        _run_pulumi_program(program)
 
 
 @pytest.mark.parametrize(
@@ -610,3 +1520,317 @@ def test_required_tag_classifications_follow_config(configured, expected):
 
     with mocked_pulumi_context(configured):
         _run_pulumi_program(program)
+
+
+def test_registry_full_stack_owner_and_images() -> None:
+    """Full compute consumes the sole registry owner's actual ECR URLs."""
+    from app.registry import RegistryPlane
+
+    config = {
+        "deploymentMode": "managed",
+        "executionRoleArn": CENTRAL_EXECUTION_ROLE,
+        "taskRoleArn": CENTRAL_TASK_ROLE,
+        "serviceName": "user-service",
+        "accessLogsBucketName": "synthetic-access-logs",
+        "documentDbPassword": "synthetic",
+        "redisAuthToken": "synthetic",
+        "appSecret": "synthetic",
+        "mailerDsn": "smtp://mail.example.com:587",
+        "oauthEncryptionKey": "synthetic",
+        "oauthPassphrase": "synthetic",
+        "twoFactorEncryptionKey": "synthetic",
+        "oauthPrivateKeyPem": "synthetic",
+        "oauthPublicKeyPem": "synthetic",
+        "webRepositoryName": "synthetic-web",
+        "workerRepositoryName": "synthetic-worker",
+        "webImageTag": "release-web",
+        "workerImageTag": "release-worker",
+    }
+    recorder = RecordingMocks()
+    full_urns: list[str] = []
+
+    def full_program() -> None:
+        UserServiceStack("user-service")
+
+    with mocked_pulumi_context(
+        config,
+        aws_config_values={
+            "region": "eu-central-1",
+            "allowedAccountIds": ["123456789012"],
+        },
+    ):
+        _run_pulumi_program(full_program, test_mocks=recorder, captured_urns=full_urns)
+
+    repositories = [
+        resource
+        for resource in recorder.resources
+        if resource["type"] == "aws:ecr/repository:Repository"
+    ]
+    assert len(repositories) == 2
+    assert all(
+        resource["inputs"]["imageTagMutability"] == "IMMUTABLE"
+        for resource in repositories
+    )
+    tasks = [
+        resource
+        for resource in recorder.resources
+        if resource["type"] == "aws:ecs/taskDefinition:TaskDefinition"
+    ]
+    assert len(tasks) == 2
+    assert all(
+        resource["inputs"]["executionRoleArn"] == CENTRAL_EXECUTION_ROLE
+        and resource["inputs"]["taskRoleArn"] == CENTRAL_TASK_ROLE
+        for resource in tasks
+    )
+    assert not any(
+        str(resource["type"]).startswith("aws:iam/") for resource in recorder.resources
+    )
+    assert not any(
+        "healthcheck-secret" in str(row["name"]) for row in recorder.resources
+    )
+    queues = [row for row in recorder.resources if row["type"] == "aws:sqs/queue:Queue"]
+    assert len(queues) == 6
+    assert "health-check-queue" in {row["inputs"]["name"] for row in queues}
+    for resource in tasks:
+        container = json.loads(resource["inputs"]["containerDefinitions"])[0]
+        environment = {row["name"]: row["value"] for row in container["environment"]}
+        secret_names = {row["name"] for row in container["secrets"]}
+        assert "AWS_SQS_KEY" not in environment
+        assert "AWS_SQS_SECRET" not in secret_names
+        assert environment["AWS_SQS_REGION"] == "eu-central-1"
+        assert environment["AWS_SQS_VERSION"] == "latest"
+        assert environment["APP_ENV"] == "prod"
+        assert all(
+            value.endswith("?region=eu-central-1&auto_setup=false")
+            for name, value in environment.items()
+            if name.endswith("TRANSPORT_DSN")
+        )
+    images = {
+        json.loads(resource["inputs"]["containerDefinitions"])[0]["image"]
+        for resource in tasks
+    }
+    assert images == {
+        "123456789012.dkr.ecr.eu-central-1.amazonaws.com/synthetic-web:release-web",
+        "123456789012.dkr.ecr.eu-central-1.amazonaws.com/synthetic-worker:release-worker",
+    }
+    lifecycle = [
+        resource
+        for resource in recorder.resources
+        if resource["type"] == "aws:ecr/lifecyclePolicy:LifecyclePolicy"
+    ]
+    assert {resource["inputs"]["repository"] for resource in lifecycle} == {
+        "synthetic-web",
+        "synthetic-worker",
+    }
+    registry_urns: list[str] = []
+
+    def registry_program() -> None:
+        owner = pulumi.ComponentResource(
+            "user-service-infrastructure:stack:UserService", "user-service"
+        )
+        RegistryPlane(
+            "registries",
+            registries={
+                "web": {
+                    "logical_name": "user-service-web-repository",
+                    "name": "synthetic-web",
+                },
+                "worker": {
+                    "logical_name": "user-service-worker-repository",
+                    "name": "synthetic-worker",
+                },
+            },
+            opts=pulumi.ResourceOptions(parent=owner),
+        )
+
+    _run_pulumi_program(registry_program, captured_urns=registry_urns)
+    selector = "$aws:ecr/repository:Repository::"
+    assert [urn for urn in full_urns if selector in urn] == [
+        urn for urn in registry_urns if selector in urn
+    ]
+    assert all(":registry:Plane$" in urn for urn in full_urns if selector in urn)
+
+
+def test_registry_preview_has_no_aws_resources() -> None:
+    """The legacy preview projection does not instantiate a registry owner."""
+    recorder = RecordingMocks()
+
+    def program() -> None:
+        selected = UserServiceStack("preview-stack")
+        assert selected.registries is None
+
+    with mocked_pulumi_context({"deploymentMode": "preview"}):
+        _run_pulumi_program(program, test_mocks=recorder)
+    assert not any(
+        resource["type"].startswith("aws:") for resource in recorder.resources
+    )
+
+
+def test_managed_compute_needs_registries() -> None:
+    """Missing caller registry references cannot fall back to creating ECR."""
+    plane = object.__new__(ComputePlane)
+    with pytest.raises(ValueError, match="caller-owned registry outputs"):
+        plane._build_managed_outputs(None, None, None, None, None)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("executionRoleArn", None),
+        ("taskRoleArn", None),
+        ("executionRoleArn", CENTRAL_TASK_ROLE),
+        ("taskRoleArn", CENTRAL_EXECUTION_ROLE),
+        ("taskRoleArn", CENTRAL_TASK_ROLE.replace("123456789012", "999999999999")),
+        ("taskRoleArn", CENTRAL_TASK_ROLE.replace("-dev-", "-prod-")),
+        ("taskRoleArn", CENTRAL_TASK_ROLE.replace(":role/", ":role/foreign/")),
+    ],
+)
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_managed_roles_fail_before_aws_resources(field, value, dry_run):
+    """Managed dry-run does not waive missing or foreign centrally owned roles."""
+    config = {
+        "deploymentMode": "managed",
+        "accessLogsBucketName": "synthetic-logs",
+        "executionRoleArn": CENTRAL_EXECUTION_ROLE,
+        "taskRoleArn": CENTRAL_TASK_ROLE,
+        field: value,
+    }
+    recorder = RecordingMocks()
+
+    def program():
+        with pytest.raises(ValueError, match="central role contract"):
+            UserServiceStack("invalid-roles")
+
+    with (
+        mocked_pulumi_context(
+            config, aws_config_values={"allowedAccountIds": ["123456789012"]}
+        ),
+        patch("app.environment.pulumi.runtime.is_dry_run", return_value=dry_run),
+    ):
+        _run_pulumi_program(program, test_mocks=recorder)
+    assert not any(str(row["type"]).startswith("aws:") for row in recorder.resources)
+
+
+@pytest.mark.parametrize(
+    "accounts",
+    [None, [], ["123456789012", "999999999999"], [5], ["bad"], "123456789012"],
+)
+def test_managed_runtime_roles_require_protected_account(accounts):
+    """An ARN cannot supply or override the account missing from protected config."""
+    runtime = SimpleNamespace(
+        execution_role_arn=CENTRAL_EXECUTION_ROLE, task_role_arn=CENTRAL_TASK_ROLE
+    )
+    with mocked_pulumi_context(aws_config_values={"allowedAccountIds": accounts}):
+        with pytest.raises(ValueError, match="one protected AWS account"):
+            validate_runtime_roles(runtime, "dev")
+
+
+def test_direct_managed_compute_rejects_roles_before_component_registration():
+    """Direct callers cannot register a compute component before role validation."""
+    runtime = SimpleNamespace(execution_role_arn=None, task_role_arn=None)
+    config = SimpleNamespace(is_managed=True, runtime=runtime, environment="dev")
+    with (
+        mocked_pulumi_context(
+            aws_config_values={"allowedAccountIds": ["123456789012"]}
+        ),
+        patch("app.compute.pulumi.ComponentResource.__init__") as registration,
+        pytest.raises(ValueError, match="central role contract"),
+    ):
+        try:
+            ComputePlane(
+                "compute",
+                settings=config,
+                network=Mock(),
+                data=Mock(),
+                messaging=Mock(),
+            )
+        finally:
+            registration.assert_not_called()
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("appEnv", "test"),
+        ("appEnv", "dev"),
+        ("appEnv", ""),
+        ("healthCheckQueueName", "foreign-health"),
+    ],
+)
+def test_managed_health_contract_rejects_incompatible_application_config(
+    field, value, dry_run
+):
+    """Reject configurations requiring static credentials or an unbound queue name."""
+    config = {
+        "deploymentMode": "managed",
+        "accessLogsBucketName": "synthetic-logs",
+        "executionRoleArn": CENTRAL_EXECUTION_ROLE,
+        "taskRoleArn": CENTRAL_TASK_ROLE,
+        field: value,
+    }
+    recorder = RecordingMocks()
+
+    def program():
+        with pytest.raises(ValueError, match="Managed SQS health checks"):
+            UserServiceStack("invalid-health")
+
+    with (
+        mocked_pulumi_context(
+            config, aws_config_values={"allowedAccountIds": ["123456789012"]}
+        ),
+        patch("app.environment.pulumi.runtime.is_dry_run", return_value=dry_run),
+    ):
+        _run_pulumi_program(program, test_mocks=recorder)
+    assert not any(str(row["type"]).startswith("aws:") for row in recorder.resources)
+
+
+@pytest.mark.parametrize("component", [MessagingPlane, ComputePlane])
+def test_direct_health_consumers_validate_before_component_registration(component):
+    """Direct managed callers cannot bypass the production health-check contract."""
+    runtime = SimpleNamespace(
+        execution_role_arn=CENTRAL_EXECUTION_ROLE,
+        task_role_arn=CENTRAL_TASK_ROLE,
+        app_env="test",
+    )
+    config = SimpleNamespace(
+        is_managed=True,
+        runtime=runtime,
+        environment="dev",
+        queues=SimpleNamespace(health_check="health-check-queue"),
+    )
+    arguments = (
+        {}
+        if component is MessagingPlane
+        else {"network": Mock(), "data": Mock(), "messaging": Mock()}
+    )
+    with (
+        mocked_pulumi_context(
+            aws_config_values={"allowedAccountIds": ["123456789012"]},
+            project_name="user-service-infrastructure",
+        ),
+        patch("pulumi.ComponentResource.__init__") as registration,
+        pytest.raises(ValueError, match="Managed SQS health checks"),
+    ):
+        try:
+            component("plane", settings=config, **arguments)
+        finally:
+            registration.assert_not_called()
+
+
+def test_offline_preview_keeps_local_app_and_queue_configuration():
+    """Local preview can model local application settings without creating AWS IAM."""
+    recorder = RecordingMocks()
+
+    def program():
+        UserServiceStack("offline-health")
+
+    with mocked_pulumi_context(
+        {
+            "deploymentMode": "preview",
+            "appEnv": "test",
+            "healthCheckQueueName": "local-health",
+        }
+    ):
+        _run_pulumi_program(program, test_mocks=recorder)
+    assert not any(str(row["type"]).startswith("aws:") for row in recorder.resources)

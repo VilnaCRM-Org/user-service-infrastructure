@@ -17,6 +17,7 @@ from _github_environment_controls import complete_branch_policies
 from _github_repository_controls import protected_environment_verification_blockers
 from governance_paths import paths_touch_governance
 from pulumi_pr_comment import parse_command, write_outputs
+from reviewed_source_admission import verify_reviewed_source
 
 INTAKE_PATH = ".github/workflows/pulumi-pr-commands.yml"
 
@@ -164,6 +165,27 @@ def collect_intake_evidence(request: dict[str, str]) -> dict:
     }
 
 
+def revalidate_requester(request: dict[str, str]) -> None:
+    """Recheck an admitted request's origin and current writer before execution.
+
+    Initial admission still enforces its 900-second deadline and consumes the
+    request. This function cannot admit a new dispatch or reset that deadline;
+    trusted same-run consumers call it after authenticating their source artifact.
+    """
+    origin = collect_intake_evidence(request)
+    command = authenticate_intake(request, origin)
+    login = origin["comment"]["user"]["login"]
+    permission = gh(f"repos/{origin['repository']}/collaborators/{login}/permission")[
+        "permission"
+    ]
+    require(permission in {"write", "maintain", "admin"}, "Write access revoked")
+    if command.action == "up":
+        require(
+            login.lower() != "kravalg",
+            "Apply requester must differ from sole approver Kravalg",
+        )
+
+
 def collect_evidence(request: dict[str, str], *, intake: dict | None = None) -> dict:
     """Fetch current execution state after the immutable origin is authenticated."""
     origin = collect_intake_evidence(request) if intake is None else intake
@@ -187,10 +209,15 @@ def collect_evidence(request: dict[str, str], *, intake: dict | None = None) -> 
         for item in changed
         for name in (item["filename"], item.get("previous_filename", ""))
     ]
+    current_pr = gh(f"{base}/pulls/{pr_number}")
+    review = verify_reviewed_source(
+        repository, pr_number, request["head_sha"], base_sha, gh=gh
+    )
     return {
         **origin,
         "now": datetime.now(timezone.utc),
-        "pr": gh(f"{base}/pulls/{pr_number}"),
+        "pr": current_pr,
+        "review": review,
         "permission": gh(f"{base}/collaborators/{login}/permission")["permission"],
         "scope_base_sha": base_sha,
         "files": files,

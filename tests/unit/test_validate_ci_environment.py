@@ -324,7 +324,7 @@ def test_s3_validation_matches_frozen_stack_coordinates(tmp_path: Path) -> None:
     for value in valid + invalid:
         context = SimpleNamespace(
             backend_url=value,
-            env={"AWS_ACCOUNT_ID": "123456789012"},
+            env={"AWS_ACCOUNT_ID": "123456789012", "AWS_REGION": "eu-central-1"},
             pulumi_dir=tmp_path,
         )
         if value in valid:
@@ -369,7 +369,12 @@ def test_kms_syntax_and_explicit_arn_pins_match_frozen_key_contract() -> None:
             runner=read,
         )
         assert validator._validate_secrets_provider(value, environment) is None
-        assert stack_config._key_identity(context, environment["AWS_ACCOUNT_ID"]) == arn
+        assert (
+            stack_config._key_identity(
+                context, environment["AWS_ACCOUNT_ID"], environment["AWS_REGION"]
+            )
+            == arn
+        )
         assert calls[0][:3] == ["aws", "kms", "describe-key"]
 
 

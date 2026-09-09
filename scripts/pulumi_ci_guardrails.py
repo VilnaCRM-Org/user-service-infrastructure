@@ -277,22 +277,9 @@ def _inline_policy_inputs(
 
 
 def load_destructive_override(event_path: str | None) -> bool:
-    """Return whether the current GitHub event opts into destructive changes."""
-    if not event_path:
-        return False
-
-    event = json.loads(Path(event_path).read_text(encoding="utf-8"))
-    pull_request = event.get("pull_request")
-    if not isinstance(pull_request, dict):
-        return False
-
-    labels = pull_request.get("labels", [])
-    if not isinstance(labels, list):
-        return False
-    return any(
-        isinstance(label, dict) and label.get("name") == DESTRUCTIVE_OVERRIDE_LABEL
-        for label in labels
-    )
+    """Keep the legacy API fail-closed; event labels cannot authorize destruction."""
+    del event_path
+    return False
 
 
 def validate_iam_inputs(inputs: Sequence[dict[str, str]]) -> list[str]:
@@ -529,7 +516,7 @@ def _run_summarize(preview_files: Sequence[Path]) -> int:
 def _run_destructive_gate(
     preview_files: Sequence[Path], *, event_path: str | None
 ) -> int:
-    """Fail unless dangerous preview steps were explicitly approved."""
+    """Reject dangerous preview steps; label overrides are disabled."""
     override = load_destructive_override(event_path)
     findings: list[str] = []
     for preview_file in preview_input_files(preview_files):
@@ -540,7 +527,8 @@ def _run_destructive_gate(
         for finding in findings:
             print(f"destructive change blocked: {finding}", file=sys.stderr)
         print(
-            f"Apply the `{DESTRUCTIVE_OVERRIDE_LABEL}` label only after manual review.",
+            "Destructive overrides are disabled; "
+            "revise the plan to preserve protected resources.",
             file=sys.stderr,
         )
         return 1

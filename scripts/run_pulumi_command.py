@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import pulumi_ci_guardrails as guardrails
 from _pulumi_command_support import (
     CommandContext,
     StackCommand,
@@ -406,6 +407,101 @@ def _validate_plan_manifest_entry(
     if _file_sha256(plan_file) != plan_sha:
         print("error: Pulumi plan file hash does not match manifest.", file=sys.stderr)
         return 1
+    recorded_preview = _manifest_path(context, entry.get("previewFile"), "previewFile")
+    if recorded_preview is None:
+        return 1
+    preview_sha = entry.get("previewSha256")
+    if not isinstance(preview_sha, str) or len(preview_sha) != 64:
+        print("error: Pulumi preview hash is missing or invalid.", file=sys.stderr)
+        return 1
+    return _validate_safe_preview(recorded_preview, expected_sha=preview_sha)
+
+
+def _preview_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject duplicate fields instead of hiding an earlier destructive step list."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate preview field")
+        result[key] = value
+    return result
+
+
+def _has_resource_type(state: Any) -> bool:
+    """Recognize a resource state with a nonempty string type."""
+    return (
+        isinstance(state, dict)
+        and isinstance(state.get("type"), str)
+        and bool(state["type"])
+    )
+
+
+def _validate_preview_step(step: Any) -> None:
+    """Require a known operation and consistent nonempty resource types."""
+    operations = {
+        "same",
+        "create",
+        "update",
+        "delete",
+        "replace",
+        "create-replacement",
+        "delete-replaced",
+        "read",
+        "read-replacement",
+        "refresh",
+        "discard",
+        "discard-replaced",
+        "import",
+        "import-replacement",
+        "remove-pending-replace",
+    }
+    if not isinstance(step, dict) or step.get("op") not in operations:
+        raise ValueError("Preview step missing or invalid")
+    states = [
+        step[key] for key in ("oldState", "newState") if step.get(key) is not None
+    ]
+    if not states or any(not _has_resource_type(state) for state in states):
+        raise ValueError("Preview resource type missing or invalid")
+    if len({state["type"] for state in states}) != 1:
+        raise ValueError("Preview resource types differ")
+
+
+def _strict_preview_steps(preview: Any) -> list[dict[str, Any]]:
+    """Require explicit steps and consistent resource types before classification."""
+    if not isinstance(preview, dict) or not isinstance(preview.get("steps"), list):
+        raise ValueError("Preview steps missing or invalid")
+    for step in preview["steps"]:
+        _validate_preview_step(step)
+    return preview["steps"]
+
+
+def _validate_safe_preview(
+    path: Path, *, expected_sha: str | None = None
+) -> int | None:
+    """Reject protected destruction on the same preview bytes whose hash is checked.
+
+    No event, label or override participates in either plan sealing or replay.
+    Resource classification remains owned by the existing shared guardrail helper.
+    """
+    try:
+        if not path.is_file():
+            raise ValueError("Preview file missing")
+        raw = path.read_bytes()
+        if expected_sha is not None and hashlib.sha256(raw).hexdigest() != expected_sha:
+            raise ValueError("Preview hash differs")
+        preview = json.loads(raw, object_pairs_hook=_preview_pairs)
+        # Reject nonstandard nonfinite constants anywhere in a preview.
+        json.dumps(preview, allow_nan=False)
+        steps = _strict_preview_steps(preview)
+        if guardrails.find_destructive_steps(steps):
+            raise ValueError("Protected resource destruction")
+    except (OSError, ValueError, TypeError, RecursionError):
+        print(
+            "error: saved-plan preview is missing, invalid, changed, or contains "
+            "protected resource destruction; overrides are disabled.",
+            file=sys.stderr,
+        )
+        return 1
     return None
 
 
@@ -476,6 +572,7 @@ def _login_and_prepare(command: str, context: CommandContext) -> None:
 def _prepare_plan_artifacts(context: CommandContext) -> Path:
     context.plan_dir.mkdir(parents=True, exist_ok=True)
     context.preview_artifact_dir.mkdir(parents=True, exist_ok=True)
+    _plan_manifest_file(context).unlink(missing_ok=True)
     for preview_file in context.preview_artifact_dir.glob("*.json"):
         preview_file.unlink()
     summary_file = context.preview_artifact_dir / "summary.md"
@@ -504,6 +601,12 @@ def _run_plan_command(context: CommandContext, stacks: list[str]) -> int:
                     StackCommand("plan", stack, plan_path=plan_path, stdout=handle),
                 )
             if plan_path.is_file():
+                if _validate_safe_preview(preview_file) is not None:
+                    return 1
+                if prepared.registry_plan_gate is not None:
+                    prepared.registry_plan_gate(
+                        prepared, stack, plan_path, preview_file
+                    )
                 manifest_entries.append(
                     _plan_manifest_entry(prepared, stack, plan_path, preview_file)
                 )
@@ -674,10 +777,27 @@ def _run_validated_up_plan_stack(
         status = _select_or_init_stack(context, stack)
     if status is None:
         with prepared_stack_configuration(context, stack) as prepared:
-            entry = _manifest_stack_entry(manifest or {}, stack)
-            verify_provider_identity(prepared, entry or {})
-            status = _run_up_plan_stack(prepared, stack, plan_path)
+            status = _replay_prepared_plan(prepared, manifest, stack, plan_path)
     return manifest, status
+
+
+def _replay_prepared_plan(
+    prepared: CommandContext,
+    manifest: dict[str, Any] | None,
+    stack: str,
+    plan_path: Path,
+) -> int | None:
+    """Verify provider and optional registry graph immediately before replay."""
+    entry = _manifest_stack_entry(manifest or {}, stack)
+    verify_provider_identity(prepared, entry or {})
+    if prepared.registry_plan_gate is not None:
+        preview = _manifest_path(
+            prepared, (entry or {}).get("previewFile"), "previewFile"
+        )
+        if preview is None:
+            return 1
+        prepared.registry_plan_gate(prepared, stack, plan_path, preview)
+    return _run_up_plan_stack(prepared, stack, plan_path)
 
 
 def _run_regular_command(

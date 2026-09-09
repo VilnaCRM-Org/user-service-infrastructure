@@ -58,15 +58,93 @@ jobs:
         id: resolve
         run: python3 scripts/pulumi_command_preflight.py --service
 
+  poc_prepare_source:
+    name: Prepare TEST PoC Source Facts
+    needs:
+      - preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+      pull-requests: read
+    outputs:
+      artifact_id: ${{ steps.source_artifact.outputs.artifact-id }}
+      archive_sha256: ${{ steps.source_artifact.outputs.artifact-digest }}
+      source_sha256: ${{ steps.prepare.outputs.source_sha256 }}
+    steps:
+      - name: Require the TEST-only PoC source route
+        env:
+          TARGET_ENVIRONMENT: ${{ needs.preflight.outputs.target_environment }}
+        run: |
+          if [[ "${TARGET_ENVIRONMENT}" != test ]]; then
+            echo "error: PoC source preparation supports TEST only; PROD promotion is unavailable." >&2
+            exit 1
+          fi
+
+      - name: Check out immutable trusted source adapter
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install the pinned trusted Python runtime
+        env:
+          UV_PYTHON_PREFERENCE: only-managed
+          UV_NO_PROGRESS: "1"
+        run: |
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "${GITHUB_WORKFLOW_SHA}" = "${GITHUB_SHA}"
+          uv_directory="$(mktemp -d "${RUNNER_TEMP}/poc-source-uv.XXXXXX")"
+          uv_archive="${uv_directory}/uv.tar.gz"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            https://github.com/astral-sh/uv/releases/download/0.9.21/uv-x86_64-unknown-linux-gnu.tar.gz \
+            --output "${uv_archive}"
+          echo "0a1ab27383c28ef1c041f85cbbc609d8e3752dfb4b238d2ad97b208a52232baf  ${uv_archive}" \
+            | sha256sum --check --status
+          tar -xzf "${uv_archive}" -C "${uv_directory}" --strip-components=1
+          "${uv_directory}/uv" sync --frozen --no-dev --python 3.11
+
+      - name: Prepare authenticated source facts without phase admission
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_PULL_REQUEST_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          REQUEST_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
+          REQUEST_COMMENT_ID: ${{ needs.preflight.outputs.comment_id }}
+          REQUEST_SOURCE_RUN_ID: ${{ needs.preflight.outputs.source_run_id }}
+          REQUEST_COMMAND: ${{ needs.preflight.outputs.command }}
+          REQUEST_TARGET_ENVIRONMENT: ${{ needs.preflight.outputs.target_environment }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/poc-phase-source"
+          "${GITHUB_WORKSPACE}/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/scripts/poc_phase_source_adapter.py" \
+            > "${RUNNER_TEMP}/poc-phase-source/source.json"
+          source_sha256="$(sha256sum "${RUNNER_TEMP}/poc-phase-source/source.json" | cut -d ' ' -f 1)"
+          echo "source_sha256=${source_sha256}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload immutable same-run source facts
+        id: source_artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: poc-phase-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/poc-phase-source/source.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 7
+
   test_preview:
     name: Test Preview
     environment: test-preview
     runs-on: ubuntu-latest
     needs:
       - preflight
+      - poc_prepare_source
     timeout-minutes: 25
     permissions:
       contents: read
+      actions: read
       id-token: write
       pull-requests: read
     env:
@@ -87,6 +165,9 @@ jobs:
           path: .trusted
           persist-credentials: false
 
+      - name: Install trusted registry runtime before credentials
+        uses: ./.trusted/.github/actions/setup-poc-runtime
+
       - name: Recheck current PR head before credentials
         env:
           GH_TOKEN: ${{ github.token }}
@@ -101,6 +182,20 @@ jobs:
           test "$(jq -r '.base.ref' <<< "${pr_json}")" = main
           test "$(jq -r '.base.sha' <<< "${pr_json}")" = "${EXPECTED_BASE_SHA}"
           test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
+
+      - name: Verify reviewed source before config credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+        run: |
+          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
+            --repository "${REVIEW_REPOSITORY}" \
+            --pr-number "${PR_NUMBER}" \
+            --expected-head-sha "${EXPECTED_SHA}" \
+            --expected-base-sha "${EXPECTED_BASE_SHA}"
 
       - name: Load test AWS CI configuration
         id: ci_config
@@ -145,6 +240,20 @@ jobs:
             exit 1
           fi
 
+      - name: Verify reviewed source before execution credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+        run: |
+          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
+            --repository "${REVIEW_REPOSITORY}" \
+            --pr-number "${PR_NUMBER}" \
+            --expected-head-sha "${EXPECTED_SHA}" \
+            --expected-base-sha "${EXPECTED_BASE_SHA}"
+
       - name: Configure AWS preview credentials via OIDC
         uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
         with:
@@ -163,14 +272,32 @@ jobs:
           echo "Role purpose: preview"
           echo "PR command: ${{ needs.preflight.outputs.display_command }}"
 
-      - name: Start development environment
-        run: make start
+      - name: Verify reviewed source before PR execution
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+        run: |
+          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
+            --repository "${REVIEW_REPOSITORY}" \
+            --pr-number "${PR_NUMBER}" \
+            --expected-head-sha "${EXPECTED_SHA}" \
+            --expected-base-sha "${EXPECTED_BASE_SHA}"
 
       - name: Save test update plan and preview artifact
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-          PULUMI_COMMIT_SHA: ${{ needs.preflight.outputs.head_sha }}
-        run: make pulumi-plan
+          GH_TOKEN: ${{ github.token }}
+          POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
+          POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
+          POC_SOURCE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_runner.py" plan \
+            --artifact-id "${POC_SOURCE_ARTIFACT_ID}" \
+            --archive-sha256 "${POC_SOURCE_ARCHIVE_SHA256}" \
+            --source-sha256 "${POC_SOURCE_SHA256}"
 
       - name: Upload test preview artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -178,7 +305,8 @@ jobs:
           name: >-
             pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
             needs.preflight.outputs.head_sha }}-test-preview
-          path: .artifacts/pulumi-preview
+          path: .trusted/.artifacts/pulumi-preview
+          if-no-files-found: error
           retention-days: 7
 
       - name: Upload test plan artifact
@@ -187,7 +315,8 @@ jobs:
           name: >-
             pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
             needs.preflight.outputs.head_sha }}-test-plan
-          path: .artifacts/pulumi-plan
+          path: .trusted/.artifacts/pulumi-plan
+          if-no-files-found: error
           retention-days: 7
 
   test_destructive_diff:
@@ -203,11 +332,8 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ needs.preflight.outputs.head_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
-
-      - name: Start development environment
-        run: make start
 
       - name: Download test preview artifact
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
@@ -215,16 +341,15 @@ jobs:
           name: >-
             pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
             needs.preflight.outputs.head_sha }}-test-preview
-          path: .artifacts/pulumi-preview
-
-      - name: Stage pull request labels for destructive diff override
-        run: |
-          mkdir -p .artifacts/pulumi-preview
-          labels="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${{ needs.preflight.outputs.pull_request_number }}/labels" --paginate --slurp | jq '[.[][] | {name: .name}]')"
-          printf '{"pull_request":{"labels":%s}}\n' "${labels}" > .artifacts/github-event.json
+          path: .trusted/.artifacts/pulumi-preview
 
       - name: Enforce destructive diff gate
-        run: make test-destructive-diff
+        run: |
+          shopt -s nullglob
+          previews=(.trusted/.artifacts/pulumi-preview/*.json)
+          test "${#previews[@]}" -gt 0
+          python3 -I "${GITHUB_WORKSPACE}/scripts/pulumi_ci_guardrails.py" \
+            destructive-gate "${previews[@]}"
 
   test_apply:
     name: Test Apply
@@ -234,11 +359,13 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - preflight
+      - poc_prepare_source
       - test_preview
       - test_destructive_diff
     timeout-minutes: 30
     permissions:
       contents: read
+      actions: read
       id-token: write
       pull-requests: read
     env:
@@ -259,6 +386,9 @@ jobs:
           path: .trusted
           persist-credentials: false
 
+      - name: Install trusted registry runtime before credentials
+        uses: ./.trusted/.github/actions/setup-poc-runtime
+
       - name: Recheck current PR head before credentials
         env:
           GH_TOKEN: ${{ github.token }}
@@ -274,6 +404,20 @@ jobs:
           test "$(jq -r '.base.sha' <<< "${pr_json}")" = "${EXPECTED_BASE_SHA}"
           test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
 
+      - name: Verify reviewed source before config credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+        run: |
+          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
+            --repository "${REVIEW_REPOSITORY}" \
+            --pr-number "${PR_NUMBER}" \
+            --expected-head-sha "${EXPECTED_SHA}" \
+            --expected-base-sha "${EXPECTED_BASE_SHA}"
+
       - name: Load test AWS CI configuration
         id: ci_config
         uses: ./.trusted/.github/actions/load-aws-ci-env
@@ -286,6 +430,20 @@ jobs:
           required-keys: >-
             AWS_ACCOUNT_ID,AWS_REGION,AWS_APPLY_ROLE_ARN,
             PULUMI_BACKEND_URL,PULUMI_SECRETS_PROVIDER,PULUMI_PREVIEW_STACKS
+
+      - name: Verify reviewed source before execution credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+        run: |
+          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
+            --repository "${REVIEW_REPOSITORY}" \
+            --pr-number "${PR_NUMBER}" \
+            --expected-head-sha "${EXPECTED_SHA}" \
+            --expected-base-sha "${EXPECTED_BASE_SHA}"
 
       - name: Configure AWS apply credentials via OIDC
         uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
@@ -305,8 +463,19 @@ jobs:
           echo "Role purpose: apply"
           echo "PR command: ${{ needs.preflight.outputs.display_command }}"
 
-      - name: Start development environment
-        run: make start
+      - name: Verify reviewed source before PR execution
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+        run: |
+          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
+            --repository "${REVIEW_REPOSITORY}" \
+            --pr-number "${PR_NUMBER}" \
+            --expected-head-sha "${EXPECTED_SHA}" \
+            --expected-base-sha "${EXPECTED_BASE_SHA}"
 
       - name: Download test plan artifact
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
@@ -314,7 +483,7 @@ jobs:
           name: >-
             pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
             needs.preflight.outputs.head_sha }}-test-plan
-          path: .artifacts/pulumi-plan
+          path: .trusted/.artifacts/pulumi-plan
 
       - name: Download test preview for apply revalidation
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
@@ -322,20 +491,35 @@ jobs:
           name: >-
             pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
             needs.preflight.outputs.head_sha }}-test-preview
-          path: .artifacts/pulumi-preview
+          path: .trusted/.artifacts/pulumi-preview
+
+      - name: Verify reviewed source before saved-plan replay
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+        run: |
+          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
+            --repository "${REVIEW_REPOSITORY}" \
+            --pr-number "${PR_NUMBER}" \
+            --expected-head-sha "${EXPECTED_SHA}" \
+            --expected-base-sha "${EXPECTED_BASE_SHA}"
 
       - name: Apply saved test plan
         env:
           GH_TOKEN: ${{ github.token }}
+          POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
+          POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
+          POC_SOURCE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
           PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          GITHUB_TOKEN: ${{ github.token }}
           EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
           EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-          PULUMI_EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
         run: |
           # The immutable same-run preview is the diff for this saved plan.
           shopt -s nullglob
-          previews=(.artifacts/pulumi-preview/*.json)
+          previews=(.trusted/.artifacts/pulumi-preview/*.json)
           found_preview=false
           for preview in "${previews[@]}"; do
             if [[ "${preview}" != */pull-request-event.json ]]; then
@@ -351,12 +535,13 @@ jobs:
           test "$(jq -r '.base.ref' <<< "${pr_json}")" = main
           test "$(jq -r '.base.sha' <<< "${pr_json}")" = "${EXPECTED_BASE_SHA}"
           test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
-          labels="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" --paginate --slurp | jq '[.[][] | {name: .name}]')"
-          printf '{"pull_request":{"labels":%s}}\n' "${labels}" > .artifacts/github-event.json
           # Remove only obsolete event metadata; preserve the original diff files.
-          rm -f .artifacts/pulumi-preview/pull-request-event.json
-          make test-destructive-diff
-          make pulumi-up-plan
+          rm -f .trusted/.artifacts/pulumi-preview/pull-request-event.json
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_runner.py" up-plan \
+            --artifact-id "${POC_SOURCE_ARTIFACT_ID}" \
+            --archive-sha256 "${POC_SOURCE_ARCHIVE_SHA256}" \
+            --source-sha256 "${POC_SOURCE_SHA256}"
 
   test_post_apply_drift:
     name: Test Post-Apply Drift
@@ -366,10 +551,12 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - preflight
+      - poc_prepare_source
       - test_apply
     timeout-minutes: 20
     permissions:
       contents: read
+      actions: read
       id-token: write
       pull-requests: read
     env:
@@ -390,6 +577,9 @@ jobs:
           path: .trusted
           persist-credentials: false
 
+      - name: Install trusted registry runtime before credentials
+        uses: ./.trusted/.github/actions/setup-poc-runtime
+
       - name: Recheck current PR head before credentials
         env:
           GH_TOKEN: ${{ github.token }}
@@ -405,6 +595,20 @@ jobs:
           test "$(jq -r '.base.sha' <<< "${pr_json}")" = "${EXPECTED_BASE_SHA}"
           test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
 
+      - name: Verify reviewed source before config credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+        run: |
+          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
+            --repository "${REVIEW_REPOSITORY}" \
+            --pr-number "${PR_NUMBER}" \
+            --expected-head-sha "${EXPECTED_SHA}" \
+            --expected-base-sha "${EXPECTED_BASE_SHA}"
+
       - name: Load test AWS CI configuration
         id: ci_config
         uses: ./.trusted/.github/actions/load-aws-ci-env
@@ -413,24 +617,59 @@ jobs:
           config-role-arn: ${{ vars.AWS_TEST_CI_CONFIG_ROLE_ARN }}
           expected-account-id: ${{ vars.AWS_TEST_ACCOUNT_ID }}
           aws-region: ${{ vars.AWS_TEST_REGION }}
-          purpose: PR test drift
+          purpose: PR test registry drift
           required-keys: >-
-            AWS_ACCOUNT_ID,AWS_REGION,AWS_DRIFT_ROLE_ARN,
-            PULUMI_BACKEND_URL,PULUMI_SECRETS_PROVIDER,PULUMI_DRIFT_STACKS
+            AWS_ACCOUNT_ID,AWS_REGION,AWS_PREVIEW_ROLE_ARN,
+            PULUMI_BACKEND_URL,PULUMI_SECRETS_PROVIDER,PULUMI_PREVIEW_STACKS
+
+      - name: Verify reviewed source before execution credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+        run: |
+          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
+            --repository "${REVIEW_REPOSITORY}" \
+            --pr-number "${PR_NUMBER}" \
+            --expected-head-sha "${EXPECTED_SHA}" \
+            --expected-base-sha "${EXPECTED_BASE_SHA}"
 
       - name: Configure AWS drift credentials via OIDC
         uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
         with:
-          role-to-assume: ${{ steps.ci_config.outputs.aws-drift-role-arn }}
-          role-session-name: gha-pr-test-drift-${{ github.run_id }}
+          role-to-assume: ${{ steps.ci_config.outputs.aws-preview-role-arn }}
+          role-session-name: gha-pr-test-preview-${{ github.run_id }}
           aws-region: ${{ steps.ci_config.outputs.aws-region }}
           allowed-account-ids: ${{ vars.AWS_TEST_ACCOUNT_ID }}
 
-      - name: Start development environment
-        run: make start
+      - name: Verify reviewed source before PR execution
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+        run: |
+          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
+            --repository "${REVIEW_REPOSITORY}" \
+            --pr-number "${PR_NUMBER}" \
+            --expected-head-sha "${EXPECTED_SHA}" \
+            --expected-base-sha "${EXPECTED_BASE_SHA}"
 
       - name: Run test post-apply drift detection
-        run: make test-drift
+        env:
+          GH_TOKEN: ${{ github.token }}
+          POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
+          POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
+          POC_SOURCE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_runner.py" drift \
+            --artifact-id "${POC_SOURCE_ARTIFACT_ID}" \
+            --archive-sha256 "${POC_SOURCE_ARCHIVE_SHA256}" \
+            --source-sha256 "${POC_SOURCE_SHA256}"
 
   prod_preview:
     name: Prod Preview
@@ -484,6 +723,20 @@ jobs:
           test "$(jq -r '.base.sha' <<< "${pr_json}")" = "${EXPECTED_BASE_SHA}"
           test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
 
+      - name: Verify reviewed source before config credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+        run: |
+          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
+            --repository "${REVIEW_REPOSITORY}" \
+            --pr-number "${PR_NUMBER}" \
+            --expected-head-sha "${EXPECTED_SHA}" \
+            --expected-base-sha "${EXPECTED_BASE_SHA}"
+
       - name: Load prod preview AWS CI configuration
         id: ci_config
         uses: ./.trusted/.github/actions/load-aws-ci-env
@@ -530,6 +783,20 @@ jobs:
             exit 1
           fi
 
+      - name: Verify reviewed source before execution credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+        run: |
+          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
+            --repository "${REVIEW_REPOSITORY}" \
+            --pr-number "${PR_NUMBER}" \
+            --expected-head-sha "${EXPECTED_SHA}" \
+            --expected-base-sha "${EXPECTED_BASE_SHA}"
+
       - name: Configure AWS preview credentials via OIDC
         uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
         with:
@@ -547,6 +814,20 @@ jobs:
           echo "Current AWS account ID: ${account_id}"
           echo "Role purpose: preview"
           echo "PR command: ${{ needs.preflight.outputs.display_command }}"
+
+      - name: Verify reviewed source before PR execution
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+        run: |
+          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
+            --repository "${REVIEW_REPOSITORY}" \
+            --pr-number "${PR_NUMBER}" \
+            --expected-head-sha "${EXPECTED_SHA}" \
+            --expected-base-sha "${EXPECTED_BASE_SHA}"
 
       - name: Start development environment
         run: make start
@@ -603,12 +884,6 @@ jobs:
             pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
             needs.preflight.outputs.head_sha }}-prod-preview
           path: .artifacts/pulumi-preview
-
-      - name: Stage pull request labels for destructive diff override
-        run: |
-          mkdir -p .artifacts/pulumi-preview
-          labels="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${{ needs.preflight.outputs.pull_request_number }}/labels" --paginate --slurp | jq '[.[][] | {name: .name}]')"
-          printf '{"pull_request":{"labels":%s}}\n' "${labels}" > .artifacts/github-event.json
 
       - name: Enforce destructive diff gate
         run: make test-destructive-diff
@@ -673,6 +948,20 @@ jobs:
           test "$(jq -r '.base.sha' <<< "${pr_json}")" = "${EXPECTED_BASE_SHA}"
           test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
 
+      - name: Verify reviewed source before config credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+        run: |
+          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
+            --repository "${REVIEW_REPOSITORY}" \
+            --pr-number "${PR_NUMBER}" \
+            --expected-head-sha "${EXPECTED_SHA}" \
+            --expected-base-sha "${EXPECTED_BASE_SHA}"
+
       - name: Load prod AWS CI configuration
         id: ci_config
         uses: ./.trusted/.github/actions/load-aws-ci-env
@@ -685,6 +974,20 @@ jobs:
           required-keys: >-
             AWS_ACCOUNT_ID,AWS_REGION,AWS_APPLY_ROLE_ARN,
             PULUMI_BACKEND_URL,PULUMI_SECRETS_PROVIDER,PULUMI_PREVIEW_STACKS
+
+      - name: Verify reviewed source before execution credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+        run: |
+          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
+            --repository "${REVIEW_REPOSITORY}" \
+            --pr-number "${PR_NUMBER}" \
+            --expected-head-sha "${EXPECTED_SHA}" \
+            --expected-base-sha "${EXPECTED_BASE_SHA}"
 
       - name: Configure AWS apply credentials via OIDC
         uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
@@ -705,6 +1008,20 @@ jobs:
           echo "Role purpose: apply"
           echo "PR command: ${{ needs.preflight.outputs.display_command }}"
 
+      - name: Verify reviewed source before PR execution
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+        run: |
+          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
+            --repository "${REVIEW_REPOSITORY}" \
+            --pr-number "${PR_NUMBER}" \
+            --expected-head-sha "${EXPECTED_SHA}" \
+            --expected-base-sha "${EXPECTED_BASE_SHA}"
+
       - name: Start development environment
         run: make start
 
@@ -723,6 +1040,20 @@ jobs:
             pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
             needs.preflight.outputs.head_sha }}-prod-preview
           path: .artifacts/pulumi-preview
+
+      - name: Verify reviewed source before saved-plan replay
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+        run: |
+          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
+            --repository "${REVIEW_REPOSITORY}" \
+            --pr-number "${PR_NUMBER}" \
+            --expected-head-sha "${EXPECTED_SHA}" \
+            --expected-base-sha "${EXPECTED_BASE_SHA}"
 
       - name: Apply saved production plan
         env:
@@ -751,8 +1082,6 @@ jobs:
           test "$(jq -r '.base.ref' <<< "${pr_json}")" = main
           test "$(jq -r '.base.sha' <<< "${pr_json}")" = "${EXPECTED_BASE_SHA}"
           test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
-          labels="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" --paginate --slurp | jq '[.[][] | {name: .name}]')"
-          printf '{"pull_request":{"labels":%s}}\n' "${labels}" > .artifacts/github-event.json
           # Remove only obsolete event metadata; preserve the original diff files.
           rm -f .artifacts/pulumi-preview/pull-request-event.json
           make test-destructive-diff
@@ -806,6 +1135,20 @@ jobs:
           test "$(jq -r '.base.sha' <<< "${pr_json}")" = "${EXPECTED_BASE_SHA}"
           test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
 
+      - name: Verify reviewed source before config credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+        run: |
+          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
+            --repository "${REVIEW_REPOSITORY}" \
+            --pr-number "${PR_NUMBER}" \
+            --expected-head-sha "${EXPECTED_SHA}" \
+            --expected-base-sha "${EXPECTED_BASE_SHA}"
+
       - name: Load prod preview AWS CI configuration
         id: ci_config
         uses: ./.trusted/.github/actions/load-aws-ci-env
@@ -819,6 +1162,20 @@ jobs:
             AWS_ACCOUNT_ID,AWS_REGION,AWS_DRIFT_ROLE_ARN,
             PULUMI_BACKEND_URL,PULUMI_SECRETS_PROVIDER,PULUMI_DRIFT_STACKS
 
+      - name: Verify reviewed source before execution credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+        run: |
+          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
+            --repository "${REVIEW_REPOSITORY}" \
+            --pr-number "${PR_NUMBER}" \
+            --expected-head-sha "${EXPECTED_SHA}" \
+            --expected-base-sha "${EXPECTED_BASE_SHA}"
+
       - name: Configure AWS drift credentials via OIDC
         uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
         with:
@@ -826,6 +1183,20 @@ jobs:
           role-session-name: gha-pr-prod-drift-${{ github.run_id }}
           aws-region: ${{ steps.ci_config.outputs.aws-region }}
           allowed-account-ids: ${{ vars.AWS_PROD_ACCOUNT_ID }}
+
+      - name: Verify reviewed source before PR execution
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+        run: |
+          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
+            --repository "${REVIEW_REPOSITORY}" \
+            --pr-number "${PR_NUMBER}" \
+            --expected-head-sha "${EXPECTED_SHA}" \
+            --expected-base-sha "${EXPECTED_BASE_SHA}"
 
       - name: Start development environment
         run: make start
@@ -911,6 +1282,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - preflight
+      - poc_prepare_source
       - platform_promotion
       - test_preview
       - test_destructive_diff
@@ -943,6 +1315,7 @@ jobs:
             echo "| Stage | Result |"
             echo "| --- | --- |"
             echo "| Preflight | \`${{ needs.preflight.result }}\` |"
+            echo "| TEST PoC source facts | \`${{ needs.poc_prepare_source.result }}\` |"
             echo "| Test preview | \`${{ needs.test_preview.result }}\` |"
             echo "| Test destructive diff | \`${{ needs.test_destructive_diff.result }}\` |"
             echo "| Test apply | \`${{ needs.test_apply.result }}\` |"
@@ -952,6 +1325,7 @@ jobs:
             echo "| Production apply | \`${{ needs.prod_apply.result }}\` |"
             echo "| Production post-apply drift | \`${{ needs.prod_post_apply_drift.result }}\` |"
             echo
+            echo "PoC source preparation supports TEST only; PROD requests are rejected before cloud execution."
             echo "Production stages are gated behind a successful test apply and test post-apply drift check for the same PR head SHA."
           } > "${body_file}"
 

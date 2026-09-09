@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -203,16 +204,46 @@ def test_scheduled_drift_uses_only_protected_main_read_roles():
             if step.get("uses", "").startswith("actions/checkout@")
         ]
         assert all(step["with"]["ref"] == "${{ github.sha }}" for step in checkouts)
+        guard_name = (
+            "Verify native scheduled run and installed contract before credentials"
+            if environment == "test"
+            else "Verify trusted scheduled revision before credentials"
+        )
         guard_index = next(
-            i
-            for i, step in enumerate(steps)
-            if step.get("name")
-            == "Verify trusted scheduled revision before credentials"
+            i for i, step in enumerate(steps) if step.get("name") == guard_name
         )
         loader_index = next(
             i for i, step in enumerate(steps) if step.get("id") == "ci_config"
         )
         assert guard_index < loader_index
+        guard = steps[guard_index]
+        assert "if" not in guard and "continue-on-error" not in guard
+        if environment == "test":
+            assert len(checkouts) == 1
+            assert checkouts[0]["with"]["path"] == ".trusted"
+            assert job["permissions"]["actions"] == "read"
+            setup_index = next(
+                i
+                for i, step in enumerate(steps)
+                if step.get("uses") == "./.trusted/.github/actions/setup-poc-runtime"
+            )
+            assert steps.index(checkouts[0]) < setup_index < guard_index
+            for step, command in ((guard, "verify"), (steps[-1], "check")):
+                assert shlex.split(step["run"].replace("\\\n", "")) == [
+                    "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python",
+                    "-I",
+                    "${GITHUB_WORKSPACE}/.trusted/scripts/poc_scheduled_registry_drift.py",
+                    command,
+                ]
+                assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+                assert "if" not in step and "continue-on-error" not in step
+            assert not any("make " in step.get("run", "") for step in steps)
+        else:
+            assert 'test "${GITHUB_EVENT_NAME}" = schedule' in guard["run"]
+            assert 'test "${GITHUB_REF}" = refs/heads/main' in guard["run"]
+            assert 'test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"' in guard["run"]
+            assert guard["env"]["EXPECTED_SHA"] == "${{ github.sha }}"
+            assert steps[-1]["run"] == "make test-drift"
         loader = steps[loader_index]["with"]
         assert loader["environment"] == (
             "prod-preview" if environment == "prod" else "test"
@@ -238,7 +269,10 @@ def test_scheduled_drift_uses_only_protected_main_read_roles():
             role["with"]["allowed-account-ids"]
             == "${{ vars.AWS_" + environment.upper() + "_ACCOUNT_ID }}"
         )
-        assert steps[-1]["run"] == "make test-drift"
+        assert loader_index < steps.index(role) < len(steps) - 1
+        assert role["with"]["role-session-name"] == (
+            f"gha-scheduled-{environment}-drift-${{{{ github.run_id }}}}"
+        )
         assert "pulumi-up" not in str(job) and "deployments: write" not in str(job)
 
 
@@ -269,6 +303,8 @@ def test_state_operations_share_cross_workflow_stack_mutex():
         for name, job in workflow["jobs"].items()
         if any(
             operations.intersection(step.get("run", "").splitlines())
+            or "poc_registry_runner.py" in step.get("run", "")
+            or "poc_scheduled_registry_drift.py" in step.get("run", "")
             for step in job["steps"]
         )
     }

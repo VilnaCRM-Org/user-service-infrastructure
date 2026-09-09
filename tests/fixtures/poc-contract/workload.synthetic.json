@@ -1,0 +1,227 @@
+{
+  "schema_version": "poc-test-v1",
+  "status": "proposed-not-installed",
+  "environment": "test",
+  "account_id": "891377212104",
+  "region": "eu-central-1",
+  "prerequisites": [
+    "independent-seed-and-boundary-enrollment-pending",
+    "runtime-secret-guard-amendment-pending",
+    "actual-service-main-controller-trust-installation-pending",
+    "application-runtime-repair-and-live-acceptance-pending"
+  ],
+  "backend": {
+    "project": "user-service-infrastructure",
+    "stack": "test",
+    "url": "s3://pulumi-user-service-infrastructure-test-state",
+    "secrets_provider": "awskms://alias/pulumi-user-service-infrastructure-test-secrets?region=eu-central-1",
+    "owner": "central-governance"
+  },
+  "source": {
+    "repository": "VilnaCRM-Org/user-service-infrastructure",
+    "repository_id": 911736693,
+    "owner_id": 114362548
+  },
+  "phase": "workload",
+  "registries": {
+    "web": {
+      "owner": "service",
+      "logical_name": "synthetic-web",
+      "name": "synthetic-poc-web",
+      "arn": "arn:aws:ecr:eu-central-1:891377212104:repository/synthetic-poc-web",
+      "uri": "891377212104.dkr.ecr.eu-central-1.amazonaws.com/synthetic-poc-web"
+    },
+    "worker": {
+      "owner": "service",
+      "logical_name": "synthetic-worker",
+      "name": "synthetic-poc-worker",
+      "arn": "arn:aws:ecr:eu-central-1:891377212104:repository/synthetic-poc-worker",
+      "uri": "891377212104.dkr.ecr.eu-central-1.amazonaws.com/synthetic-poc-worker"
+    }
+  },
+  "workload": {
+    "central": {
+      "owner": "central-governance",
+      "inventory_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "seed_enrollment_revision": "4444444444444444444444444444444444444444444444444444444444444444",
+      "publisher_role_arn": "arn:aws:iam::891377212104:role/SyntheticPocPublisher",
+      "publisher_workflow_path": ".github/workflows/synthetic-publish.yml",
+      "publisher_environment": "synthetic-poc-publish",
+      "publisher_claim_kind": "ordinary-workflow-protected-environment",
+      "execution_role_arn": "arn:aws:iam::891377212104:role/SyntheticPocExecution",
+      "task_role_arn": "arn:aws:iam::891377212104:role/SyntheticPocTask"
+    },
+    "release": {
+      "schema_version": "poc-release-v1",
+      "repository": "VilnaCRM-Org/user-service",
+      "repository_id": 646535009,
+      "owner_id": 114362548,
+      "source_sha": "8888888888888888888888888888888888888888",
+      "publisher_run_id": 1,
+      "publisher_run_attempt": 1,
+      "workflow_ref": "VilnaCRM-Org/user-service/.github/workflows/synthetic-publish.yml@refs/heads/main",
+      "platform": "linux/amd64",
+      "runtime_contract_version": "poc-test-v1",
+      "provenance": {
+        "artifact_id": 1,
+        "archive_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+        "file_sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+      },
+      "quality_evidence": {
+        "artifact_id": 2,
+        "archive_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+        "file_sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+      },
+      "web": {
+        "repository_uri": "891377212104.dkr.ecr.eu-central-1.amazonaws.com/synthetic-poc-web",
+        "target": "frankenphp_prod",
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "worker": {
+        "repository_uri": "891377212104.dkr.ecr.eu-central-1.amazonaws.com/synthetic-poc-worker",
+        "target": "app_workers",
+        "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    "external": {
+      "domain": {
+        "fqdn": "user.vilnacrmtest.com",
+        "dns_authority": "aws-route53",
+        "certificate_arn": "arn:aws:acm:eu-central-1:891377212104:certificate/00000000-0000-4000-8000-000000000002",
+        "review": {
+          "reviewer": "SyntheticOwner",
+          "source_sha": "5555555555555555555555555555555555555555",
+          "reference": "https://github.com/VilnaCRM-Org/user-service-infrastructure/issues/1#issuecomment-1"
+        },
+        "account_id": "891377212104",
+        "hosted_zone_id": "Z04999481RZ4UQK2NANVH"
+      },
+      "mail": {
+        "transport": "ses-v2-api",
+        "authentication": "ecs-task-role",
+        "account_id": "891377212104",
+        "region": "eu-central-1",
+        "identity_arn": "arn:aws:ses:eu-central-1:891377212104:identity/poc.example",
+        "sender": "sender@poc.example",
+        "recipients": [
+          "recipient@poc.example"
+        ],
+        "action": "ses:SendEmail",
+        "required_iam_conditions": [
+          "ses:FromAddress",
+          "ses:Recipients"
+        ],
+        "review": {
+          "reviewer": "SyntheticOwner",
+          "source_sha": "5555555555555555555555555555555555555555",
+          "reference": "https://github.com/VilnaCRM-Org/user-service-infrastructure/issues/1#issuecomment-1"
+        }
+      },
+      "responder": {
+        "identity": "SyntheticResponder",
+        "channel_reference": "fixture-only",
+        "review": {
+          "reviewer": "SyntheticOwner",
+          "source_sha": "5555555555555555555555555555555555555555",
+          "reference": "https://github.com/VilnaCRM-Org/user-service-infrastructure/issues/1#issuecomment-1"
+        }
+      }
+    },
+    "secret_lifecycle": {
+      "owner": "service",
+      "namespace": "/user-service-infrastructure/runtime/test/",
+      "generation": "generate-once-persist-explicit-rotation",
+      "guard_amendment": "pending-independent-reviewed-amendment",
+      "provider_refresh_actions": [
+        "secretsmanager:GetSecretValue"
+      ],
+      "review": {
+        "reviewer": "SyntheticOwner",
+        "source_sha": "5555555555555555555555555555555555555555",
+        "reference": "https://github.com/VilnaCRM-Org/user-service-infrastructure/issues/1#issuecomment-1"
+      },
+      "references": {
+        "document_db_password": {
+          "kms_key_arn": "arn:aws:kms:eu-central-1:891377212104:key/00000000-0000-4000-8000-000000000001",
+          "owner": "service-generated",
+          "name": "/user-service-infrastructure/runtime/test/synthetic-document_db_password"
+        },
+        "redis_auth_token": {
+          "kms_key_arn": "arn:aws:kms:eu-central-1:891377212104:key/00000000-0000-4000-8000-000000000001",
+          "owner": "service-generated",
+          "name": "/user-service-infrastructure/runtime/test/synthetic-redis_auth_token"
+        },
+        "app_secret": {
+          "kms_key_arn": "arn:aws:kms:eu-central-1:891377212104:key/00000000-0000-4000-8000-000000000001",
+          "owner": "service-generated",
+          "name": "/user-service-infrastructure/runtime/test/synthetic-app_secret"
+        },
+        "oauth_encryption_key": {
+          "kms_key_arn": "arn:aws:kms:eu-central-1:891377212104:key/00000000-0000-4000-8000-000000000001",
+          "owner": "service-generated",
+          "name": "/user-service-infrastructure/runtime/test/synthetic-oauth_encryption_key"
+        },
+        "oauth_passphrase": {
+          "kms_key_arn": "arn:aws:kms:eu-central-1:891377212104:key/00000000-0000-4000-8000-000000000001",
+          "owner": "service-generated",
+          "name": "/user-service-infrastructure/runtime/test/synthetic-oauth_passphrase"
+        },
+        "two_factor_encryption_key": {
+          "kms_key_arn": "arn:aws:kms:eu-central-1:891377212104:key/00000000-0000-4000-8000-000000000001",
+          "owner": "service-generated",
+          "name": "/user-service-infrastructure/runtime/test/synthetic-two_factor_encryption_key"
+        },
+        "oauth_private_key": {
+          "kms_key_arn": "arn:aws:kms:eu-central-1:891377212104:key/00000000-0000-4000-8000-000000000001",
+          "owner": "service-generated",
+          "name": "/user-service-infrastructure/runtime/test/synthetic-oauth_private_key"
+        },
+        "oauth_public_key": {
+          "kms_key_arn": "arn:aws:kms:eu-central-1:891377212104:key/00000000-0000-4000-8000-000000000001",
+          "owner": "service-generated",
+          "name": "/user-service-infrastructure/runtime/test/synthetic-oauth_public_key"
+        },
+        "document_db_url": {
+          "kms_key_arn": "arn:aws:kms:eu-central-1:891377212104:key/00000000-0000-4000-8000-000000000001",
+          "owner": "service-generated",
+          "name": "/user-service-infrastructure/runtime/test/synthetic-document_db_url"
+        },
+        "redis_url": {
+          "kms_key_arn": "arn:aws:kms:eu-central-1:891377212104:key/00000000-0000-4000-8000-000000000001",
+          "owner": "service-generated",
+          "name": "/user-service-infrastructure/runtime/test/synthetic-redis_url"
+        }
+      }
+    },
+    "service_components": [
+      "registries",
+      "network",
+      "alb",
+      "ecs-fargate",
+      "documentdb",
+      "redis",
+      "sqs",
+      "log-groups",
+      "runtime-secrets"
+    ],
+    "runtime": {
+      "aws_auth": "task-role-default-chain",
+      "ecs_exec": false,
+      "queue_auto_setup": false,
+      "health_path": "/api/health",
+      "health_status": 204,
+      "database_name": "user_service",
+      "documentdb_tls": true,
+      "retry_writes": false,
+      "worker_mode": "production-only",
+      "optional_social_providers": {
+        "environment_variable": "SOCIAL_OAUTH_ENABLED",
+        "value": "false"
+      },
+      "ca_bundle_path": "/synthetic/ca.pem",
+      "worker_health_command": [
+        "/synthetic/check-worker"
+      ]
+    }
+  }
+}

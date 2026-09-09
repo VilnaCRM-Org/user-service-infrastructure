@@ -1,0 +1,51 @@
+{
+  "schema_version": "poc-test-v1",
+  "status": "proposed-not-installed",
+  "environment": "test",
+  "account_id": "891377212104",
+  "region": "eu-central-1",
+  "prerequisites": [
+    "independent-seed-and-boundary-enrollment-pending",
+    "runtime-secret-guard-amendment-pending",
+    "actual-service-main-controller-trust-installation-pending",
+    "application-runtime-repair-and-live-acceptance-pending"
+  ],
+  "backend": {
+    "project": "user-service-infrastructure",
+    "stack": "test",
+    "url": "s3://pulumi-user-service-infrastructure-test-state",
+    "secrets_provider": "awskms://alias/pulumi-user-service-infrastructure-test-secrets?region=eu-central-1",
+    "owner": "central-governance"
+  },
+  "source": {
+    "repository": "VilnaCRM-Org/user-service-infrastructure",
+    "repository_id": 911736693,
+    "owner_id": 114362548
+  },
+  "phase": "registry",
+  "registries": {
+    "web": {
+      "owner": "service",
+      "logical_name": "user-service-web-repository",
+      "name": "user-service-test-web",
+      "arn": "arn:aws:ecr:eu-central-1:891377212104:repository/user-service-test-web",
+      "uri": "891377212104.dkr.ecr.eu-central-1.amazonaws.com/user-service-test-web"
+    },
+    "worker": {
+      "owner": "service",
+      "logical_name": "user-service-worker-repository",
+      "name": "user-service-test-worker",
+      "arn": "arn:aws:ecr:eu-central-1:891377212104:repository/user-service-test-worker",
+      "uri": "891377212104.dkr.ecr.eu-central-1.amazonaws.com/user-service-test-worker"
+    }
+  },
+  "central": {
+    "owner": "central-governance",
+    "inventory_sha256": "23d26bb7dcb097d8c2f66ee114346b63cafca1857125ea5ae81af83b44e4b4e9",
+    "seed_enrollment_revision": "8fc035d59e5e6622b9fc69336991f1ee83a9a2e035358acb7a7738f4b8790841",
+    "publisher_role_arn": "arn:aws:iam::891377212104:role/user-service-test-ImagePublisher",
+    "publisher_workflow_path": ".github/workflows/publish-poc-images.yml",
+    "publisher_environment": "poc-test-images",
+    "publisher_claim_kind": "ordinary-workflow-protected-environment"
+  }
+}

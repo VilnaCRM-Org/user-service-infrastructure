@@ -9,9 +9,12 @@ authors = [
     { name = "Mykyta Mozghovoi", email = "n.mozgowoi2017@gmail.com" },
 ]
 dependencies = [
+    "jsonschema==4.26.0",
     "pulumi>=3.200.0,<4",
     "pulumi-aws>=7.0,<8",
     "pulumi-policy>=1.20.0,<2",
+    "pulumi-random==4.19.2",
+    "pulumi-tls==5.3.1",
     "pyyaml>=6,<7",
 ]
 
@@ -62,12 +65,26 @@ known_first_party = [
     "_pulumi_stack_config",
     "governance_paths",
     "governance_promotion",
+    "poc_backend_observer",
+    "poc_contract",
+    "poc_phase_admission",
+    "poc_phase_source_adapter",
+    "poc_provider_runtime",
+    "poc_registry_phase_entrypoint",
+    "poc_registry_plan",
+    "poc_registry_runner",
+    "poc_scheduled_registry_drift",
+    "poc_secret_observation",
+    "poc_source_artifact",
+    "pulumi_ci_guardrails",
     "pulumi_command_preflight",
     "pulumi_pr_comment",
     "_script_support",
     "app",
     "policy",
     "reviewed_iam",
+    "reviewed_source_admission",
+    "run_pulumi_command",
 ]
 
 [tool.deptry.package_module_name_map]
@@ -123,7 +140,7 @@ allowed_importers = ["app.environment"]
 name = "Pulumi app layering remains one-way"
 type = "layers"
 containers = ["app"]
-layers = ["environment", "guardrails"]
+layers = ["stack", "compute", "data", "messaging", "network", "environment", "guardrails"]
 
 [[tool.importlinter.contracts]]
 name = "Policy pack stays behind the policy entrypoint"

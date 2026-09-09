@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Iterator
 from urllib.parse import SplitResult, parse_qs, unquote, urlsplit
 
 import yaml
+from yaml.constructor import ConstructorError
 
 if TYPE_CHECKING:
     from _pulumi_command_support import CommandContext
@@ -22,6 +23,19 @@ if TYPE_CHECKING:
 
 class StackConfigError(ValueError):
     """A stack configuration could not be verified without replacing its key."""
+
+
+class _StackConfigLoader(yaml.SafeLoader):
+    """Do not let duplicate YAML keys hide an explicit unsafe provider setting."""
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict:
+        self.flatten_mapping(node)
+        mapping = super().construct_mapping(node, deep=deep)
+        if len(mapping) != len(node.value):
+            raise ConstructorError(
+                None, None, "Duplicate configuration keys", node.start_mark
+            )
+        return mapping
 
 
 def _require(condition: Any, message: str) -> None:
@@ -56,7 +70,12 @@ def _read_json(context: CommandContext, command: list[str]) -> dict[str, Any]:
 def _yaml_document(path: Path) -> dict[str, Any]:
     _require(not path.is_symlink(), "Stack configuration symlinks are not allowed.")
     try:
-        value = yaml.safe_load(path.read_text())
+        # This SafeLoader subclass only adds duplicate-key rejection.
+        loader = _StackConfigLoader(path.read_text())
+        try:
+            value = loader.get_single_data()
+        finally:
+            loader.dispose()
     except (OSError, yaml.YAMLError):
         raise StackConfigError("Unable to read stack configuration YAML.") from None
     _require(isinstance(value, dict), "Stack configuration must be a YAML mapping.")
@@ -88,6 +107,20 @@ def _split_uri(value: str) -> SplitResult:
         ) from None
 
 
+def _region(context: CommandContext) -> str:
+    """Require one unambiguous region from the trusted cloud configuration."""
+    region = context.env.get("AWS_REGION") or context.env.get("AWS_DEFAULT_REGION", "")
+    _require(
+        re.fullmatch(r"[a-z]{2}(?:-[a-z]+)+-[0-9]+", region)
+        and all(
+            not context.env.get(key) or context.env[key] == region
+            for key in ("AWS_REGION", "AWS_DEFAULT_REGION")
+        ),
+        "AWS region configuration must pin one unambiguous region.",
+    )
+    return region
+
+
 def _coordinates(context: CommandContext, stack: str) -> dict[str, str]:
     _require(
         not re.search(r"[%\\\x00-\x20]", context.backend_url),
@@ -117,6 +150,7 @@ def _coordinates(context: CommandContext, stack: str) -> dict[str, str]:
     key = f".pulumi/stacks/{project}/{stack}.json"
     return {
         "accountId": account,
+        "region": _region(context),
         "project": str(project),
         "stack": stack,
         "backendUrl": context.backend_url,
@@ -221,9 +255,8 @@ def _provider_state(context: CommandContext, target: dict[str, str]) -> dict[str
     return provider
 
 
-def _key_identity(context: CommandContext, account: str) -> str:
+def _key_identity(context: CommandContext, account: str, region: str) -> str:
     provider = _split_uri(context.secrets_provider)
-    region = context.env.get("AWS_REGION") or context.env.get("AWS_DEFAULT_REGION", "")
     _require(
         provider.scheme == "awskms"
         and not provider.fragment
@@ -266,8 +299,52 @@ def _validate_key_metadata(metadata: Any, account: str, region: str) -> str:
     return arn
 
 
+def _provider_pin_value(field: str, value: Any) -> Any:
+    """Accept equivalent Pulumi scalar encodings without accepting coercions."""
+    if field == "allowedAccountIds" and isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            raise StackConfigError(
+                "Invalid AWS provider account configuration."
+            ) from None
+    if field.startswith("skip") and value == "false":
+        return False
+    return value
+
+
+def _materialize_provider_pins(config: dict[str, Any], target: dict[str, str]) -> None:
+    """Reject explicit redirects before emitting the exact desired AWS namespace."""
+    pins = {
+        "region": target["region"],
+        "allowedAccountIds": [target["accountId"]],
+        "skipCredentialsValidation": False,
+        "skipRegionValidation": False,
+        "skipRequestingAccountId": False,
+    }
+    settings = config.setdefault("config", {})
+    _require(isinstance(settings, dict), "Stack config must be a mapping.")
+    for key, value in list(settings.items()):
+        _require(isinstance(key, str), "Stack config keys must be strings.")
+        if key != "aws" and not key.startswith("aws:"):
+            continue
+        field = key.removeprefix("aws:").removeprefix("config:")
+        _require(field in pins, "Unsupported AWS provider configuration.")
+        actual = _provider_pin_value(field, value)
+        expected = pins[field]
+        _require(
+            type(actual) is type(expected) and actual == expected,
+            "AWS provider configuration differs from the pinned target.",
+        )
+        del settings[key]
+    settings.update({f"aws:{field}": value for field, value in pins.items()})
+
+
 def _configuration(
-    context: CommandContext, stack: str, provider: dict[str, Any]
+    context: CommandContext,
+    stack: str,
+    provider: dict[str, Any],
+    target: dict[str, str],
 ) -> dict[str, Any]:
     config = _yaml_document(context.pulumi_dir / f"Pulumi.{stack}.yaml")
     state = provider["state"]
@@ -279,6 +356,7 @@ def _configuration(
     )
     config.pop("encryptionsalt", None)
     config.update(secretsprovider=state["url"], encryptedkey=state["encryptedkey"])
+    _materialize_provider_pins(config, target)
     return config
 
 
@@ -300,12 +378,12 @@ def prepared_stack_configuration(
     )
     before = _checkpoint_version(context, target)
     provider = _provider_state(context, target)
-    key_arn = _key_identity(context, target["accountId"])
+    key_arn = _key_identity(context, target["accountId"], target["region"])
     _require(
         before == _checkpoint_version(context, target),
         "Checkpoint changed during configuration preparation.",
     )
-    config = _configuration(context, stack, provider)
+    config = _configuration(context, stack, provider, target)
     binding = {
         **{k: target[k] for k in ("accountId", "backendUrl", "project", "stack")},
         **before,

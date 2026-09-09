@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from test_reviewed_source_admission import review_api
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 preflight = importlib.import_module("pulumi_command_preflight")
@@ -179,6 +180,9 @@ def test_collect_evidence_paginates_and_protects_renamed_paths(monkeypatch):
     monkeypatch.setenv("GITHUB_REPOSITORY", "org/repo")
 
     def api(path, *args):
+        review = review_api(evidence, path, *args)
+        if review is not NotImplemented:
+            return review
         if "/actions/runs/" in path:
             return evidence["run"]
         if "/issues/comments/" in path:

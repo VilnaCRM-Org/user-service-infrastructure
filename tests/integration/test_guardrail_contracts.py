@@ -137,6 +137,7 @@ def test_shared_entrypoint_integrates_config_provider_and_exports(
     backend = f"s3://pulumi-user-service-infrastructure-{environment}-state"
     provider = f"awskms://alias/pulumi-user-service-infrastructure-{environment}-secrets?region=eu-central-1"
     values = {
+        "deploymentMode": "preview",
         "environment": "dev" if case == "mismatched-environment" else environment,
         "awsAccountId": account,
         "repoSlug": "user-service-infrastructure",
@@ -168,9 +169,38 @@ def test_shared_entrypoint_integrates_config_provider_and_exports(
             assert exported["repoSlug"] == "user-service-infrastructure"
             assert exported["pulumiBackendUrl"] == backend
             assert exported["pulumiSecretsProvider"] == provider
-            assert observed.resources == [
-                "user-service-infrastructure:core:EnvironmentSettings"
-            ]
+            assert exported["deploymentMode"] == "preview"
+            assert sorted(observed.resources) == sorted(
+                [
+                    "user-service-infrastructure:stack:UserService",
+                    "user-service-infrastructure:core:EnvironmentSettings",
+                    "user-service-infrastructure:network:Plane",
+                    "user-service-infrastructure:data:Plane",
+                    "user-service-infrastructure:messaging:Plane",
+                    "user-service-infrastructure:compute:Plane",
+                ]
+            )
+            assert set(exported) == {
+                "deploymentMode",
+                "environment",
+                "serviceName",
+                "stackTag",
+                "defaultTags",
+                "region",
+                "serviceUrl",
+                "loadBalancerDnsName",
+                "clusterName",
+                "webServiceName",
+                "workerServiceName",
+                "webRepositoryUrl",
+                "workerRepositoryUrl",
+                "queueUrls",
+                "documentDbEndpoint",
+                "redisEndpoint",
+                "repoSlug",
+                "pulumiBackendUrl",
+                "pulumiSecretsProvider",
+            }
         else:
             message = (
                 "AWS caller account differs"

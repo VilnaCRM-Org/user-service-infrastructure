@@ -427,10 +427,17 @@ def _preview_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def _strict_preview_steps(preview: Any) -> list[dict[str, Any]]:
-    """Require explicit steps and consistent resource types before classification."""
-    if not isinstance(preview, dict) or not isinstance(preview.get("steps"), list):
-        raise ValueError("Preview steps missing or invalid")
+def _has_resource_type(state: Any) -> bool:
+    """Recognize a resource state with a nonempty string type."""
+    return (
+        isinstance(state, dict)
+        and isinstance(state.get("type"), str)
+        and bool(state["type"])
+    )
+
+
+def _validate_preview_step(step: Any) -> None:
+    """Require a known operation and consistent nonempty resource types."""
     operations = {
         "same",
         "create",
@@ -448,21 +455,23 @@ def _strict_preview_steps(preview: Any) -> list[dict[str, Any]]:
         "import-replacement",
         "remove-pending-replace",
     }
+    if not isinstance(step, dict) or step.get("op") not in operations:
+        raise ValueError("Preview step missing or invalid")
+    states = [
+        step[key] for key in ("oldState", "newState") if step.get(key) is not None
+    ]
+    if not states or any(not _has_resource_type(state) for state in states):
+        raise ValueError("Preview resource type missing or invalid")
+    if len({state["type"] for state in states}) != 1:
+        raise ValueError("Preview resource types differ")
+
+
+def _strict_preview_steps(preview: Any) -> list[dict[str, Any]]:
+    """Require explicit steps and consistent resource types before classification."""
+    if not isinstance(preview, dict) or not isinstance(preview.get("steps"), list):
+        raise ValueError("Preview steps missing or invalid")
     for step in preview["steps"]:
-        if not isinstance(step, dict) or step.get("op") not in operations:
-            raise ValueError("Preview step missing or invalid")
-        states = [
-            step[key] for key in ("oldState", "newState") if step.get(key) is not None
-        ]
-        if not states or any(
-            not isinstance(state, dict)
-            or not isinstance(state.get("type"), str)
-            or not state["type"]
-            for state in states
-        ):
-            raise ValueError("Preview resource type missing or invalid")
-        if len({state["type"] for state in states}) != 1:
-            raise ValueError("Preview resource types differ")
+        _validate_preview_step(step)
     return preview["steps"]
 
 
@@ -768,17 +777,27 @@ def _run_validated_up_plan_stack(
         status = _select_or_init_stack(context, stack)
     if status is None:
         with prepared_stack_configuration(context, stack) as prepared:
-            entry = _manifest_stack_entry(manifest or {}, stack)
-            verify_provider_identity(prepared, entry or {})
-            if prepared.registry_plan_gate is not None:
-                preview = _manifest_path(
-                    prepared, (entry or {}).get("previewFile"), "previewFile"
-                )
-                if preview is None:
-                    return manifest, 1
-                prepared.registry_plan_gate(prepared, stack, plan_path, preview)
-            status = _run_up_plan_stack(prepared, stack, plan_path)
+            status = _replay_prepared_plan(prepared, manifest, stack, plan_path)
     return manifest, status
+
+
+def _replay_prepared_plan(
+    prepared: CommandContext,
+    manifest: dict[str, Any] | None,
+    stack: str,
+    plan_path: Path,
+) -> int | None:
+    """Verify provider and optional registry graph immediately before replay."""
+    entry = _manifest_stack_entry(manifest or {}, stack)
+    verify_provider_identity(prepared, entry or {})
+    if prepared.registry_plan_gate is not None:
+        preview = _manifest_path(
+            prepared, (entry or {}).get("previewFile"), "previewFile"
+        )
+        if preview is None:
+            return 1
+        prepared.registry_plan_gate(prepared, stack, plan_path, preview)
+    return _run_up_plan_stack(prepared, stack, plan_path)
 
 
 def _run_regular_command(

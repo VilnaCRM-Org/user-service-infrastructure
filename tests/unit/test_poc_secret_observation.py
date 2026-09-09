@@ -68,8 +68,7 @@ def test_generated_or_secret_fields_cannot_enter_desired_contract(field):
         ("arn", 1),
         (
             "arn",
-            SECRET_PREFIX
-            + "/user-service-infrastructure/runtime/test/"
+            SECRET_PREFIX + "/user-service-infrastructure/runtime/test/"
             "synthetic-app_secret-extra-AbCdEf",
         ),
         ("version_id", "latest"),

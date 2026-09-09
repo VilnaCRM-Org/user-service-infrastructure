@@ -302,6 +302,40 @@ def test_initializer_workflow_is_main_only_with_gated_account_pinned_credentials
 
 
 @pytest.mark.parametrize("environment", ["test", "prod"])
+def test_initializer_shares_stack_lock_with_deployment_and_scheduled_drift(environment):
+    """Every stack operation uses one lock, without nesting the same group."""
+    workflows = {
+        name: yaml.safe_load((TEMPLATE / f".github/workflows/{name}.yml").read_text())
+        for name in ("initialize-stack", "self-deploy", "scheduled-drift")
+    }
+    workflow = workflows["initialize-stack"]
+    lock = workflow["jobs"]["initialize"]["concurrency"]
+    group = lock["group"].replace("${{ inputs.environment }}", environment)
+    assert (
+        group
+        == f"pulumi-state-${{{{ github.repository }}}}-{environment}-{environment}"
+    )
+    assert lock["cancel-in-progress"] is False
+    assert workflow["concurrency"] == {
+        "group": "service-stack-initialization-${{ inputs.environment }}",
+        "cancel-in-progress": False,
+    }
+    assert (
+        workflow["concurrency"]["group"].replace(
+            "${{ inputs.environment }}", environment
+        )
+        != group
+    )
+    peers = [
+        workflows["self-deploy"]["jobs"][f"{environment}_{operation}"]
+        for operation in ("preview", "apply", "post_apply_drift")
+    ]
+    peers.append(workflows["scheduled-drift"]["jobs"][f"scheduled_{environment}_drift"])
+    for peer in peers:
+        assert peer["concurrency"] == {"group": group, "cancel-in-progress": False}
+
+
+@pytest.mark.parametrize("environment", ["test", "prod"])
 @pytest.mark.parametrize(
     "corruption",
     [

@@ -17,7 +17,7 @@ import stat
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 import poc_contract
 
@@ -52,7 +52,7 @@ def _require(condition: bool, message: str) -> None:
 def _object(value: object, label: str) -> dict[str, Any]:
     """Require an ordinary JSON object before selecting any fields."""
     _require(type(value) is dict, f"{label} must be an object")
-    return value
+    return cast(dict[str, Any], value)
 
 
 def _sha256(value: bytes) -> str:

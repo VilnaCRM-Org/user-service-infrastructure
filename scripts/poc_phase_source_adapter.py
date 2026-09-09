@@ -19,7 +19,7 @@ import binascii  # noqa: E402
 import json  # noqa: E402
 import subprocess  # noqa: E402  # nosec B404
 from dataclasses import asdict, dataclass  # noqa: E402
-from typing import Any, Callable, Mapping  # noqa: E402
+from typing import Any, Callable, Mapping, cast  # noqa: E402
 
 import poc_contract  # noqa: E402
 import poc_phase_admission as admission  # noqa: E402
@@ -48,7 +48,7 @@ def _require(condition: bool, message: str) -> None:
 def _object(value: object, label: str) -> dict[str, Any]:
     """Require a JSON object before selecting API response fields."""
     _require(type(value) is dict, f"{label} must be an object")
-    return value
+    return cast(dict[str, Any], value)
 
 
 def _request(request: Mapping[str, object]) -> dict[str, str]:
@@ -66,7 +66,7 @@ def _request(request: Mapping[str, object]) -> dict[str, str]:
     preflight.require(
         all(type(value) is str for value in checked.values()), "Invalid request"
     )
-    return checked
+    return cast(dict[str, str], checked)
 
 
 def _validated_evidence(
@@ -92,10 +92,7 @@ def _refreshed_intake(
     origin = _object(intake, "Intake")
     original = _object(origin.get("comment"), "Intake comment")
     fresh = _object(
-        gh(
-            f"repos/{origin['repository']}/issues/comments/"
-            f"{request['comment_id']}"
-        ),
+        gh(f"repos/{origin['repository']}/issues/comments/{request['comment_id']}"),
         "Current comment",
     )
     for field in ("id", "issue_url", "created_at", "body"):

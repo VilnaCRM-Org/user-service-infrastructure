@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 import poc_contract
 from poc_phase_admission import SourceAdmission
@@ -38,12 +38,14 @@ def _require(condition: bool, message: str) -> None:
 def _stable_registries(registries: object) -> dict[str, dict[str, str]]:
     """Copy only the fixed two-repository identity into an internal graph input."""
     _require(type(registries) is dict, "Registry contract differs")
+    checked = cast(dict[str, Any], registries)
     projected: dict[str, dict[str, str]] = {}
     for kind, expected in _REGISTRIES.items():
-        candidate = registries.get(kind)
+        candidate = checked.get(kind)
         _require(type(candidate) is dict, "Registry contract differs")
+        fields = cast(dict[str, Any], candidate)
         _require(
-            {key: candidate.get(key) for key in expected} == expected,
+            {key: fields.get(key) for key in expected} == expected,
             "Registry ownership differs",
         )
         projected[kind] = dict(expected)
@@ -56,7 +58,7 @@ def project_registry_phase(
     """Bind a registry-only graph to authenticated source facts, never config."""
     _require(type(source) is SourceAdmission, "Typed source facts required")
     _require(type(contract) is dict, "Registry contract must be an object")
-    document: dict[str, Any] = contract
+    document = cast(dict[str, Any], contract)
     poc_contract._shape(document)
     poc_contract._semantics(document)
     _require(document["phase"] == "registry", "Registry phase evidence required")

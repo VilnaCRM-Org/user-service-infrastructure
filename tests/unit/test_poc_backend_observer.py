@@ -662,3 +662,181 @@ def test_private_capture_keeps_inventory_rejection_mandatory(native):
     update_checkpoint(native)
     with pytest.raises(ValueError, match="Backend observation precondition failed"):
         observer.capture_backend(native["source"], aws=native["aws"])
+
+
+def test_observed_legacy_pins_are_exact_native_coordinates():
+    """Production constants come from the recorded native read, never a fixture."""
+    assert observer.OBSERVED_LEGACY_CHECKPOINT_SHA256 == (
+        "758d9f0bcad244bdc34d76dc8d06c19be5d3f7cd5c938c9f7b0f89305762258b"
+    )
+    assert observer.OBSERVED_LEGACY_RESOURCES_SHA256 == (
+        "57ea8229ba3becac6ffc20a74f40a2bf1f93600ca1bf2b59f5c5f6d27a8dd6f8"
+    )
+    assert observer.OBSERVED_LEGACY_HEAD == {
+        "VersionId": "J9F5WqIu0CLb0gx2YE3s32oBSboXkSVA",
+        "ETag": '"ca5847b002410bfc0f09d3a7d340df6c"',
+        "ContentLength": 8523,
+        "ServerSideEncryption": "AES256",
+        "SSEKMSKeyId": None,
+    }
+
+
+@pytest.fixture
+def legacy_checkpoint(native, monkeypatch):
+    """Synthetic bytes only: patch hash constants, never pretend to hold live state."""
+    rows = native["document"]["checkpoint"]["latest"]["resources"]
+    rows[1].update(
+        id="f1cec252-9073-4066-a19b-b3e950b32342",
+        inputs={
+            "__internal": {},
+            "region": observer.REGION,
+            "skipCredentialsValidation": "false",
+            "skipRegionValidation": "true",
+            "version": "7.23.0",
+        },
+    )
+    rows.append(
+        {
+            "urn": f"urn:pulumi:test::{observer.PROJECT}::"
+            "synthetic:environment:EnvironmentSettings::settings",
+            "type": "synthetic:environment:EnvironmentSettings",
+            "parent": rows[0]["urn"],
+        }
+    )
+    raw = json.dumps(native["document"]).encode()
+    raw += b" " * (8523 - len(raw))
+    native["objects"][observer.CHECKPOINT] = raw
+    monkeypatch.setattr(
+        observer, "OBSERVED_LEGACY_CHECKPOINT_SHA256", observer._digest(raw)
+    )
+    monkeypatch.setattr(
+        observer, "OBSERVED_LEGACY_RESOURCES_SHA256", observer._digest(rows)
+    )
+    head = dict(observer.OBSERVED_LEGACY_HEAD)
+    requests = []
+
+    def aws(service, operation, arguments, output=None):
+        if service == "s3api" and arguments.get("key") == observer.CHECKPOINT:
+            requests.append((operation, arguments.copy()))
+            translated = dict(arguments)
+            if operation == "get-object":
+                assert arguments["version-id"] == head["VersionId"]
+                assert arguments["if-match"] == head["ETag"]
+                translated.update(
+                    {"version-id": "version-1", "if-match": '"opaque-etag"'}
+                )
+            result = native["aws"](service, operation, translated, output)
+            result.update(head)
+            return result
+        return native["aws"](service, operation, arguments, output)
+
+    return {
+        "native": native,
+        "rows": rows,
+        "raw": raw,
+        "head": head,
+        "aws": aws,
+        "requests": requests,
+    }
+
+
+def test_pinned_legacy_capture_retains_all_native_checks_without_phase_authority(
+    legacy_checkpoint,
+):
+    """Exact coordinates admit reading only and still fetch one pinned version."""
+    fixture = legacy_checkpoint
+    capture = observer.capture_backend(fixture["native"]["source"], aws=fixture["aws"])
+    assert capture.resources == fixture["rows"]
+    assert capture.summary["state"]["resource_count"] == 3
+    assert capture.summary["state"]["baseline_inventory_only"] is False
+    assert capture.summary["prior_authority"] == "not-evaluated"
+    assert "PRIVATE_SENTINEL" not in json.dumps(capture.summary)
+    assert sum(operation == "get-object" for operation, _ in fixture["requests"]) == 1
+    assert sum(operation == "head-object" for operation, _ in fixture["requests"]) >= 3
+    calls = fixture["native"]["calls"]
+    assert sum(operation == "get-bucket-versioning" for _, operation, _ in calls) == 2
+    assert sum(service == "kms" for service, _, _ in calls) == 2
+
+
+@pytest.mark.parametrize("mutation", ["raw", "version", "etag", "inventory"])
+def test_legacy_requires_each_native_binding(legacy_checkpoint, monkeypatch, mutation):
+    """No single hash or head coordinate substitutes for the complete observation."""
+    fixture = legacy_checkpoint
+    if mutation == "raw":
+        fixture["native"]["objects"][observer.CHECKPOINT] = fixture["raw"][:-1] + b"\n"
+    elif mutation == "version":
+        fixture["head"]["VersionId"] = "another-version"
+    elif mutation == "etag":
+        fixture["head"]["ETag"] = '"another-etag"'
+    else:
+        monkeypatch.setattr(observer, "OBSERVED_LEGACY_RESOURCES_SHA256", "f" * 64)
+    with pytest.raises(ValueError, match="Backend observation"):
+        observer.capture_backend(fixture["native"]["source"], aws=fixture["aws"])
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"id": "another-provider"},
+        {"urn": f"urn:pulumi:test::{observer.PROJECT}::pulumi:providers:aws::other"},
+        {"inputs": {"region": "eu-central-1", "skipRegionValidation": "true"}},
+    ],
+)
+def test_even_hash_matched_legacy_rejects_different_provider(
+    legacy_checkpoint, monkeypatch, change
+):
+    """The unit hash seam cannot bypass fixed provider identity and exact inputs."""
+    fixture = legacy_checkpoint
+    fixture["rows"][1].update(change)
+    raw = json.dumps(fixture["native"]["document"]).encode()
+    raw += b" " * (8523 - len(raw))
+    monkeypatch.setattr(
+        observer, "OBSERVED_LEGACY_CHECKPOINT_SHA256", observer._digest(raw)
+    )
+    monkeypatch.setattr(
+        observer, "OBSERVED_LEGACY_RESOURCES_SHA256", observer._digest(fixture["rows"])
+    )
+    fixture["native"]["objects"][observer.CHECKPOINT] = raw
+    with pytest.raises(ValueError, match="Backend observation"):
+        observer.capture_backend(fixture["native"]["source"], aws=fixture["aws"])
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("skipCredentialsValidation", "true"),
+        ("skipRegionValidation", False),
+        ("version", "7.24.0"),
+        ("region", "us-east-1"),
+        ("profile", "other"),
+        ("allowedAccountIds", [observer.ACCOUNT]),
+        ("skipRequestingAccountId", "false"),
+    ],
+)
+def test_legacy_provider_input_shape_is_closed(
+    legacy_checkpoint, monkeypatch, field, value
+):
+    fixture = legacy_checkpoint
+    fixture["rows"][1]["inputs"][field] = value
+    raw = json.dumps(fixture["native"]["document"]).encode()
+    raw += b" " * (8523 - len(raw))
+    monkeypatch.setattr(
+        observer, "OBSERVED_LEGACY_CHECKPOINT_SHA256", observer._digest(raw)
+    )
+    monkeypatch.setattr(
+        observer, "OBSERVED_LEGACY_RESOURCES_SHA256", observer._digest(fixture["rows"])
+    )
+    with pytest.raises(ValueError, match="Backend observation"):
+        observer._inventory(raw, fixture["head"])
+
+
+def test_unrecorded_legacy_checkpoint_keeps_strict_account_requirement(native):
+    """Resource type/count and legacy flags never authorize an unknown checkpoint."""
+    inputs = native["document"]["checkpoint"]["latest"]["resources"][1]["inputs"]
+    inputs.pop("allowedAccountIds")
+    inputs.update(
+        skipCredentialsValidation="false", skipRegionValidation="true", version="7.23.0"
+    )
+    update_checkpoint(native)
+    with pytest.raises(ValueError, match="Backend observation"):
+        observe(native)

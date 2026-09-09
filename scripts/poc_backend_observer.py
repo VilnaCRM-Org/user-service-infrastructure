@@ -43,6 +43,21 @@ CHECKPOINT = f".pulumi/stacks/{PROJECT}/test.json"
 LOCKS = f".pulumi/locks/organization/{PROJECT}/test/"
 MAX_BYTES = 16 * 1024 * 1024
 MAX_METADATA = 2 * 1024 * 1024
+# Native read-only observation: recognize this prior checkpoint only. These pins
+# grant no phase or mutation authority and never relax desired provider settings.
+OBSERVED_LEGACY_CHECKPOINT_SHA256 = (
+    "758d9f0bcad244bdc34d76dc8d06c19be5d3f7cd5c938c9f7b0f89305762258b"
+)
+OBSERVED_LEGACY_RESOURCES_SHA256 = (
+    "57ea8229ba3becac6ffc20a74f40a2bf1f93600ca1bf2b59f5c5f6d27a8dd6f8"
+)
+OBSERVED_LEGACY_HEAD = {
+    "VersionId": "J9F5WqIu0CLb0gx2YE3s32oBSboXkSVA",
+    "ETag": '"ca5847b002410bfc0f09d3a7d340df6c"',
+    "ContentLength": 8523,
+    "ServerSideEncryption": "AES256",
+    "SSEKMSKeyId": None,
+}
 
 
 @dataclass(frozen=True, repr=False)
@@ -306,7 +321,24 @@ def _key(aws):
     return arn
 
 
-def _resource(row, urns):
+def _legacy_provider(row):
+    """Accept only the exact provider identity and inputs observed in the pin."""
+    return (
+        row.get("urn")
+        == f"urn:pulumi:test::{PROJECT}::pulumi:providers:aws::default_7_23_0"
+        and row.get("id") == "f1cec252-9073-4066-a19b-b3e950b32342"
+        and row.get("inputs")
+        == {
+            "__internal": {},
+            "region": REGION,
+            "skipCredentialsValidation": "false",
+            "skipRegionValidation": "true",
+            "version": "7.23.0",
+        }
+    )
+
+
+def _resource(row, urns, *, observed_legacy=False):
     """Validate ownership coordinates and retain no resource input/output values."""
     urn = row.get("urn")
     _require(
@@ -318,18 +350,21 @@ def _resource(row, urns):
     kind = row.get("type")
     _require(type(kind) is str and kind)
     if kind == "pulumi:providers:aws":
-        inputs = row.get("inputs", {})
-        accounts = inputs.get("allowedAccountIds")
-        if type(accounts) is str:
-            accounts = json.loads(accounts)
-        _require(inputs.get("region") == REGION and accounts == [ACCOUNT])
+        if observed_legacy:
+            _require(_legacy_provider(row))
+        else:
+            inputs = row.get("inputs", {})
+            accounts = inputs.get("allowedAccountIds")
+            if type(accounts) is str:
+                accounts = json.loads(accounts)
+            _require(inputs.get("region") == REGION and accounts == [ACCOUNT])
     return {
         key: row.get(key)
         for key in ("urn", "type", "id", "parent", "provider", "custom", "external")
     }
 
 
-def _inventory(raw):
+def _inventory(raw, head):
     """Validate checkpoint and return separate public inventory/private rows."""
     document = _json(raw)
     _require(type(document.get("version")) is int and document["version"] == 3)
@@ -342,9 +377,14 @@ def _inventory(raw):
     _require(bool(base64.b64decode(provider["state"]["encryptedkey"], validate=True)))
     rows = deployment.get("resources", [])
     _require(type(rows) is list and len(rows) <= 10000)
+    observed_legacy = (
+        _digest(raw) == OBSERVED_LEGACY_CHECKPOINT_SHA256
+        and head == OBSERVED_LEGACY_HEAD
+        and _digest(rows) == OBSERVED_LEGACY_RESOURCES_SHA256
+    )
     inventory, urns = [], set()
     for row in rows:
-        item = _resource(row, urns)
+        item = _resource(row, urns, observed_legacy=observed_legacy)
         urns.add(item["urn"])
         inventory.append(item)
     inventory.sort(key=lambda row: row["urn"])
@@ -377,7 +417,7 @@ def capture_backend(source, *, aws=None, operation="plan") -> PrivateBackendCapt
     resources = []
     if CHECKPOINT in listing:
         head, raw = _capture(aws, CHECKPOINT, MAX_BYTES)
-        inventory, resources = _inventory(raw)
+        inventory, resources = _inventory(raw, head)
         state = {
             "kind": "observed_checkpoint",
             **head,

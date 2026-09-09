@@ -165,6 +165,27 @@ def collect_intake_evidence(request: dict[str, str]) -> dict:
     }
 
 
+def revalidate_requester(request: dict[str, str]) -> None:
+    """Recheck an admitted request's origin and current writer before execution.
+
+    Initial admission still enforces its 900-second deadline and consumes the
+    request. This function cannot admit a new dispatch or reset that deadline;
+    trusted same-run consumers call it after authenticating their source artifact.
+    """
+    origin = collect_intake_evidence(request)
+    command = authenticate_intake(request, origin)
+    login = origin["comment"]["user"]["login"]
+    permission = gh(f"repos/{origin['repository']}/collaborators/{login}/permission")[
+        "permission"
+    ]
+    require(permission in {"write", "maintain", "admin"}, "Write access revoked")
+    if command.action == "up":
+        require(
+            login.lower() != "kravalg",
+            "Apply requester must differ from sole approver Kravalg",
+        )
+
+
 def collect_evidence(request: dict[str, str], *, intake: dict | None = None) -> dict:
     """Fetch current execution state after the immutable origin is authenticated."""
     origin = collect_intake_evidence(request) if intake is None else intake

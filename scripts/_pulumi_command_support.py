@@ -22,6 +22,7 @@ class CommandContext:
     runner: Callable[..., Any] = run
     config_file: Path | None = None
     provider_identity: dict[str, Any] | None = None
+    registry_plan_gate: Callable[[CommandContext, str, Path, Path], None] | None = None
 
 
 @dataclass(frozen=True)

@@ -152,15 +152,24 @@ def aws_read(service, operation, arguments, output=None):
                 process.wait(timeout=10)
 
 
-def _target(source):
+def _operation_identity(operation):
+    """Only the installed runner's two saved-plan operations select a caller."""
+    identities = {
+        "plan": ("AWS_PREVIEW_ROLE_ARN", "Preview", "preview"),
+        "up-plan": ("AWS_APPLY_ROLE_ARN", "Apply", "apply"),
+    }
+    _require(type(operation) is str and operation in identities)
+    return identities[operation]
+
+
+def _target(source, operation="plan"):
     """Cross-check fixed installed constants with authenticated source and loader."""
     _require(source["request"]["target_environment"] == "test")
+    role_key, role_kind, _ = _operation_identity(operation)
     expected = {
         "AWS_ACCOUNT_ID": ACCOUNT,
         "AWS_REGION": REGION,
-        "AWS_PREVIEW_ROLE_ARN": (
-            f"arn:aws:iam::{ACCOUNT}:role/GitHubCiPreview-{PROJECT}-test"
-        ),
+        role_key: (f"arn:aws:iam::{ACCOUNT}:role/GitHubCi{role_kind}-{PROJECT}-test"),
         "PULUMI_BACKEND_URL": f"s3://{BUCKET}",
         "PULUMI_SECRETS_PROVIDER": PROVIDER,
     }
@@ -179,13 +188,14 @@ def _target(source):
         _require(backend[key]["const"] == value)
 
 
-def _caller(aws):
-    """Require the actual TEST preview role/session from the admitted root run."""
+def _caller(aws, operation="plan"):
+    """Require the exact TEST operation role/session from the admitted root run."""
+    _, role_kind, purpose = _operation_identity(operation)
     run_id = os.environ["GITHUB_RUN_ID"]
     caller = aws("sts", "get-caller-identity", {})
     arn = (
-        f"arn:aws:sts::{ACCOUNT}:assumed-role/GitHubCiPreview-{PROJECT}-test/"
-        f"gha-pr-test-preview-{run_id}"
+        f"arn:aws:sts::{ACCOUNT}:assumed-role/GitHubCi{role_kind}-{PROJECT}-test/"
+        f"gha-pr-test-{purpose}-{run_id}"
     )
     _require(caller.get("Account") == ACCOUNT and caller.get("Arn") == arn)
     return arn
@@ -349,11 +359,11 @@ def _inventory(raw):
     }, rows
 
 
-def capture_backend(source, *, aws=None) -> PrivateBackendCapture:
+def capture_backend(source, *, aws=None, operation="plan") -> PrivateBackendCapture:
     """Return private rows only after all native end-of-observation rechecks."""
     aws = aws or aws_read
-    _target(source)
-    caller = _caller(aws)
+    _target(source, operation)
+    caller = _caller(aws, operation)
     _require(
         aws("s3api", "get-bucket-versioning", _bucket_args()).get("Status") == "Enabled"
     )
@@ -379,7 +389,7 @@ def capture_backend(source, *, aws=None) -> PrivateBackendCapture:
     _require(
         _head(aws, ".pulumi/meta.yaml", 4096) == meta_head and _key(aws) == key_arn
     )
-    _require(_caller(aws) == caller)
+    _require(_caller(aws, operation) == caller)
     _require(
         aws("s3api", "get-bucket-versioning", _bucket_args()).get("Status") == "Enabled"
     )

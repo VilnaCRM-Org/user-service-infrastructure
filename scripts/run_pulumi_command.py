@@ -594,6 +594,10 @@ def _run_plan_command(context: CommandContext, stacks: list[str]) -> int:
             if plan_path.is_file():
                 if _validate_safe_preview(preview_file) is not None:
                     return 1
+                if prepared.registry_plan_gate is not None:
+                    prepared.registry_plan_gate(
+                        prepared, stack, plan_path, preview_file
+                    )
                 manifest_entries.append(
                     _plan_manifest_entry(prepared, stack, plan_path, preview_file)
                 )
@@ -766,6 +770,13 @@ def _run_validated_up_plan_stack(
         with prepared_stack_configuration(context, stack) as prepared:
             entry = _manifest_stack_entry(manifest or {}, stack)
             verify_provider_identity(prepared, entry or {})
+            if prepared.registry_plan_gate is not None:
+                preview = _manifest_path(
+                    prepared, (entry or {}).get("previewFile"), "previewFile"
+                )
+                if preview is None:
+                    return manifest, 1
+                prepared.registry_plan_gate(prepared, stack, plan_path, preview)
             status = _run_up_plan_stack(prepared, stack, plan_path)
     return manifest, status
 

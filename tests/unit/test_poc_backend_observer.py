@@ -15,6 +15,38 @@ observer = importlib.import_module("poc_backend_observer")
 prepared = source_tests.prepared
 
 
+@pytest.mark.parametrize("operation", ["up", "destroy", "drift", "prod", "", None])
+def test_capture_rejects_unknown_operation_before_aws(native, operation):
+    with pytest.raises(ValueError):
+        observer.capture_backend(
+            native["source"], aws=native["aws"], operation=operation
+        )
+    assert native["calls"] == []
+
+
+def test_apply_capture_requires_exact_apply_role_and_session(native, monkeypatch):
+    monkeypatch.setenv(
+        "AWS_APPLY_ROLE_ARN",
+        f"arn:aws:iam::{observer.ACCOUNT}:role/GitHubCiApply-{observer.PROJECT}-test",
+    )
+    with pytest.raises(ValueError):
+        observer.capture_backend(
+            native["source"], aws=native["aws"], operation="up-plan"
+        )
+    native["caller"]["Arn"] = (
+        native["caller"]["Arn"]
+        .replace("GitHubCiPreview", "GitHubCiApply")
+        .replace("test-preview-", "test-apply-")
+    )
+    captured = observer.capture_backend(
+        native["source"], aws=native["aws"], operation="up-plan"
+    )
+    assert captured.summary["prior_authority"] == "not-evaluated"
+    assert captured.resources
+    with pytest.raises(ValueError):
+        observer.capture_backend(native["source"], aws=native["aws"], operation="plan")
+
+
 @pytest.fixture
 def native(prepared, monkeypatch):
     for key, value in {

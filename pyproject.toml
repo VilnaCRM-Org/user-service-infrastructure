@@ -63,6 +63,7 @@ known_first_party = [
     "_pulumi_stack_config",
     "governance_paths",
     "governance_promotion",
+    "poc_backend_observer",
     "poc_contract",
     "poc_phase_admission",
     "poc_phase_source_adapter",

@@ -52,7 +52,7 @@ class UserServiceStack(pulumi.ComponentResource):
 
         provider = self._build_provider()
         component_opts = (
-            pulumi.ResourceOptions(parent=self, provider=provider)
+            pulumi.ResourceOptions(parent=self, providers=[provider])
             if provider is not None
             else pulumi.ResourceOptions(parent=self)
         )

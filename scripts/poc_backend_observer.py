@@ -158,7 +158,7 @@ def aws_read(service, operation, arguments, output=None):
         stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
         env=environment,
-    ) as process:  # nosec B603 B607
+    ) as process:  # nosec B603
         try:
             return _json(_stream(process))
         finally:

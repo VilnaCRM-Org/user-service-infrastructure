@@ -298,7 +298,7 @@ def _required_managed_string(
 ) -> str:
     """Require explicit config on managed apply while staying preview-friendly."""
     configured = config.get(key)
-    if configured is not None:
+    if configured is not None and configured.strip():
         return configured
     if managed and not pulumi.runtime.is_dry_run():
         raise ValueError(f"{key} must be configured for managed deployments.")

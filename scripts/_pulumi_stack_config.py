@@ -71,7 +71,11 @@ def _yaml_document(path: Path) -> dict[str, Any]:
     _require(not path.is_symlink(), "Stack configuration symlinks are not allowed.")
     try:
         # This SafeLoader subclass only adds duplicate-key rejection.
-        value = yaml.load(path.read_text(), Loader=_StackConfigLoader)  # nosec B506
+        loader = _StackConfigLoader(path.read_text())
+        try:
+            value = loader.get_single_data()
+        finally:
+            loader.dispose()
     except (OSError, yaml.YAMLError):
         raise StackConfigError("Unable to read stack configuration YAML.") from None
     _require(isinstance(value, dict), "Stack configuration must be a YAML mapping.")

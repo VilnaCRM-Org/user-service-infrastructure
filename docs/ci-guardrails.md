@@ -124,11 +124,14 @@ The configuration and deployment role trusts remain governance-owned and bind
 the repository identity, main ref, environment and exact workflow name; ordinary
 PR subjects are not a substitute for these protected environment claims.
 
-TEST and PROD saved applies download their original same-run preview artifact,
-recheck the current PR head/base and rerun the destructive diff gate immediately
-before `make pulumi-up-plan`. Retained, removed or replayed override labels cannot
-permit destruction. Missing artifacts or changed PR identity stop execution.
-This reuses the saved diff without generating a replacement plan.
+TEST and PROD saved applies download their original same-run preview artifact and
+recheck the current PR head/base. TEST runs the trusted
+`scripts/poc_registry_runner.py up-plan` path after the separate
+`test_destructive_diff` job has rejected destructive changes. PROD reruns
+`make test-destructive-diff` immediately before `make pulumi-up-plan`.
+Retained, removed or replayed override labels cannot permit destruction. Missing
+artifacts or changed PR identity stop execution. This reuses the saved diff
+without generating a replacement plan.
 
 `LoggingExempt` is a review-controlled IaC tag for approved logging sinks, not
 an independently authenticated exemption. The initial service backend-only role

@@ -200,6 +200,7 @@ class RecordingMocks(SimpleMocks):
                 "name": args.name,
                 "type": args.typ,
                 "inputs": dict(args.inputs),
+                "provider": args.provider,
             }
         )
         return super().new_resource(args)
@@ -896,8 +897,11 @@ def test_resolve_stack_settings_defaults_to_preview_without_credentials() -> Non
     )
 
 
-def test_resolve_stack_settings_rejects_managed_apply_without_required_inputs() -> None:
-    """Reject incomplete managed configuration outside preview mode."""
+@pytest.mark.parametrize("access_logs_bucket_name", [None, "", "   "])
+def test_resolve_stack_settings_rejects_managed_apply_without_required_inputs(
+    access_logs_bucket_name: str | None,
+) -> None:
+    """Reject missing or blank managed access-log bucket configuration."""
     error_pattern = (
         r"^accessLogsBucketName must be configured for managed deployments\.$"
     )
@@ -907,8 +911,11 @@ def test_resolve_stack_settings_rejects_managed_apply_without_required_inputs() 
         env_settings = EnvironmentSettings("unit", environment="prod")
         resolve_stack_settings(env_settings)
 
+    config = {"deploymentMode": "managed"}
+    if access_logs_bucket_name is not None:
+        config["accessLogsBucketName"] = access_logs_bucket_name
     with (
-        mocked_pulumi_context({"deploymentMode": "managed"}),
+        mocked_pulumi_context(config),
         patch("app.environment.pulumi.runtime.is_dry_run", return_value=False),
     ):
         with pytest.raises(
@@ -1144,6 +1151,17 @@ def test_managed_stack_uses_preview_credential_skips_and_scoped_data_egress() ->
     assert provider_inputs["skipMetadataApiCheck"] == "false"
     assert provider_inputs["skipRequestingAccountId"] == "false"
     assert provider_inputs["skipRegionValidation"] == "false"
+    managed_resources = [
+        resource
+        for resource in recording_mocks.resources
+        if resource["type"].startswith("aws:")
+        and resource["name"] != "managed-provider"
+    ]
+    assert managed_resources
+    assert all(
+        resource["provider"] is not None and "managed-provider" in resource["provider"]
+        for resource in managed_resources
+    )
 
     redis_replication_group = next(
         resource

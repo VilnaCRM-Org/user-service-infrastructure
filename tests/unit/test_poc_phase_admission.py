@@ -173,6 +173,8 @@ def test_cli_accepts_real_external_git_head_without_contract_self_hash(
             "user.name=test",
             "-c",
             "user.email=test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
             "commit",
             "-qm",
             "contract",

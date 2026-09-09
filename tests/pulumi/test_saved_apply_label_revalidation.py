@@ -39,6 +39,8 @@ def _apply_steps(path: Path, environment: str) -> tuple[list[dict], dict]:
 @pytest.mark.parametrize("environment", ["test", "prod"])
 def test_apply_reuses_matching_same_run_preview(path: Path, environment: str) -> None:
     steps, apply = _apply_steps(path, environment)
+    trusted_test = path.name == "self-deploy.yml" and environment == "test"
+    artifact_root = ".trusted/.artifacts" if trusted_test else ".artifacts"
     downloads = [
         step
         for step in steps
@@ -47,10 +49,12 @@ def test_apply_reuses_matching_same_run_preview(path: Path, environment: str) ->
     preview = next(
         step
         for step in downloads
-        if step["with"]["path"] == ".artifacts/pulumi-preview"
+        if step["with"]["path"] == f"{artifact_root}/pulumi-preview"
     )
     plan = next(
-        step for step in downloads if step["with"]["path"] == ".artifacts/pulumi-plan"
+        step
+        for step in downloads
+        if step["with"]["path"] == f"{artifact_root}/pulumi-plan"
     )
     assert (
         preview["with"]["name"] == plan["with"]["name"].removesuffix("plan") + "preview"
@@ -60,12 +64,25 @@ def test_apply_reuses_matching_same_run_preview(path: Path, environment: str) ->
     assert "pull_request_number" in preview["with"]["name"]
     assert set(preview["with"]) == {"name", "path"}  # Default transport is this run.
     assert steps.index(preview) < steps.index(apply)
-    assert "/labels" not in apply["run"]
-    assert (
-        apply["run"]
-        .rstrip()
-        .endswith("make test-destructive-diff\nmake pulumi-up-plan")
-    )
+    if trusted_test:
+        run = apply["run"]
+        assert f"{artifact_root}/pulumi-preview/*.json" in run
+        assert 'test -s "${preview}"' in run
+        assert f"rm -f {artifact_root}/pulumi-preview/pull-request-event.json" in run
+        assert ".trusted/scripts/poc_registry_runner.py" in run
+        assert " up-plan" in run
+        assert '--artifact-id "${POC_SOURCE_ARTIFACT_ID}"' in run
+        assert '--archive-sha256 "${POC_SOURCE_ARCHIVE_SHA256}"' in run
+        assert '--source-sha256 "${POC_SOURCE_SHA256}"' in run
+        assert "make pulumi-up-plan" not in run
+        assert "make test-destructive-diff" not in run
+    else:
+        assert "/labels" not in apply["run"]
+        assert (
+            apply["run"]
+            .rstrip()
+            .endswith("make test-destructive-diff\nmake pulumi-up-plan")
+        )
     workflow = yaml.safe_load(path.read_text())
     uploads = [
         step
@@ -76,7 +93,7 @@ def test_apply_reuses_matching_same_run_preview(path: Path, environment: str) ->
     producer = next(
         step for step in uploads if step["with"].get("name") == preview["with"]["name"]
     )
-    assert producer["with"]["path"] == ".artifacts/pulumi-preview"
+    assert producer["with"]["path"] == f"{artifact_root}/pulumi-preview"
 
 
 @pytest.mark.parametrize(
@@ -116,6 +133,7 @@ def test_rendered_apply_rechecks_current_labels(
     tmp_path: Path,
 ) -> None:
     _, apply = _apply_steps(path, environment)
+    trusted_test = path.name == "self-deploy.yml" and environment == "test"
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     subprocess.run(
         [
@@ -137,7 +155,8 @@ def test_rendered_apply_rechecks_current_labels(
     head = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
     ).strip()
-    preview_dir = tmp_path / ".artifacts/pulumi-preview"
+    artifact_root = tmp_path / (".trusted/.artifacts" if trusted_test else ".artifacts")
+    preview_dir = artifact_root / "pulumi-preview"
     preview_dir.mkdir(parents=True)
     event = preview_dir / "pull-request-event.json"
     event.write_text(
@@ -222,6 +241,35 @@ def test_rendered_apply_rechecks_current_labels(
         "assert sys.argv[1] == 'pulumi-up-plan'\n"
         "pathlib.Path('applied').touch()\n"
     )
+    if trusted_test:
+        trusted_runner = tmp_path / ".trusted/scripts/poc_registry_runner.py"
+        trusted_runner.parent.mkdir(parents=True)
+        trusted_runner.write_text(
+            f"#!{sys.executable}\n"
+            "import os, pathlib, sys\n"
+            f"sys.path.insert(0, {str(ROOT / 'scripts')!r})\n"
+            "import run_pulumi_command as runner\n"
+            "assert sys.argv[1] == 'up-plan'\n"
+            "assert sys.argv[2:] == [\n"
+            "    '--artifact-id', os.environ['POC_SOURCE_ARTIFACT_ID'],\n"
+            "    '--archive-sha256', os.environ['POC_SOURCE_ARCHIVE_SHA256'],\n"
+            "    '--source-sha256', os.environ['POC_SOURCE_SHA256'],\n"
+            "]\n"
+            "preview_dir = pathlib.Path('.trusted/.artifacts/pulumi-preview')\n"
+            "previews = sorted(preview_dir.glob('*.json'))\n"
+            "assert len(previews) == 1\n"
+            "if runner._validate_safe_preview(previews[0]) is not None:\n"
+            "    sys.exit(1)\n"
+            "pathlib.Path('applied').touch()\n"
+        )
+        trusted_python = tmp_path / ".trusted/.venv/bin/python"
+        trusted_python.parent.mkdir(parents=True)
+        trusted_python.write_text(
+            f"#!{sys.executable}\n"
+            "import os, sys\n"
+            f"os.execv({sys.executable!r}, [{sys.executable!r}, *sys.argv[1:]])\n"
+        )
+        trusted_python.chmod(0o755)
     for executable in (gh, compose, uv, make):
         executable.chmod(0o755)
     result = subprocess.run(
@@ -244,6 +292,10 @@ def test_rendered_apply_rechecks_current_labels(
             "PR_NUMBER": "39",
             "EXPECTED_SHA": head,
             "EXPECTED_BASE_SHA": "b" * 40,
+            "GITHUB_WORKSPACE": str(tmp_path),
+            "POC_SOURCE_ARTIFACT_ID": "123",
+            "POC_SOURCE_ARCHIVE_SHA256": "a" * 64,
+            "POC_SOURCE_SHA256": "b" * 64,
         },
         capture_output=True,
         text=True,
@@ -252,3 +304,14 @@ def test_rendered_apply_rechecks_current_labels(
     assert (result.returncode == 0) is expected, result.stderr
     assert (tmp_path / "applied").exists() is expected
     assert (preview.read_bytes() if preview.exists() else None) == original
+    if trusted_test:
+        assert event.exists() is (
+            case
+            not in {
+                "removed",
+                "retained",
+                "nondestructive",
+                "second-page",
+                "labels-unavailable",
+            }
+        )

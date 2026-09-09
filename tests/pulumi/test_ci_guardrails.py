@@ -269,6 +269,7 @@ def test_state_operations_share_cross_workflow_stack_mutex():
         for name, job in workflow["jobs"].items()
         if any(
             operations.intersection(step.get("run", "").splitlines())
+            or "poc_registry_runner.py" in step.get("run", "")
             for step in job["steps"]
         )
     }

@@ -144,6 +144,7 @@ jobs:
     timeout-minutes: 25
     permissions:
       contents: read
+      actions: read
       id-token: write
       pull-requests: read
     env:
@@ -163,6 +164,9 @@ jobs:
           ref: ${{ github.sha }}
           path: .trusted
           persist-credentials: false
+
+      - name: Install trusted registry runtime before credentials
+        uses: ./.trusted/.github/actions/setup-poc-runtime
 
       - name: Recheck current PR head before credentials
         env:
@@ -282,14 +286,18 @@ jobs:
             --expected-head-sha "${EXPECTED_SHA}" \
             --expected-base-sha "${EXPECTED_BASE_SHA}"
 
-      - name: Start development environment
-        run: make start
-
       - name: Save test update plan and preview artifact
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-          PULUMI_COMMIT_SHA: ${{ needs.preflight.outputs.head_sha }}
-        run: make pulumi-plan
+          GH_TOKEN: ${{ github.token }}
+          POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
+          POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
+          POC_SOURCE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_runner.py" plan \
+            --artifact-id "${POC_SOURCE_ARTIFACT_ID}" \
+            --archive-sha256 "${POC_SOURCE_ARCHIVE_SHA256}" \
+            --source-sha256 "${POC_SOURCE_SHA256}"
 
       - name: Upload test preview artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -297,7 +305,8 @@ jobs:
           name: >-
             pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
             needs.preflight.outputs.head_sha }}-test-preview
-          path: .artifacts/pulumi-preview
+          path: .trusted/.artifacts/pulumi-preview
+          if-no-files-found: error
           retention-days: 7
 
       - name: Upload test plan artifact
@@ -306,7 +315,8 @@ jobs:
           name: >-
             pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
             needs.preflight.outputs.head_sha }}-test-plan
-          path: .artifacts/pulumi-plan
+          path: .trusted/.artifacts/pulumi-plan
+          if-no-files-found: error
           retention-days: 7
 
   test_destructive_diff:
@@ -322,11 +332,8 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ needs.preflight.outputs.head_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
-
-      - name: Start development environment
-        run: make start
 
       - name: Download test preview artifact
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
@@ -334,10 +341,15 @@ jobs:
           name: >-
             pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
             needs.preflight.outputs.head_sha }}-test-preview
-          path: .artifacts/pulumi-preview
+          path: .trusted/.artifacts/pulumi-preview
 
       - name: Enforce destructive diff gate
-        run: make test-destructive-diff
+        run: |
+          shopt -s nullglob
+          previews=(.trusted/.artifacts/pulumi-preview/*.json)
+          test "${#previews[@]}" -gt 0
+          python3 -I "${GITHUB_WORKSPACE}/scripts/pulumi_ci_guardrails.py" \
+            destructive-gate "${previews[@]}"
 
   test_apply:
     name: Test Apply
@@ -347,11 +359,13 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - preflight
+      - poc_prepare_source
       - test_preview
       - test_destructive_diff
     timeout-minutes: 30
     permissions:
       contents: read
+      actions: read
       id-token: write
       pull-requests: read
     env:
@@ -371,6 +385,9 @@ jobs:
           ref: ${{ github.sha }}
           path: .trusted
           persist-credentials: false
+
+      - name: Install trusted registry runtime before credentials
+        uses: ./.trusted/.github/actions/setup-poc-runtime
 
       - name: Recheck current PR head before credentials
         env:
@@ -460,16 +477,13 @@ jobs:
             --expected-head-sha "${EXPECTED_SHA}" \
             --expected-base-sha "${EXPECTED_BASE_SHA}"
 
-      - name: Start development environment
-        run: make start
-
       - name: Download test plan artifact
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           name: >-
             pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
             needs.preflight.outputs.head_sha }}-test-plan
-          path: .artifacts/pulumi-plan
+          path: .trusted/.artifacts/pulumi-plan
 
       - name: Download test preview for apply revalidation
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
@@ -477,7 +491,7 @@ jobs:
           name: >-
             pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
             needs.preflight.outputs.head_sha }}-test-preview
-          path: .artifacts/pulumi-preview
+          path: .trusted/.artifacts/pulumi-preview
 
       - name: Verify reviewed source before saved-plan replay
         env:
@@ -496,15 +510,16 @@ jobs:
       - name: Apply saved test plan
         env:
           GH_TOKEN: ${{ github.token }}
+          POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
+          POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
+          POC_SOURCE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
           PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          GITHUB_TOKEN: ${{ github.token }}
           EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
           EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-          PULUMI_EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
         run: |
           # The immutable same-run preview is the diff for this saved plan.
           shopt -s nullglob
-          previews=(.artifacts/pulumi-preview/*.json)
+          previews=(.trusted/.artifacts/pulumi-preview/*.json)
           found_preview=false
           for preview in "${previews[@]}"; do
             if [[ "${preview}" != */pull-request-event.json ]]; then
@@ -521,9 +536,12 @@ jobs:
           test "$(jq -r '.base.sha' <<< "${pr_json}")" = "${EXPECTED_BASE_SHA}"
           test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
           # Remove only obsolete event metadata; preserve the original diff files.
-          rm -f .artifacts/pulumi-preview/pull-request-event.json
-          make test-destructive-diff
-          make pulumi-up-plan
+          rm -f .trusted/.artifacts/pulumi-preview/pull-request-event.json
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_runner.py" up-plan \
+            --artifact-id "${POC_SOURCE_ARTIFACT_ID}" \
+            --archive-sha256 "${POC_SOURCE_ARCHIVE_SHA256}" \
+            --source-sha256 "${POC_SOURCE_SHA256}"
 
   test_post_apply_drift:
     name: Test Post-Apply Drift
@@ -533,10 +551,12 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - preflight
+      - poc_prepare_source
       - test_apply
     timeout-minutes: 20
     permissions:
       contents: read
+      actions: read
       id-token: write
       pull-requests: read
     env:
@@ -556,6 +576,9 @@ jobs:
           ref: ${{ github.sha }}
           path: .trusted
           persist-credentials: false
+
+      - name: Install trusted registry runtime before credentials
+        uses: ./.trusted/.github/actions/setup-poc-runtime
 
       - name: Recheck current PR head before credentials
         env:
@@ -594,10 +617,10 @@ jobs:
           config-role-arn: ${{ vars.AWS_TEST_CI_CONFIG_ROLE_ARN }}
           expected-account-id: ${{ vars.AWS_TEST_ACCOUNT_ID }}
           aws-region: ${{ vars.AWS_TEST_REGION }}
-          purpose: PR test drift
+          purpose: PR test registry drift
           required-keys: >-
-            AWS_ACCOUNT_ID,AWS_REGION,AWS_DRIFT_ROLE_ARN,
-            PULUMI_BACKEND_URL,PULUMI_SECRETS_PROVIDER,PULUMI_DRIFT_STACKS
+            AWS_ACCOUNT_ID,AWS_REGION,AWS_PREVIEW_ROLE_ARN,
+            PULUMI_BACKEND_URL,PULUMI_SECRETS_PROVIDER,PULUMI_PREVIEW_STACKS
 
       - name: Verify reviewed source before execution credentials
         env:
@@ -616,8 +639,8 @@ jobs:
       - name: Configure AWS drift credentials via OIDC
         uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
         with:
-          role-to-assume: ${{ steps.ci_config.outputs.aws-drift-role-arn }}
-          role-session-name: gha-pr-test-drift-${{ github.run_id }}
+          role-to-assume: ${{ steps.ci_config.outputs.aws-preview-role-arn }}
+          role-session-name: gha-pr-test-preview-${{ github.run_id }}
           aws-region: ${{ steps.ci_config.outputs.aws-region }}
           allowed-account-ids: ${{ vars.AWS_TEST_ACCOUNT_ID }}
 
@@ -635,11 +658,18 @@ jobs:
             --expected-head-sha "${EXPECTED_SHA}" \
             --expected-base-sha "${EXPECTED_BASE_SHA}"
 
-      - name: Start development environment
-        run: make start
-
       - name: Run test post-apply drift detection
-        run: make test-drift
+        env:
+          GH_TOKEN: ${{ github.token }}
+          POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
+          POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
+          POC_SOURCE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_runner.py" drift \
+            --artifact-id "${POC_SOURCE_ARTIFACT_ID}" \
+            --archive-sha256 "${POC_SOURCE_ARCHIVE_SHA256}" \
+            --source-sha256 "${POC_SOURCE_SHA256}"
 
   prod_preview:
     name: Prod Preview

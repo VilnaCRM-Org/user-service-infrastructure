@@ -48,6 +48,18 @@ def test_each_protected_worker_rechecks_before_credentials_and_pr_execution(job_
         "path": ".trusted",
         "persist-credentials": False,
     }
+    execution = next(
+        s
+        for s in steps
+        if (
+            "poc_registry_runner.py" in s.get("run", "")
+            if job_name.startswith("test_")
+            else s.get("run") == "make start"
+        )
+    )
+    execution_review = (
+        "saved-plan replay" if job_name == "test_apply" else "PR execution"
+    )
     boundaries = {
         "config credentials": next(
             s for s in steps if s.get("uses", "").endswith("load-aws-ci-env")
@@ -57,7 +69,7 @@ def test_each_protected_worker_rechecks_before_credentials_and_pr_execution(job_
             for s in steps
             if s.get("uses", "").startswith("aws-actions/configure-aws-credentials@")
         ),
-        "PR execution": next(s for s in steps if s.get("run") == "make start"),
+        execution_review: execution,
     }
     for purpose, boundary in boundaries.items():
         review = review_step(steps, purpose)
@@ -98,7 +110,11 @@ def test_saved_plan_replay_rechecks_after_all_artifact_downloads(environment):
     assert downloads and max(downloads) < steps.index(review)
     assert steps[steps.index(apply) - 1] == review
     assert "if" not in review and "continue-on-error" not in review
-    assert "make pulumi-up-plan" in apply["run"]
+    if environment == "test":
+        assert 'poc_registry_runner.py" up-plan' in apply["run"]
+        assert "make " not in apply["run"]
+    else:
+        assert "make pulumi-up-plan" in apply["run"]
 
 
 def test_automatic_pr_and_main_push_remain_unprivileged_and_noncircular():

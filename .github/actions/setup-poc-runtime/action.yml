@@ -1,0 +1,35 @@
+name: Set up trusted TEST registry runtime
+description: Install verified tools and frozen dependencies before AWS credentials.
+runs:
+  using: composite
+  steps:
+    - name: Install pinned host tools from trusted main
+      shell: bash
+      working-directory: ${{ github.workspace }}/.trusted
+      env:
+        UV_PYTHON_PREFERENCE: only-managed
+        UV_NO_PROGRESS: "1"
+      run: |
+        test "${GITHUB_REF}" = refs/heads/main
+        test "${GITHUB_WORKFLOW_SHA}" = "${GITHUB_SHA}"
+        test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+        test "$(git rev-parse --show-toplevel)" = "${GITHUB_WORKSPACE}/.trusted"
+        test "$(uname -m)" = x86_64
+        runtime_directory="$(mktemp -d "${RUNNER_TEMP}/poc-registry-runtime.XXXXXX")"
+        mkdir -p "${runtime_directory}/uv" "${runtime_directory}/pulumi"
+        curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+          https://github.com/astral-sh/uv/releases/download/0.9.21/uv-x86_64-unknown-linux-gnu.tar.gz \
+          --output "${runtime_directory}/uv.tar.gz"
+        echo "0a1ab27383c28ef1c041f85cbbc609d8e3752dfb4b238d2ad97b208a52232baf  ${runtime_directory}/uv.tar.gz" \
+          | sha256sum --check --status
+        tar -xzf "${runtime_directory}/uv.tar.gz" -C "${runtime_directory}/uv" --strip-components=1
+        curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+          https://get.pulumi.com/releases/sdk/pulumi-v3.223.0-linux-x64.tar.gz \
+          --output "${runtime_directory}/pulumi.tar.gz"
+        echo "4297489a17a71981d212c0e47db2b3f59e67fbaf0fddf52226def8b71538d519  ${runtime_directory}/pulumi.tar.gz" \
+          | sha256sum --check --status
+        tar -xzf "${runtime_directory}/pulumi.tar.gz" -C "${runtime_directory}/pulumi" --strip-components=1
+        UV_PROJECT_ENVIRONMENT="${GITHUB_WORKSPACE}/.trusted/.venv" \
+          "${runtime_directory}/uv/uv" sync --frozen --no-dev --python 3.11
+        echo "${runtime_directory}/uv" >> "${GITHUB_PATH}"
+        echo "${runtime_directory}/pulumi" >> "${GITHUB_PATH}"

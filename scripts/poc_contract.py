@@ -7,6 +7,7 @@ import hashlib
 import json
 import re
 import sys
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,49 @@ from jsonschema import Draft202012Validator
 
 SCHEMA_PATH = Path(__file__).parents[1] / "schemas" / "poc-test-v1.schema.json"
 MAX_BYTES = 131072
+
+
+@dataclass(frozen=True)
+class RegistryReleaseBinding:
+    """Original registry reference supplied by a separate trusted authenticator.
+
+    The receipt identifier is a GitHub deployment ID, never an artifact ID.
+    Constructing this value does not authenticate its issuer or checkpoint.
+    """
+
+    registry_phase_receipt_id: int
+    registry_contract_digest: str
+    registry_checkpoint_version: str
+
+
+def _registry_release_fields(release: dict[str, Any]) -> None:
+    """Reject ambiguous IDs and preserve opaque, bounded native S3 versions."""
+    receipt = release["registry_phase_receipt_id"]
+    digest = release["registry_contract_digest"]
+    version = release["registry_checkpoint_version"]
+    if type(receipt) is not int or receipt < 1:
+        raise ValueError("registry receipt must be a positive deployment ID")
+    if type(digest) is not str or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ValueError("invalid registry contract digest")
+    if (
+        type(version) is not str
+        or not 1 <= len(version) <= 1024
+        or version == "null"
+        or re.search(r"[\x00-\x1f\x7f]", version) is not None
+    ):
+        raise ValueError("invalid registry checkpoint version")
+    try:
+        version.encode("utf-8")
+    except UnicodeError:
+        raise ValueError("invalid registry checkpoint version") from None
+
+
+def _digest(document: dict[str, Any]) -> str:
+    """Hash the complete canonical document, including its registry declarations."""
+    canonical = json.dumps(
+        document, sort_keys=True, separators=(",", ":"), allow_nan=False
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -102,6 +146,7 @@ def _workload_semantics(workload: dict[str, Any], registries: dict[str, Any]) ->
     if len(set(roles)) != 3:
         raise ValueError("runtime and publisher roles must be distinct")
     release = workload["release"]
+    _registry_release_fields(release)
     expected_ref = (
         "VilnaCRM-Org/user-service/"
         f"{central['publisher_workflow_path']}@refs/heads/main"
@@ -134,6 +179,15 @@ def _validate_document(contract: dict[str, Any]) -> None:
     _semantics(contract)
 
 
+def _registry_transition(previous: dict[str, Any], contract: dict[str, Any]) -> None:
+    """Bind first-workload publication to the actual supplied registry contract."""
+    if previous["phase"] == "registry" and contract["phase"] == "workload":
+        if contract["workload"]["release"]["registry_contract_digest"] != _digest(
+            previous
+        ):
+            raise ValueError("release registry contract binding differs")
+
+
 def _validate_transition(previous: dict[str, Any], contract: dict[str, Any]) -> None:
     """Keep one authenticated contract's immutable ownership and secret bindings."""
     if previous["phase"] == "workload" and contract["phase"] != "workload":
@@ -141,6 +195,7 @@ def _validate_transition(previous: dict[str, Any], contract: dict[str, Any]) -> 
     for field in ("account_id", "region", "environment", "backend", "registries"):
         if previous[field] != contract[field]:
             raise ValueError("stack or registry ownership changed")
+    _registry_transition(previous, contract)
     if previous["phase"] == "workload":
         before = previous["workload"]["secret_lifecycle"]["references"]
         after = contract["workload"]["secret_lifecycle"]["references"]
@@ -174,10 +229,35 @@ def validate(
             raise ValueError("initial and previous modes are exclusive")
         _validate_document(previous)
         _validate_transition(previous, contract)
-    canonical = json.dumps(
-        contract, sort_keys=True, separators=(",", ":"), allow_nan=False
-    )
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    return _digest(contract)
+
+
+def validate_registry_release_binding(
+    contract: dict[str, Any],
+    *,
+    registry_contract: dict[str, Any],
+    expected: RegistryReleaseBinding,
+) -> None:
+    """Compare a release to its separately authenticated original registry anchor.
+
+    The caller must authenticate the App-issued service-poc-phase-v1 deployment,
+    its original registry contract and versioned checkpoint before this call.
+    For updates/rollback this is the release's original registry anchor, not the
+    current workload checkpoint. Current state, publisher provenance, images and
+    secret history require independent checks; this function grants no admission.
+    """
+    if type(expected) is not RegistryReleaseBinding:
+        raise ValueError("typed registry reference required")
+    reference = asdict(expected)
+    _registry_release_fields(reference)
+    _validate_document(registry_contract)
+    _validate_document(contract)
+    if registry_contract["phase"] != "registry" or contract["phase"] != "workload":
+        raise ValueError("registry to workload reference required")
+    _validate_transition(registry_contract, contract)
+    release = contract["workload"]["release"]
+    if any(release[key] != value for key, value in reference.items()):
+        raise ValueError("release registry receipt binding differs")
 
 
 def main() -> int:

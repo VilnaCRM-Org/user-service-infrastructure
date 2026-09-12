@@ -76,3 +76,47 @@ credentials, using fixed archive and executable SHA-256 pins. Execution rechecks
 those binaries and SDK versions, uses a private plugin home, and disables automatic
 and ambient plugin acquisition. Installing these binaries does not add provider
 resources to the registry graph.
+
+## Release binding prerequisite
+
+Every proposed workload release now declares three registry bindings:
+
+- `registry_phase_receipt_id`: positive GitHub deployment ID, not an artifact ID.
+- `registry_contract_digest`: SHA-256 of the complete canonical registry contract.
+- `registry_checkpoint_version`: original opaque, non-null S3 checkpoint VersionId.
+
+The existing contract transition validator compares the declared digest with the
+supplied previous registry document. `validate_registry_release_binding` also
+compares all three fields with a typed `RegistryReleaseBinding` supplied by a
+trusted caller. This pure comparison authenticates neither the caller nor the
+deployment, checkpoint, application publisher, image digest or secret history.
+Updates and rollback retain the release's original registry anchor; it must not
+be replaced with the current workload checkpoint version. Synthetic fixtures
+remain offline examples and cannot establish deployment readiness.
+
+The proposed `service-poc-phase-v1` receipt is not produced yet. Its next source
+integration can reuse the existing `platform_promotion` job's protected
+`governance-evidence` environment, trusted `github.sha` checkout and promotion App
+deployment-write authority. It needs no new App or service IAM grant. Preserve
+the current TEST+PROD promotion checks and status: a TEST registry result must
+publish a distinct receipt and must never set full `Governance Promotion` success.
+
+The concrete remaining producer/consumer work is:
+
+1. Extend the trusted registry runner/result observer to retain bounded metadata
+   for the exact final seven-resource checkpoint and native ECR identities after
+   saved apply and clean drift. Bind source/contract, plan, current checkpoint
+   version/hash and original run/attempt; keep checkpoint bodies private.
+2. Add a TEST-only result preparation/publication path beside
+   `governance_promotion.py` that verifies the actual original workflow/jobs and
+   immutable observation artifacts before using the existing protected App.
+   Return the deployment ID only after payload/issuer/status readback succeeds.
+3. Authenticate that deployment and its original run/artifact/checkpoint chain
+   before constructing `RegistryReleaseBinding` in publisher/workload admission.
+   Reuse the source artifact transport's bounded ZIP/strict metadata checks with
+   explicit result member and completed-producer rules; its current in-progress
+   `source.json` protocol is not completed registry evidence.
+4. Authenticate the application manifest and both ECR images, then connect the
+   existing workload component, generated configuration and secret-history checks
+   to saved-plan/replay. Workflow selection remains registry-only until these
+   checks are executable. No approval flag or phase-file edit replaces them.

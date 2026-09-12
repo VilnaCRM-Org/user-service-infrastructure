@@ -81,7 +81,10 @@
         "repository_uri": "891377212104.dkr.ecr.eu-central-1.amazonaws.com/synthetic-poc-worker",
         "target": "app_workers",
         "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-      }
+      },
+      "registry_phase_receipt_id": 17,
+      "registry_contract_digest": "7c5754abacb9b811e96e7082c5a94b56ade6bbf8ba659e6b77915be6b2bcefb0",
+      "registry_checkpoint_version": "synthetic-registry-version/+=="
     },
     "external": {
       "domain": {

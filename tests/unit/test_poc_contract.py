@@ -5,12 +5,20 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
 import pytest
 from jsonschema import Draft202012Validator
-from poc_contract import MAX_BYTES, SCHEMA_PATH, load, validate
+from poc_contract import (
+    MAX_BYTES,
+    SCHEMA_PATH,
+    RegistryReleaseBinding,
+    load,
+    validate,
+    validate_registry_release_binding,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 HERE = PROJECT_ROOT / "tests" / "fixtures" / "poc-contract"
@@ -136,7 +144,7 @@ def test_transition_requires_explicit_prior_state():
     ]
     for contract, kwargs in cases:
         with pytest.raises(ValueError):
-            validate(contract, **kwargs)
+            validate(contract, **cast(Any, kwargs))
 
 
 def test_registry_owner_cannot_change_during_upgrade():
@@ -325,6 +333,112 @@ def test_mail_secret_is_rejected_and_generated_secrets_remain_required():
     ]
     with pytest.raises(ValueError):
         validate(candidate, previous=previous)
+
+
+def registry_reference(**changes):
+    """Synthetic external observation, never a real authenticated deployment."""
+    release = fixture("workload")["workload"]["release"]
+    fields = {key: release[key] for key in RegistryReleaseBinding.__dataclass_fields__}
+    return RegistryReleaseBinding(**(fields | changes))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("registry_phase_receipt_id", True),
+        ("registry_phase_receipt_id", 17.0),
+        ("registry_phase_receipt_id", "17"),
+        ("registry_phase_receipt_id", 0),
+        ("registry_phase_receipt_id", -1),
+        ("registry_contract_digest", "A" * 64),
+        ("registry_contract_digest", "a" * 63),
+        ("registry_contract_digest", "a" * 64 + "\n"),
+        ("registry_contract_digest", None),
+        ("registry_checkpoint_version", ""),
+        ("registry_checkpoint_version", "null"),
+        ("registry_checkpoint_version", "v" * 1025),
+        ("registry_checkpoint_version", 1),
+        ("registry_checkpoint_version", "version\n"),
+        ("registry_checkpoint_version", "ver\x00sion"),
+        ("registry_checkpoint_version", "version\x7f"),
+        ("registry_checkpoint_version", "version\ud800"),
+    ],
+)
+def test_registry_reference_shapes_rejected_in_release_and_observation(field, value):
+    workload = fixture("workload")
+    workload["workload"]["release"][field] = value
+    with pytest.raises(ValueError):
+        validate(workload, previous=fixture("registry"))
+    with pytest.raises(ValueError):
+        validate_registry_release_binding(
+            fixture("workload"),
+            registry_contract=fixture("registry"),
+            expected=registry_reference(**{field: value}),
+        )
+
+
+@pytest.mark.parametrize("field", list(RegistryReleaseBinding.__dataclass_fields__))
+def test_release_requires_every_registry_binding(field):
+    workload = fixture("workload")
+    del workload["workload"]["release"][field]
+    with pytest.raises(ValueError):
+        validate(workload, previous=fixture("registry"))
+
+
+def test_first_workload_rejects_foreign_registry_contract_digest():
+    workload = fixture("workload")
+    workload["workload"]["release"]["registry_contract_digest"] = "f" * 64
+    with pytest.raises(ValueError, match="registry contract binding differs"):
+        validate(workload, previous=fixture("registry"))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("registry_phase_receipt_id", 18),
+        ("registry_contract_digest", "f" * 64),
+        ("registry_checkpoint_version", "different-native-version"),
+    ],
+)
+def test_release_rejects_different_authenticated_registry_reference(field, value):
+    with pytest.raises(ValueError, match="receipt binding differs"):
+        validate_registry_release_binding(
+            fixture("workload"),
+            registry_contract=fixture("registry"),
+            expected=registry_reference(**{field: value}),
+        )
+
+
+def test_registry_binding_requires_exact_typed_reference_and_phase_pair():
+    with pytest.raises(ValueError, match="typed registry reference required"):
+        validate_registry_release_binding(
+            fixture("workload"),
+            registry_contract=fixture("registry"),
+            expected=cast(Any, {}),
+        )
+    for desired, registry in [("registry", "registry"), ("workload", "workload")]:
+        with pytest.raises(ValueError, match="registry to workload reference required"):
+            validate_registry_release_binding(
+                fixture(desired),
+                registry_contract=fixture(registry),
+                expected=registry_reference(),
+            )
+
+
+@pytest.mark.parametrize("version", ["v/+==._-opaque", "v" * 1024])
+def test_original_registry_anchor_survives_release_update_and_rollback(version):
+    old = fixture("workload")
+    old["workload"]["release"]["registry_checkpoint_version"] = version
+    new = copy.deepcopy(old)
+    new["workload"]["release"]["source_sha"] = "f" * 40
+    new["workload"]["release"]["publisher_run_id"] = 2
+    for desired, previous in [(new, old), (old, new)]:
+        validate(desired, previous=previous)
+        validate_registry_release_binding(
+            desired,
+            registry_contract=fixture("registry"),
+            expected=registry_reference(registry_checkpoint_version=version),
+        )
 
 
 @pytest.mark.parametrize(

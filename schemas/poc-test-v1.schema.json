@@ -407,7 +407,10 @@
             "provenance",
             "quality_evidence",
             "web",
-            "worker"
+            "worker",
+            "registry_phase_receipt_id",
+            "registry_contract_digest",
+            "registry_checkpoint_version"
           ],
           "properties": {
             "schema_version": {
@@ -461,6 +464,24 @@
             },
             "worker": {
               "$ref": "#/$defs/image"
+            },
+            "registry_phase_receipt_id": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Original protected App-issued service-poc-phase-v1 GitHub deployment ID; not an artifact ID."
+            },
+            "registry_contract_digest": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "registry_checkpoint_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024,
+              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+              "not": {
+                "const": "null"
+              }
             }
           }
         },

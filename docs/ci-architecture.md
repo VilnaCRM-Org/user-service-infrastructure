@@ -84,6 +84,39 @@ it must be repaired in the trusted runtime rather than downloaded with deploymen
 credentials. Installing the Random/TLS binaries does not activate the internal
 workload phase or change registry resource ownership.
 
+## TEST registry completion proof
+
+After successful TEST registry apply and drift jobs, `test_registry_observation`
+starts on a fresh trusted-main checkout. It authenticates source, current review
+and requester before each credential transition. With the existing Preview
+identity it performs version-bound backend reads, validates the exact seven-record
+graph, and checks both repositories' native immutability, scanning and tags.
+It runs no PR program or Pulumi child. Only public metadata is uploaded;
+checkpoint contents stay private.
+
+`test_registry_proof` runs in the existing main-only `governance-evidence`
+environment. It validates source/observation artifact IDs, archive/file hashes,
+producer run/attempt/repository/head, successful apply/drift/observer jobs and
+observation/upload times. It rechecks requester and review before creating a
+`registry-proof` deployment in `poc-test-registry` with the existing promotion
+App and only `deployments:write`. The ordinary job token handles reads. Deployment
+and latest success status must match the configured App ID and slug. This path
+never writes `Governance Promotion` or TEST/PROD full-promotion records.
+Time containment comparisons use GitHub's second precision; the authenticated
+observation retains its original full timestamp.
+
+`poc_registry_completion.verify_completion` validates the original completed
+producer chain using caller-pinned issuer, trusted workflow revision and registry
+contract. It returns deployment ID, registry contract digest and observed S3
+version. Historical verification does not require the old PR to remain current;
+expired or missing artifacts fail closed. Source artifacts currently retain seven
+days, which also bounds this verifier's evidence lifetime. The receipt is an
+observation anchor, not a fresh AWS check or an atomic lock.
+
+These source changes need deployment and native acceptance before consumers rely
+on them. They do not activate image publishing/workloads, prove image availability,
+or close separate service execution-isolation work in issue 185.
+
 ## Local Parity
 
 The repository intentionally avoids workflow-only logic for the core validation

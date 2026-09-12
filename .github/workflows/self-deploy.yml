@@ -671,6 +671,140 @@ jobs:
             --archive-sha256 "${POC_SOURCE_ARCHIVE_SHA256}" \
             --source-sha256 "${POC_SOURCE_SHA256}"
 
+  test_registry_observation:
+    name: Observe TEST Registry Completion
+    if: >-
+      needs.preflight.outputs.command == 'up' &&
+      needs.preflight.outputs.target_environment == 'test'
+    needs: [preflight, poc_prepare_source, test_apply, test_post_apply_drift]
+    environment: test-preview
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+      pull-requests: read
+      id-token: write
+    concurrency:
+      group: pulumi-state-${{ github.repository }}-test-test
+      cancel-in-progress: false
+    outputs:
+      artifact_id: ${{ steps.observation_artifact.outputs.artifact-id }}
+      archive_sha256: ${{ steps.observation_artifact.outputs.artifact-digest }}
+      file_sha256: ${{ steps.observe.outputs.file_sha256 }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
+      POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
+      POC_SOURCE_FILE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          path: .trusted
+          persist-credentials: false
+      - name: Install trusted observation runtime before credentials
+        uses: ./.trusted/.github/actions/setup-poc-runtime
+      - name: Admit complete source and requester before config credentials
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_completion.py" admit
+      - name: Load test read-only observation configuration
+        id: ci_config
+        uses: ./.trusted/.github/actions/load-aws-ci-env
+        with:
+          environment: test
+          config-role-arn: ${{ vars.AWS_TEST_CI_CONFIG_ROLE_ARN }}
+          expected-account-id: ${{ vars.AWS_TEST_ACCOUNT_ID }}
+          aws-region: ${{ vars.AWS_TEST_REGION }}
+          purpose: PR test registry observation
+          required-keys: >-
+            AWS_ACCOUNT_ID,AWS_REGION,AWS_PREVIEW_ROLE_ARN,
+            PULUMI_BACKEND_URL,PULUMI_SECRETS_PROVIDER,PULUMI_PREVIEW_STACKS
+      - name: Re-admit complete source and requester before observation credentials
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_completion.py" admit
+      - name: Configure read-only observation credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
+        with:
+          role-to-assume: ${{ steps.ci_config.outputs.aws-preview-role-arn }}
+          role-session-name: gha-pr-test-preview-${{ github.run_id }}
+          aws-region: ${{ steps.ci_config.outputs.aws-region }}
+          allowed-account-ids: ${{ vars.AWS_TEST_ACCOUNT_ID }}
+      - name: Observe exact TEST registry without running a Pulumi child
+        id: observe
+        working-directory: .trusted
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_completion.py" observe >> "${GITHUB_OUTPUT}"
+      - name: Upload immutable fresh registry observation
+        id: observation_artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: poc-registry-observation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .trusted/.artifacts/poc-registry-observation/observation.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 90
+
+  test_registry_proof:
+    name: Publish TEST Registry Completion Proof
+    if: >-
+      github.event_name == 'repository_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'VilnaCRM-Org/user-service-infrastructure' &&
+      needs.preflight.outputs.command == 'up' &&
+      needs.preflight.outputs.target_environment == 'test'
+    needs: [preflight, poc_prepare_source, test_apply, test_post_apply_drift, test_registry_observation]
+    environment: governance-evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+      pull-requests: read
+      deployments: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
+      POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
+      POC_SOURCE_FILE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
+      POC_OBSERVATION_ARTIFACT_ID: ${{ needs.test_registry_observation.outputs.artifact_id }}
+      POC_OBSERVATION_ARCHIVE_SHA256: ${{ needs.test_registry_observation.outputs.archive_sha256 }}
+      POC_OBSERVATION_FILE_SHA256: ${{ needs.test_registry_observation.outputs.file_sha256 }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          path: .trusted
+          persist-credentials: false
+      - name: Install trusted proof verifier before App credentials
+        uses: ./.trusted/.github/actions/setup-poc-runtime
+      - name: Authenticate completion and the main-only App boundary
+        working-directory: .trusted
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_completion.py" prepare
+      - name: Create existing promotion App token for deployment records only
+        id: registry_app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ vars.GOVERNANCE_PROMOTION_APP_ID }}
+          private-key: ${{ secrets.GOVERNANCE_PROMOTION_APP_PRIVATE_KEY }}
+          permission-deployments: write
+      - name: Publish and read back distinct TEST registry proof
+        working-directory: .trusted
+        env:
+          REGISTRY_PROOF_APP_TOKEN: ${{ steps.registry_app.outputs.token }}
+          REGISTRY_PROOF_APP_ID: ${{ vars.GOVERNANCE_PROMOTION_APP_ID }}
+          REGISTRY_PROOF_APP_SLUG: ${{ vars.GOVERNANCE_PROMOTION_APP_SLUG }}
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_completion.py" publish
+
   prod_preview:
     name: Prod Preview
     if: >-
@@ -1288,6 +1422,8 @@ jobs:
       - test_destructive_diff
       - test_apply
       - test_post_apply_drift
+      - test_registry_observation
+      - test_registry_proof
       - prod_preview
       - prod_destructive_diff
       - prod_apply
@@ -1320,6 +1456,8 @@ jobs:
             echo "| Test destructive diff | \`${{ needs.test_destructive_diff.result }}\` |"
             echo "| Test apply | \`${{ needs.test_apply.result }}\` |"
             echo "| Test post-apply drift | \`${{ needs.test_post_apply_drift.result }}\` |"
+            echo "| TEST registry observation | \`${{ needs.test_registry_observation.result }}\` |"
+            echo "| TEST registry completion proof | \`${{ needs.test_registry_proof.result }}\` |"
             echo "| Production preview | \`${{ needs.prod_preview.result }}\` |"
             echo "| Production destructive diff | \`${{ needs.prod_destructive_diff.result }}\` |"
             echo "| Production apply | \`${{ needs.prod_apply.result }}\` |"

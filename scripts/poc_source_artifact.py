@@ -112,14 +112,16 @@ def _timestamp(value: Any) -> datetime:
     return parsed
 
 
-def _artifact(gh, artifact_id: str, digest: str, run_id: str, sha: str) -> None:
+def _artifact(
+    gh, artifact_id: str, digest: str, run_id: str, sha: str, *, name=None
+) -> dict:
     """Bind immutable upload metadata and expiry to this exact run."""
     artifact = gh(f"{API}/actions/artifacts/{artifact_id}")
     _matches(
         artifact,
         {
             "id": int(artifact_id),
-            "name": f"poc-phase-source-{run_id}-1",
+            "name": name or f"poc-phase-source-{run_id}-1",
             "expired": False,
             "digest": f"sha256:{digest}",
         },
@@ -141,6 +143,7 @@ def _artifact(gh, artifact_id: str, digest: str, run_id: str, sha: str) -> None:
         <= datetime.now(timezone.utc)
         < _timestamp(artifact.get("expires_at"))
     )
+    return artifact
 
 
 def _download_zip(artifact_id: str) -> bytes:
@@ -178,7 +181,7 @@ def _download_zip(artifact_id: str) -> bytes:
             process.stdout.close()
 
 
-def _payload(raw: bytes) -> bytes:
+def _payload(raw: bytes, *, member_name=MEMBER) -> bytes:
     """Read only one regular bounded protocol member; never extract paths."""
     _require(0 < len(raw) <= MAX_ZIP_BYTES)
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
@@ -186,7 +189,8 @@ def _payload(raw: bytes) -> bytes:
         _require(len(entries) == 1)
         member = entries[0]
         _require(
-            member.filename == member.orig_filename == MEMBER and not member.is_dir()
+            member.filename == member.orig_filename == member_name
+            and not member.is_dir()
         )
         _require(not member.flag_bits & 1)
         _require(stat.S_IFMT(member.external_attr >> 16) in (0, stat.S_IFREG))

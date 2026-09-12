@@ -553,7 +553,7 @@ def _context_from_environment() -> CommandContext:
 def _login_and_prepare(command: str, context: CommandContext) -> None:
     ensure_file_backend_directory(context.backend_url)
     context.env.setdefault("PULUMI_BACKEND_URL", context.backend_url)
-    run(
+    context.runner(
         [
             "pulumi",
             "-C",
@@ -566,7 +566,10 @@ def _login_and_prepare(command: str, context: CommandContext) -> None:
     )
 
     if command in COMMANDS_WITH_POLICY_PACK:
-        _prepare_policy_pack(context.root_dir, context.env)
+        if context.prepare_policy_pack is None:
+            _prepare_policy_pack(context.root_dir, context.env)
+        else:
+            context.prepare_policy_pack(context)
 
 
 def _prepare_plan_artifacts(context: CommandContext) -> Path:
@@ -613,12 +616,15 @@ def _run_plan_command(context: CommandContext, stacks: list[str]) -> int:
         if not plan_path.is_file():
             print(f"error: Pulumi plan file not created: {plan_path}", file=sys.stderr)
             return 1
-        _write_preview_summary(
-            context.root_dir,
-            preview_file,
-            summary_file,
-            env=context.env,
-        )
+        if context.summarize_preview is None:
+            _write_preview_summary(
+                context.root_dir,
+                preview_file,
+                summary_file,
+                env=context.env,
+            )
+        else:
+            context.summarize_preview(preview_file, summary_file)
 
     manifest_file = _write_plan_manifest(context, manifest_entries)
     if output_file := context.env.get("GITHUB_OUTPUT"):

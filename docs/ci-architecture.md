@@ -115,7 +115,39 @@ observation anchor, not a fresh AWS check or an atomic lock.
 
 These source changes need deployment and native acceptance before consumers rely
 on them. They do not activate image publishing/workloads, prove image availability,
-or close separate service execution-isolation work in issue 185.
+or replace the execution-isolation boundary below.
+
+## Isolated service execution
+
+Credentialed TEST registry, PROD and scheduled-drift commands use the installed
+main service_execution_host.py launcher. It builds the existing pinned tooling
+and locked dependencies before configuration credentials or execution OIDC.
+Credentialed jobs no longer execute PR Makefiles, Dockerfiles or dependency setup.
+Runtime/dependency upgrades must first be reviewed and installed on trusted main;
+unsupported project runtimes and discovery overrides fail before credentials.
+
+The ephemeral worker runs trusted Python as root PID 1 with read-only root,
+trusted-source and reviewed-source mounts. Pulumi, including login, stack selection,
+export and policy execution, runs as UID 2000 without supplementary groups.
+The child receives only its selected AWS session and fixed runtime configuration;
+GitHub tokens, OIDC request tokens and Actions command files stay outside its
+environment. The container has no host Docker socket. Root-owned configuration
+and replay-plan copies are readable but cannot be replaced by the child. Plugins
+and runtime paths remain immutable; only private workspaces and result paths are
+writable. The process runner kills detached UID-2000 descendants before returning
+to native checks, even after a failed command or timeout.
+
+The trusted parent retains the existing requester/review, provider/checkpoint,
+saved-plan hash/age, destructive-change and TEST registry graph checks. Admission
+is refreshed immediately before each preview or apply program and after execution.
+Only the existing plan, preview and manifest artifacts leave the private worker.
+The separate registry completion observer/publisher remains independent.
+
+The TEST-only source prerequisite still blocks PROD promotion, and no workload
+phase is admitted by this change. Network-disabled Docker tests prove the local
+UID/filesystem/process boundary with synthetic state; they do not establish
+hosted OIDC, cloud deployment or workload acceptance. Installation and current-head
+TEST/PROD evidence remain required before issue 185 can be considered complete.
 
 ## Local Parity
 

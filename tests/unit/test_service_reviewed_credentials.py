@@ -49,16 +49,10 @@ def test_each_protected_worker_rechecks_before_credentials_and_pr_execution(job_
         "persist-credentials": False,
     }
     execution = next(
-        s
-        for s in steps
-        if (
-            "poc_registry_runner.py" in s.get("run", "")
-            if job_name.startswith("test_")
-            else s.get("run") == "make start"
-        )
+        s for s in steps if 'service_execution_host.py" execute' in s.get("run", "")
     )
     execution_review = (
-        "saved-plan replay" if job_name == "test_apply" else "PR execution"
+        "saved-plan replay" if job_name.endswith("_apply") else "PR execution"
     )
     boundaries = {
         "config credentials": next(
@@ -110,11 +104,9 @@ def test_saved_plan_replay_rechecks_after_all_artifact_downloads(environment):
     assert downloads and max(downloads) < steps.index(review)
     assert steps[steps.index(apply) - 1] == review
     assert "if" not in review and "continue-on-error" not in review
-    if environment == "test":
-        assert 'poc_registry_runner.py" up-plan' in apply["run"]
-        assert "make " not in apply["run"]
-    else:
-        assert "make pulumi-up-plan" in apply["run"]
+    assert 'service_execution_host.py" execute' in apply["run"]
+    assert '"${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I' in apply["run"]
+    assert "make " not in apply["run"]
 
 
 def test_automatic_pr_and_main_push_remain_unprivileged_and_noncircular():

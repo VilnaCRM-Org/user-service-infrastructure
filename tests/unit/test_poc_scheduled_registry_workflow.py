@@ -49,7 +49,7 @@ def test_trusted_dependencies_and_native_provenance_precede_all_credentials():
         "path": ".trusted",
         "persist-credentials": False,
     }
-    assert setup["uses"] == "./.trusted/.github/actions/setup-poc-runtime"
+    assert setup["uses"] == "./.trusted/.github/actions/setup-service-execution"
     assert config["uses"] == "./.trusted/.github/actions/load-aws-ci-env"
     assert config["with"]["environment"] == "test"
     assert config["with"]["expected-account-id"] == "${{ vars.AWS_TEST_ACCOUNT_ID }}"
@@ -69,11 +69,14 @@ def test_trusted_dependencies_and_native_provenance_precede_all_credentials():
     assert (
         credentials["with"]["allowed-account-ids"] == "${{ vars.AWS_TEST_ACCOUNT_ID }}"
     )
-    for step, command in ((verify, "verify"), (check, "check")):
+    for step, command in ((verify, "verify"), (check, "execute")):
         assert step["env"] == {"GH_TOKEN": "${{ github.token }}"}
-        assert (
-            step["run"].strip().endswith(f'poc_scheduled_registry_drift.py" {command}')
+        script = (
+            "poc_scheduled_registry_drift"
+            if command == "verify"
+            else "service_execution_host"
         )
+        assert step["run"].strip().endswith(f'{script}.py" {command}')
         assert " -I " in step["run"]
     for step in steps:
         assert "if" not in step and "continue-on-error" not in step
@@ -89,7 +92,7 @@ def test_trusted_dependencies_and_native_provenance_precede_all_credentials():
             assert forbidden not in str(step)
 
 
-@pytest.mark.parametrize("command", ["verify", "check"])
+@pytest.mark.parametrize("command", ["verify", "execute"])
 @pytest.mark.parametrize("status", [0, 17])
 def test_real_workflow_wrapper_preserves_isolated_cli_and_failure(
     tmp_path, command, status
@@ -106,7 +109,12 @@ def test_real_workflow_wrapper_preserves_isolated_cli_and_failure(
         'test "$#" = 3 || exit 90\n'
         'test "$1" = -I || exit 91\n'
         'test "$2" = "${GITHUB_WORKSPACE}/.trusted/scripts/'
-        'poc_scheduled_registry_drift.py" || exit 92\n'
+        + (
+            "poc_scheduled_registry_drift.py"
+            if command == "verify"
+            else "service_execution_host.py"
+        )
+        + '" || exit 92\n'
         'test "$3" = "${EXPECTED_COMMAND}" || exit 93\n'
         'exit "${EXPECTED_STATUS}"\n'
     )

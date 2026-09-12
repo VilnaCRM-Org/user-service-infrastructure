@@ -9,6 +9,7 @@ import sys
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import test_poc_registry_plan as graph_tests
@@ -273,6 +274,17 @@ def test_complete_graph_runs_only_fresh_preview_and_seals_diagnostic(diagnostic)
     assert manifest["commitSha"] == SHA
     assert manifest["stacks"][0]["stack"] == "test"
     assert not (diagnostic["root"] / ".artifacts/pulumi-plan").exists()
+
+
+def test_isolated_scheduled_route_keeps_complete_graph_gate(diagnostic):
+    bound = []
+    port = SimpleNamespace(
+        repo=diagnostic["root"], bind=lambda context: bound.append(context) or context
+    )
+    assert module.execute(transport=port) == 0
+    assert len(bound) == 1 and bound[0].registry_plan_gate is not None
+    assert diagnostic["operations"] == ["login", "select", "plan"]
+    assert len(diagnostic["captures"]) == 3
 
 
 @pytest.mark.parametrize("kind", ["baseline", "new", "unknown", "foreign-provider"])

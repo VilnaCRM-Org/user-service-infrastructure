@@ -23,6 +23,8 @@ class CommandContext:
     config_file: Path | None = None
     provider_identity: dict[str, Any] | None = None
     registry_plan_gate: Callable[[CommandContext, str, Path, Path], None] | None = None
+    prepare_policy_pack: Callable[[CommandContext], None] | None = None
+    summarize_preview: Callable[[Path, Path], None] | None = None
 
 
 @dataclass(frozen=True)

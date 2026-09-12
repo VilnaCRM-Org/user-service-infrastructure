@@ -1,0 +1,20 @@
+# Built locally from the installed-main Dockerfile immediately before this layer.
+# hadolint ignore=DL3006
+FROM service-execution-base
+# The verifier is root PID 1; every Pulumi process drops to UID 2000.
+# hadolint ignore=DL3002
+USER root
+
+# Same installed-main runtime as the bootstrap worker. No PR build context.
+# hadolint ignore=DL3008
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gh curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s /home/dev/.venvs/bootstrap-infrastructure /opt/service-runtime
+COPY scripts/poc_provider_runtime.py /opt/service-install/scripts/poc_provider_runtime.py
+COPY uv.lock /opt/service-install/uv.lock
+RUN ln -s /opt/service-runtime /opt/service-install/.venv \
+    && /opt/service-runtime/bin/python -I /opt/service-install/scripts/poc_provider_runtime.py install \
+    && mv /opt/service-install/.poc-provider-runtime /opt/service-plugins \
+    && chmod -R a+rX /opt/service-plugins
+WORKDIR /trusted

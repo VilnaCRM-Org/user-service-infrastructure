@@ -18,7 +18,7 @@ WORKERS = {
     "test_apply": ("Apply saved test plan", "up-plan"),
     "test_post_apply_drift": ("Run test post-apply drift detection", "drift"),
 }
-RUNTIME = "./.trusted/.github/actions/setup-poc-runtime"
+RUNTIME = "./.trusted/.github/actions/setup-service-execution"
 
 
 def workflow():
@@ -81,8 +81,7 @@ def test_driver_receives_only_same_run_source_coordinates(name):
         )
     assert '"${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I' in step["run"]
     assert (
-        '"${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_runner.py" '
-        + WORKERS[name][1]
+        '"${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" execute'
         in step["run"]
     )
     assert "${{" not in step["run"]
@@ -229,14 +228,8 @@ def test_actual_driver_wrapper_preserves_arguments_and_exit_status(
     assert result.returncode == exit_code, result.stderr
     assert json.loads(output.read_text()) == [
         "-I",
-        str(trusted / "scripts/poc_registry_runner.py"),
-        WORKERS[name][1],
-        "--artifact-id",
-        coordinates[0],
-        "--archive-sha256",
-        coordinates[1],
-        "--source-sha256",
-        coordinates[2],
+        str(trusted / "scripts/service_execution_host.py"),
+        "execute",
     ]
     assert preview.read_text() == '{"steps":[]}'
 

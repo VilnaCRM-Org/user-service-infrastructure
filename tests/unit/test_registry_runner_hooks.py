@@ -6,6 +6,34 @@ import pytest
 from test_saved_plan_destructive_gate import preview, seal_existing, setup_command
 
 
+def test_isolated_policy_and_summary_hooks_preserve_legacy_plan_gates(
+    monkeypatch, tmp_path
+):
+    module, context, commands = setup_command(monkeypatch, tmp_path, preview())
+    calls = []
+
+    def forbidden(*_a, **_k):
+        raise AssertionError("Legacy preparation must not import PR policy as root")
+
+    def summary(source, destination):
+        assert source.read_text() == preview()
+        destination.write_text("trusted summary\n")
+        calls.append("summary")
+
+    context = replace(
+        context,
+        prepare_policy_pack=lambda prepared: calls.append("policy"),
+        summarize_preview=summary,
+    )
+    monkeypatch.setattr(module, "_prepare_policy_pack", forbidden)
+    monkeypatch.setattr(module, "_write_preview_summary", forbidden)
+    module._login_and_prepare("plan", context)
+    assert "login" in commands[0]
+    assert module._run_plan_command(context, ["test"]) == 0
+    assert calls == ["policy", "summary"]
+    assert module._plan_manifest_file(context).is_file()
+
+
 @pytest.mark.parametrize("operation", ["plan", "up-plan"])
 def test_rejected_registry_graph_never_seals_or_applies(
     monkeypatch, tmp_path, operation

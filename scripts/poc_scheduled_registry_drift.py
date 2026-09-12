@@ -158,24 +158,26 @@ def _gate(provenance, digest, projection, initial):
     return validate
 
 
-def execute():
+def execute(*, transport=None):
     """Run a fresh fixed-program preview with no write or creation alternative."""
     provenance = verify_provenance()
     digest, projection = _installed_contract(provenance)
     initial = _capture(digest, projection)
-    with runtime._project(projection) as project:
+    root = runtime.ROOT if transport is None else transport.repo
+    with runtime._project(projection, root=root) as project:
         context = runtime.runner.CommandContext(
-            root_dir=runtime.ROOT,
+            root_dir=root,
             env=runtime._runtime_environment(provenance.sha),
             pulumi_dir=project,
             policy_pack_dir=runtime.ROOT / "policy",
-            plan_dir=runtime.ROOT / ".artifacts/poc-scheduled-registry/plan",
-            preview_artifact_dir=runtime.ROOT
-            / ".artifacts/poc-scheduled-registry/preview",
+            plan_dir=root / ".artifacts/poc-scheduled-registry/plan",
+            preview_artifact_dir=root / ".artifacts/poc-scheduled-registry/preview",
             backend_url=f"s3://{runtime.backend.BUCKET}",
             secrets_provider=runtime.backend.PROVIDER,
             registry_plan_gate=_gate(provenance, digest, projection, initial),
         )
+        if transport is not None:
+            context = transport.bind(context)
         _recheck(provenance)
         status = runtime.runner._dispatch_command("plan", context, ["test"])
         if status == 0:

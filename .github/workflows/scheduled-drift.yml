@@ -45,7 +45,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up trusted registry runtime before credentials
-        uses: ./.trusted/.github/actions/setup-poc-runtime
+        uses: ./.trusted/.github/actions/setup-service-execution
 
       - name: Verify native scheduled run and installed contract before credentials
         env:
@@ -80,7 +80,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
-            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_scheduled_registry_drift.py" check
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" execute
 
   scheduled_prod_drift:
     name: Scheduled Prod Drift
@@ -90,6 +90,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+      actions: read
       id-token: write
       pull-requests: read
     env:
@@ -109,6 +110,9 @@ jobs:
           ref: ${{ github.sha }}
           path: .trusted
           persist-credentials: false
+
+      - name: Build trusted isolated runtime before credentials
+        uses: ./.trusted/.github/actions/setup-service-execution
 
       - name: Verify trusted scheduled revision before credentials
         env:
@@ -139,8 +143,9 @@ jobs:
           aws-region: ${{ steps.ci_config.outputs.aws-region }}
           allowed-account-ids: ${{ vars.AWS_PROD_ACCOUNT_ID }}
 
-      - name: Start development environment
-        run: make start
-
       - name: Run scheduled prod drift detection
-        run: make test-drift
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" execute

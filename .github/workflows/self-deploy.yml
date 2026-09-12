@@ -149,6 +149,14 @@ jobs:
       pull-requests: read
     env:
       PULUMI_SKIP_UPDATE_CHECK: "true"
+      GH_TOKEN: ${{ github.token }}
+      REQUEST_PULL_REQUEST_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+      REQUEST_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
+      REQUEST_COMMENT_ID: ${{ needs.preflight.outputs.comment_id }}
+      REQUEST_SOURCE_RUN_ID: ${{ needs.preflight.outputs.source_run_id }}
+      REQUEST_COMMAND: ${{ needs.preflight.outputs.command }}
+      REQUEST_TARGET_ENVIRONMENT: ${{ needs.preflight.outputs.target_environment }}
+      EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
     concurrency:
       group: pulumi-state-${{ github.repository }}-test-test
       cancel-in-progress: false
@@ -166,7 +174,7 @@ jobs:
           persist-credentials: false
 
       - name: Install trusted registry runtime before credentials
-        uses: ./.trusted/.github/actions/setup-poc-runtime
+        uses: ./.trusted/.github/actions/setup-service-execution
 
       - name: Recheck current PR head before credentials
         env:
@@ -294,10 +302,7 @@ jobs:
           POC_SOURCE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
         run: |
           "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
-            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_runner.py" plan \
-            --artifact-id "${POC_SOURCE_ARTIFACT_ID}" \
-            --archive-sha256 "${POC_SOURCE_ARCHIVE_SHA256}" \
-            --source-sha256 "${POC_SOURCE_SHA256}"
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" execute
 
       - name: Upload test preview artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -370,6 +375,14 @@ jobs:
       pull-requests: read
     env:
       PULUMI_SKIP_UPDATE_CHECK: "true"
+      GH_TOKEN: ${{ github.token }}
+      REQUEST_PULL_REQUEST_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+      REQUEST_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
+      REQUEST_COMMENT_ID: ${{ needs.preflight.outputs.comment_id }}
+      REQUEST_SOURCE_RUN_ID: ${{ needs.preflight.outputs.source_run_id }}
+      REQUEST_COMMAND: ${{ needs.preflight.outputs.command }}
+      REQUEST_TARGET_ENVIRONMENT: ${{ needs.preflight.outputs.target_environment }}
+      EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
     concurrency:
       group: pulumi-state-${{ github.repository }}-test-test
       cancel-in-progress: false
@@ -387,7 +400,7 @@ jobs:
           persist-credentials: false
 
       - name: Install trusted registry runtime before credentials
-        uses: ./.trusted/.github/actions/setup-poc-runtime
+        uses: ./.trusted/.github/actions/setup-service-execution
 
       - name: Recheck current PR head before credentials
         env:
@@ -538,10 +551,7 @@ jobs:
           # Remove only obsolete event metadata; preserve the original diff files.
           rm -f .trusted/.artifacts/pulumi-preview/pull-request-event.json
           "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
-            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_runner.py" up-plan \
-            --artifact-id "${POC_SOURCE_ARTIFACT_ID}" \
-            --archive-sha256 "${POC_SOURCE_ARCHIVE_SHA256}" \
-            --source-sha256 "${POC_SOURCE_SHA256}"
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" execute
 
   test_post_apply_drift:
     name: Test Post-Apply Drift
@@ -561,6 +571,14 @@ jobs:
       pull-requests: read
     env:
       PULUMI_SKIP_UPDATE_CHECK: "true"
+      GH_TOKEN: ${{ github.token }}
+      REQUEST_PULL_REQUEST_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+      REQUEST_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
+      REQUEST_COMMENT_ID: ${{ needs.preflight.outputs.comment_id }}
+      REQUEST_SOURCE_RUN_ID: ${{ needs.preflight.outputs.source_run_id }}
+      REQUEST_COMMAND: ${{ needs.preflight.outputs.command }}
+      REQUEST_TARGET_ENVIRONMENT: ${{ needs.preflight.outputs.target_environment }}
+      EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
     concurrency:
       group: pulumi-state-${{ github.repository }}-test-test
       cancel-in-progress: false
@@ -578,7 +596,7 @@ jobs:
           persist-credentials: false
 
       - name: Install trusted registry runtime before credentials
-        uses: ./.trusted/.github/actions/setup-poc-runtime
+        uses: ./.trusted/.github/actions/setup-service-execution
 
       - name: Recheck current PR head before credentials
         env:
@@ -666,10 +684,7 @@ jobs:
           POC_SOURCE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
         run: |
           "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
-            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_runner.py" drift \
-            --artifact-id "${POC_SOURCE_ARTIFACT_ID}" \
-            --archive-sha256 "${POC_SOURCE_ARCHIVE_SHA256}" \
-            --source-sha256 "${POC_SOURCE_SHA256}"
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" execute
 
   test_registry_observation:
     name: Observe TEST Registry Completion
@@ -822,10 +837,19 @@ jobs:
     timeout-minutes: 25
     permissions:
       contents: read
+      actions: read
       id-token: write
       pull-requests: read
     env:
       PULUMI_SKIP_UPDATE_CHECK: "true"
+      GH_TOKEN: ${{ github.token }}
+      REQUEST_PULL_REQUEST_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+      REQUEST_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
+      REQUEST_COMMENT_ID: ${{ needs.preflight.outputs.comment_id }}
+      REQUEST_SOURCE_RUN_ID: ${{ needs.preflight.outputs.source_run_id }}
+      REQUEST_COMMAND: ${{ needs.preflight.outputs.command }}
+      REQUEST_TARGET_ENVIRONMENT: ${{ needs.preflight.outputs.target_environment }}
+      EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
     concurrency:
       group: pulumi-state-${{ github.repository }}-prod-prod
       cancel-in-progress: false
@@ -841,6 +865,9 @@ jobs:
           ref: ${{ github.sha }}
           path: .trusted
           persist-credentials: false
+
+      - name: Build trusted isolated runtime before credentials
+        uses: ./.trusted/.github/actions/setup-service-execution
 
       - name: Recheck current PR head before credentials
         env:
@@ -963,14 +990,13 @@ jobs:
             --expected-head-sha "${EXPECTED_SHA}" \
             --expected-base-sha "${EXPECTED_BASE_SHA}"
 
-      - name: Start development environment
-        run: make start
-
       - name: Save production update plan and preview artifact
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PULUMI_COMMIT_SHA: ${{ needs.preflight.outputs.head_sha }}
-        run: make pulumi-plan
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" execute
 
       - name: Upload production preview artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -1038,10 +1064,19 @@ jobs:
     environment: prod
     permissions:
       contents: read
+      actions: read
       id-token: write
       pull-requests: read
     env:
       PULUMI_SKIP_UPDATE_CHECK: "true"
+      GH_TOKEN: ${{ github.token }}
+      REQUEST_PULL_REQUEST_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+      REQUEST_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
+      REQUEST_COMMENT_ID: ${{ needs.preflight.outputs.comment_id }}
+      REQUEST_SOURCE_RUN_ID: ${{ needs.preflight.outputs.source_run_id }}
+      REQUEST_COMMAND: ${{ needs.preflight.outputs.command }}
+      REQUEST_TARGET_ENVIRONMENT: ${{ needs.preflight.outputs.target_environment }}
+      EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
     concurrency:
       group: pulumi-state-${{ github.repository }}-prod-prod
       cancel-in-progress: false
@@ -1066,6 +1101,9 @@ jobs:
           ref: ${{ github.sha }}
           path: .trusted
           persist-credentials: false
+
+      - name: Build trusted isolated runtime before credentials
+        uses: ./.trusted/.github/actions/setup-service-execution
 
       - name: Recheck current PR head before credentials
         env:
@@ -1156,9 +1194,6 @@ jobs:
             --expected-head-sha "${EXPECTED_SHA}" \
             --expected-base-sha "${EXPECTED_BASE_SHA}"
 
-      - name: Start development environment
-        run: make start
-
       - name: Download production plan artifact
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
@@ -1218,8 +1253,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
           # Remove only obsolete event metadata; preserve the original diff files.
           rm -f .artifacts/pulumi-preview/pull-request-event.json
-          make test-destructive-diff
-          make pulumi-up-plan
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" execute
 
   prod_post_apply_drift:
     name: Prod Post-Apply Drift
@@ -1234,10 +1269,19 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+      actions: read
       id-token: write
       pull-requests: read
     env:
       PULUMI_SKIP_UPDATE_CHECK: "true"
+      GH_TOKEN: ${{ github.token }}
+      REQUEST_PULL_REQUEST_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+      REQUEST_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
+      REQUEST_COMMENT_ID: ${{ needs.preflight.outputs.comment_id }}
+      REQUEST_SOURCE_RUN_ID: ${{ needs.preflight.outputs.source_run_id }}
+      REQUEST_COMMAND: ${{ needs.preflight.outputs.command }}
+      REQUEST_TARGET_ENVIRONMENT: ${{ needs.preflight.outputs.target_environment }}
+      EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
     concurrency:
       group: pulumi-state-${{ github.repository }}-prod-prod
       cancel-in-progress: false
@@ -1253,6 +1297,9 @@ jobs:
           ref: ${{ github.sha }}
           path: .trusted
           persist-credentials: false
+
+      - name: Build trusted isolated runtime before credentials
+        uses: ./.trusted/.github/actions/setup-service-execution
 
       - name: Recheck current PR head before credentials
         env:
@@ -1332,11 +1379,10 @@ jobs:
             --expected-head-sha "${EXPECTED_SHA}" \
             --expected-base-sha "${EXPECTED_BASE_SHA}"
 
-      - name: Start development environment
-        run: make start
-
       - name: Run production post-apply drift detection
-        run: make test-drift
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" execute
 
   platform_promotion:
     concurrency:

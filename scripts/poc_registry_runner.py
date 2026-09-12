@@ -44,7 +44,7 @@ def _require(value):
 
 def _git(*arguments):
     result = subprocess.run(  # nosec B603 B607
-        ["git", "-C", str(ROOT), *arguments],
+        ["git", "-c", f"safe.directory={ROOT}", "-C", str(ROOT), *arguments],
         capture_output=True,
         check=False,
         timeout=30,
@@ -74,8 +74,20 @@ def _verify_checkout(sha, *, extra_paths=()):
     paths = (*TRUSTED_PATHS, *extra_paths)
     _git("diff", "--quiet", "--no-ext-diff", "HEAD", "--", *paths)
     _require(not _git("ls-files", "--others", "--exclude-standard", "--", *paths))
-    _require(Path(sys.prefix).resolve() == (ROOT / ".venv").resolve())
-    _require((ROOT / ".venv/bin/python").is_file())
+    isolated = (
+        ROOT == Path("/trusted")
+        and os.geteuid() == 0
+        and os.getpid() == 1
+        and bool(os.statvfs(ROOT).f_flag & os.ST_RDONLY)
+        and Path(sys.prefix).resolve() == Path("/opt/service-runtime").resolve()
+    )
+    _require(isolated or Path(sys.prefix).resolve() == (ROOT / ".venv").resolve())
+    executable = (
+        Path("/opt/service-runtime/bin/python")
+        if isolated
+        else ROOT / ".venv/bin/python"
+    )
+    _require(executable.is_file())
     return sha
 
 
@@ -138,7 +150,7 @@ def _program(projection):
     encoded = json.dumps(projection.registries, sort_keys=True)
     return (
         "import json, sys\nfrom pathlib import Path\n"
-        "root = Path(__file__).resolve().parents[2]\n"
+        f"root = Path({str(ROOT)!r})\n"
         "sys.path[:0] = [str(root / 'scripts'), str(root / 'pulumi')]\n"
         "from poc_registry_phase_entrypoint import (\n"
         "    RegistryPhaseProjection, run_registry_phase)\n"
@@ -147,20 +159,24 @@ def _program(projection):
 
 
 @contextmanager
-def _project(projection):
+def _project(projection, *, root=None):
     """A fixed relative project path keeps existing manifest replay checks valid."""
-    directory = ROOT / ".poc-registry"
+    directory = (ROOT if root is None else root) / ".poc-registry"
     directory.mkdir(mode=0o700)  # Exclusive; never reuse an existing program.
     try:
         project = directory / "pulumi"
-        project.mkdir(mode=0o700)
+        project.mkdir(mode=0o755)
+        project.chmod(0o755)
+        directory.chmod(0o755)
         (project / "Pulumi.yaml").write_text(
             f"name: {backend.PROJECT}\nruntime:\n  name: python\n"
-            f"  options:\n    virtualenv: {json.dumps(str(ROOT / '.venv'))}\n"
+            f"  options:\n    virtualenv: {json.dumps(sys.prefix)}\n"
         )
         config = _git("show", f"{os.environ['GITHUB_SHA']}:pulumi/Pulumi.test.yaml")
         (project / "Pulumi.test.yaml").write_bytes(config)
         (project / "__main__.py").write_text(_program(projection))
+        for path in project.iterdir():
+            path.chmod(0o644)
         yield project
     finally:
         shutil.rmtree(directory)
@@ -304,7 +320,7 @@ def _gate(source, command, projection, initial):
     return validate
 
 
-def execute(command, *, artifact_id, archive_sha256, source_sha256):
+def execute(command, *, artifact_id, archive_sha256, source_sha256, transport=None):
     """Authenticate then execute the sole fixed registry plan/replay path."""
     _require(command in ("plan", "up-plan", "drift"))
     _trusted_root()
@@ -322,18 +338,21 @@ def execute(command, *, artifact_id, archive_sha256, source_sha256):
     initial = _capture(source, operation, projection)
     if command == "drift":
         _require(len(initial.resources) == 7)
-    with _project(projection) as project:
+    root = ROOT if transport is None else transport.repo
+    with _project(projection, root=root) as project:
         context = runner.CommandContext(
-            root_dir=ROOT,
+            root_dir=root,
             env=_child_environment(source),
             pulumi_dir=project,
             policy_pack_dir=ROOT / "policy",
-            plan_dir=ROOT / ".artifacts/pulumi-plan",
-            preview_artifact_dir=ROOT / ".artifacts/pulumi-preview",
+            plan_dir=root / ".artifacts/pulumi-plan",
+            preview_artifact_dir=root / ".artifacts/pulumi-preview",
             backend_url=f"s3://{backend.BUCKET}",
             secrets_provider=backend.PROVIDER,
             registry_plan_gate=_gate(source, operation, projection, initial),
         )
+        if transport is not None:
+            context = transport.bind(context)
         status = runner._dispatch_command(operation, context, ["test"])
         if status == 0 and command == "up-plan":
             final = _capture(source, operation, projection)

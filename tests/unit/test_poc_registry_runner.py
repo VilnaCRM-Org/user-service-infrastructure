@@ -7,6 +7,8 @@ import os
 import subprocess
 import sys
 from dataclasses import asdict, replace
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import test_poc_registry_phase_entrypoint as phase_tests
@@ -146,6 +148,49 @@ def execute(command="plan"):
     return module.execute(
         command, artifact_id="123", archive_sha256="a" * 64, source_sha256="b" * 64
     )
+
+
+def test_isolated_interpreter_requires_exact_root_mount_and_binary(monkeypatch):
+    monkeypatch.setattr(module, "ROOT", Path("/trusted"))
+    monkeypatch.setattr(module.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(module.os, "getpid", lambda: 1)
+    monkeypatch.setattr(module.os, "statvfs", lambda _: SimpleNamespace(f_flag=1))
+    monkeypatch.setattr(module.sys, "prefix", "/opt/service-runtime")
+    values = {
+        ("rev-parse", "--show-toplevel"): b"/trusted",
+        ("rev-parse", "HEAD"): b"a" * 40,
+        (
+            "remote",
+            "get-url",
+            "origin",
+        ): f"https://github.com/{module.artifact.REPOSITORY}.git".encode(),
+    }
+    monkeypatch.setattr(module, "_git", lambda *args: values.get(args, b""))
+    monkeypatch.setattr(
+        Path, "is_file", lambda path: path == Path("/opt/service-runtime/bin/python")
+    )
+    assert module._verify_checkout("a" * 40) == "a" * 40
+    monkeypatch.setattr(module.os, "getpid", lambda: 2)
+    with pytest.raises(ValueError):
+        module._verify_checkout("a" * 40)
+
+
+def test_registry_transport_keeps_real_projection_and_gate(driver):
+    bound = []
+    port = SimpleNamespace(
+        repo=driver["root"], bind=lambda context: bound.append(context) or context
+    )
+    assert (
+        module.execute(
+            "plan",
+            artifact_id="123",
+            archive_sha256="a" * 64,
+            source_sha256="b" * 64,
+            transport=port,
+        )
+        == 0
+    )
+    assert len(bound) == 1 and bound[0].registry_plan_gate is not None
 
 
 @pytest.mark.parametrize("command", ["plan", "up-plan"])
@@ -461,7 +506,15 @@ def test_git_success_uses_fixed_checkout_and_literal_arguments(monkeypatch):
 
     monkeypatch.setattr(module.subprocess, "run", run)
     assert module._git("rev-parse", "HEAD") == b"public-object-id\n"
-    assert calls[0][0] == ["git", "-C", str(module.ROOT), "rev-parse", "HEAD"]
+    assert calls[0][0] == [
+        "git",
+        "-c",
+        f"safe.directory={module.ROOT}",
+        "-C",
+        str(module.ROOT),
+        "rev-parse",
+        "HEAD",
+    ]
     assert calls[0][1]["capture_output"] is True
 
 

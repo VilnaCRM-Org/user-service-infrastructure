@@ -114,3 +114,45 @@ def test_completion_failure_remains_visible_in_result():
     script = job["steps"][0]["run"]
     assert "needs.test_registry_observation.result" in script
     assert "needs.test_registry_proof.result" in script
+    assert "test_registry_dispatch" in job["needs"]
+    assert "needs.test_registry_dispatch.result" in script
+
+
+def test_dispatch_is_a_separate_trusted_job_with_application_only_actions_token():
+    job = jobs()["test_registry_dispatch"]
+    assert "test_registry_proof" in job["needs"]
+    assert job["environment"] == "governance-evidence"
+    assert all(value == "read" for value in job["permissions"].values())
+    assert "github.ref == 'refs/heads/main'" in job["if"]
+    assert "github.event_name == 'repository_dispatch'" in job["if"]
+    assert "needs.preflight.outputs.target_environment == 'test'" in job["if"]
+    steps = job["steps"]
+    assert steps[0]["with"] == {
+        "ref": "${{ github.sha }}",
+        "path": ".trusted",
+        "persist-credentials": False,
+    }
+    token = next(step for step in steps if step.get("id") == "publisher_app")
+    assert token["with"] == {
+        "app-id": "${{ vars.GOVERNANCE_PROMOTION_APP_ID }}",
+        "private-key": "${{ secrets.GOVERNANCE_PROMOTION_APP_PRIVATE_KEY }}",
+        "owner": "VilnaCRM-Org",
+        "repositories": "user-service",
+        "permission-actions": "write",
+    }
+    assert steps[steps.index(token) - 1]["run"].rstrip().endswith(" prepare")
+    assert steps[-1]["run"].rstrip().endswith(" dispatch")
+    assert set(steps[-1]["env"]) == {"PUBLISHER_DISPATCH_APP_TOKEN"}
+    assert "REGISTRY_PROOF_APP_TOKEN" not in str(job)
+    assert "POC_PUBLISHER_WORKFLOW_SHA" in job["env"]
+    assert (
+        job["env"]["POC_REGISTRY_RECEIPT_ID"]
+        == "${{ needs.test_registry_proof.outputs.receipt_id }}"
+    )
+    proof = jobs()["test_registry_proof"]
+    assert (
+        proof["outputs"]["receipt_id"]
+        == "${{ steps.receipt.outputs.registry_phase_receipt_id }}"
+    )
+    assert '>> "${GITHUB_OUTPUT}"' in proof["steps"][-1]["run"]
+    assert not any("continue-on-error" in step or "if" in step for step in steps)

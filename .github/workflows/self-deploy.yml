@@ -788,6 +788,8 @@ jobs:
     environment: governance-evidence
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      receipt_id: ${{ steps.receipt.outputs.registry_phase_receipt_id }}
     permissions:
       contents: read
       actions: read
@@ -823,6 +825,7 @@ jobs:
           private-key: ${{ secrets.GOVERNANCE_PROMOTION_APP_PRIVATE_KEY }}
           permission-deployments: write
       - name: Publish and read back distinct TEST registry proof
+        id: receipt
         working-directory: .trusted
         env:
           REGISTRY_PROOF_APP_TOKEN: ${{ steps.registry_app.outputs.token }}
@@ -830,7 +833,65 @@ jobs:
           REGISTRY_PROOF_APP_SLUG: ${{ vars.GOVERNANCE_PROMOTION_APP_SLUG }}
         run: |
           "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
-            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_completion.py" publish
+            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_completion.py" publish >> "${GITHUB_OUTPUT}"
+
+  test_registry_dispatch:
+    name: Dispatch TEST Application Publisher
+    if: >-
+      github.event_name == 'repository_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'VilnaCRM-Org/user-service-infrastructure' &&
+      needs.preflight.outputs.command == 'up' &&
+      needs.preflight.outputs.target_environment == 'test'
+    needs: [preflight, poc_prepare_source, test_registry_observation, test_registry_proof]
+    environment: governance-evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+      pull-requests: read
+      deployments: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
+      POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
+      POC_SOURCE_FILE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
+      POC_OBSERVATION_ARTIFACT_ID: ${{ needs.test_registry_observation.outputs.artifact_id }}
+      POC_OBSERVATION_ARCHIVE_SHA256: ${{ needs.test_registry_observation.outputs.archive_sha256 }}
+      POC_OBSERVATION_FILE_SHA256: ${{ needs.test_registry_observation.outputs.file_sha256 }}
+      POC_REGISTRY_RECEIPT_ID: ${{ needs.test_registry_proof.outputs.receipt_id }}
+      POC_PUBLISHER_WORKFLOW_SHA: ${{ vars.POC_PUBLISHER_WORKFLOW_SHA }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          path: .trusted
+          persist-credentials: false
+      - name: Install trusted dispatcher before App credentials
+        uses: ./.trusted/.github/actions/setup-poc-runtime
+      - name: Verify same-run proof and installed publisher prerequisites
+        working-directory: .trusted
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_publisher_dispatch.py" prepare
+      - name: Create application-only dispatcher App token
+        id: publisher_app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ vars.GOVERNANCE_PROMOTION_APP_ID }}
+          private-key: ${{ secrets.GOVERNANCE_PROMOTION_APP_PRIVATE_KEY }}
+          owner: VilnaCRM-Org
+          repositories: user-service
+          permission-actions: write
+      - name: Revalidate and dispatch the exact TEST publisher
+        working-directory: .trusted
+        env:
+          PUBLISHER_DISPATCH_APP_TOKEN: ${{ steps.publisher_app.outputs.token }}
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_publisher_dispatch.py" dispatch
 
   prod_preview:
     name: Prod Preview
@@ -1482,6 +1543,7 @@ jobs:
       - test_post_apply_drift
       - test_registry_observation
       - test_registry_proof
+      - test_registry_dispatch
       - prod_preview
       - prod_destructive_diff
       - prod_apply
@@ -1515,6 +1577,7 @@ jobs:
             echo "| Test apply | \`${{ needs.test_apply.result }}\` |"
             echo "| Test post-apply drift | \`${{ needs.test_post_apply_drift.result }}\` |"
             echo "| TEST registry observation | \`${{ needs.test_registry_observation.result }}\` |"
+            echo "| TEST publisher dispatch | \`${{ needs.test_registry_dispatch.result }}\` |"
             echo "| TEST registry completion proof | \`${{ needs.test_registry_proof.result }}\` |"
             echo "| Production preview | \`${{ needs.prod_preview.result }}\` |"
             echo "| Production destructive diff | \`${{ needs.prod_destructive_diff.result }}\` |"

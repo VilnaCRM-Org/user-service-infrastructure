@@ -390,7 +390,10 @@ def prepare(environment=None):
     """Authenticate completed job and artifact evidence before App credentials."""
     environment = os.environ if environment is None else environment
     runtime._trusted_root()
-    _require(environment.get("GITHUB_JOB") == "test_registry_proof")
+    _require(
+        environment.get("GITHUB_JOB")
+        in {"test_registry_proof", "test_registry_dispatch"}
+    )
     run_id, workflow_sha = source_api._context(environment)
     refs = _references(environment)
     source, _ = _current_source(refs["source"])
@@ -482,6 +485,7 @@ def publish(proof, *, app_id, app_slug):
     """Revalidate immediately, create one distinct record, then read it back."""
     _require(type(app_id) is int and app_id > 0)
     source_api._pattern(app_slug, r"[a-z0-9][a-z0-9-]{0,99}")
+    _require(os.environ.get("GITHUB_JOB") == "test_registry_proof")
     _require(proof == prepare())
     observed = proof["observation"]
     deployment = _write(

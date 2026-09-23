@@ -106,6 +106,69 @@ workload phase, including native secret version history across releases/rollback
 The current registry completion proof and full TEST+PROD promotion retain their
 existing meanings. Workload-to-registry downgrade remains forbidden.
 
-Automatic publisher dispatch and its App installation permissions are separate
-existing-owner integration work. This change creates no App, token, AWS policy,
-stack, manual image flow, new phase flag, or acceptance bypass.
+## Automatic publisher dispatch
+
+After successful registry proof publication, a separate `test_registry_dispatch`
+job checks out only the installed service workflow revision. It reauthenticates
+same-run source and observation artifacts, the completed proof job, native App
+receipt readback and the main-only `governance-evidence` boundary. No PR code or
+AWS credentials enter the dispatcher. The proof job retains its deployments-only
+token; the dispatcher requests a separate `actions:write` token scoped to only
+`VilnaCRM-Org/user-service`, and verifies that exact repository selection.
+
+Before minting the dispatch token and again immediately before the POST, the
+trusted helper requires App `4853984` (`vilnacrm-user-service-evidence`) to advertise
+Actions write, and requires the active application publisher workflow on `main`
+at the protected `POC_PUBLISHER_WORKFLOW_SHA` revision. That same revision becomes
+the immutable application build source, with `linux/amd64` and the verified
+registry receipt/contract/checkpoint binding. There is no caller-selected source.
+
+Both preflight passes also read the effective rules for application `main` and
+the native repository ruleset. They require one unambiguous active branch PR rule
+with at least one approval, CODEOWNER review, last-push approval, stale-review
+dismissal and resolved review threads. A boolean `protected` field, tag rules,
+evaluation-only rules, partial responses and absent/unreadable metadata cannot
+satisfy this check. This bounded adapter currently accepts repository rulesets;
+classic-only protection or inherited organization rules need a reviewed adapter
+extension rather than an inferred equivalence.
+
+The dispatcher mirrors the publisher's existing `poc-test-images` environment
+contract: custom deployment policies allow only the exact `main` branch, admin
+bypass is disabled, and the sole required reviewer is Kravalg with self-review
+prevented. This preserves the independent human gate before application OIDC.
+The service preflight checks the gate's configuration; the application publisher
+continues to require actual environment approval before obtaining AWS credentials.
+
+[GitHub's ruleset API](https://docs.github.com/en/rest/repos/rules#get-a-repository-ruleset)
+redacts `bypass_actors` from callers lacking ruleset write access. The read-only
+service token therefore does not prove the bypass list is empty, and missing
+that field is not treated as proof of an empty list. An administrator must audit
+ruleset bypass settings when enabling the route; the protected publisher
+environment remains an independent required gate. No read token is widened to
+obtain otherwise-hidden settings.
+
+The POST pins GitHub REST version `2026-03-10` and requires the returned native
+`workflow_run_id` and repository-bound URLs. It reads that exact run back and
+checks the workflow, source revision, attempt one, repository identities and App
+actor/triggering actor. See [GitHub's workflow dispatch API](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event).
+This confirms dispatch, not image quality, publication success or workload
+admission. Release admission still checks the completed publisher independently.
+A missing/empty response, readback failure or moved application main fails closed;
+the helper never retries an uncertain POST. Inspect the native run before any
+operator retry. Reruns of the service workflow remain rejected by attempt-one
+admission.
+
+Enabling prerequisites remain external: install the reviewed publisher on
+application `main`; set `POC_PUBLISHER_WORKFLOW_SHA` to that installed main commit;
+and grant/accept Actions write for the existing App installation with access to
+`user-service`. Public App permissions on 2026-09-23 still advertise Actions read,
+and application main lacks the publisher workflow. Installation selection could
+not be verified with the available organization API access. Token creation fails
+if the installation has not accepted the permission or lacks repository access.
+The application main review rules and `poc-test-images` environment must also be
+installed: operator API inspection on 2026-09-23 found no main branch protection,
+only a tag ruleset, and no publisher environment. The runtime must be able to
+read the effective rules, ruleset and environment through its existing read
+token; API denial remains a blocking prerequisite rather than an admission bypass.
+The dispatcher therefore remains fail-closed with the current configuration.
+No App setting, workflow pin or AWS permission is changed by this source patch.

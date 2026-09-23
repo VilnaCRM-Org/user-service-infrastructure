@@ -209,6 +209,68 @@ def test_actual_artifact_codec_prepare_and_historical_verifier(evidence):
     assert any("/artifacts/103" in path for path in evidence["calls"])
 
 
+@pytest.mark.parametrize("proof_success", [True, False])
+def test_dispatcher_reauthenticates_actual_proof_artifacts_and_completed_job(
+    evidence, monkeypatch, proof_success
+):
+    from test_poc_publisher_dispatch import protection_responses
+
+    dispatcher = importlib.import_module("poc_publisher_dispatch")
+    monkeypatch.setenv("GITHUB_JOB", "test_registry_dispatch")
+    monkeypatch.setenv("POC_REGISTRY_RECEIPT_ID", "301")
+    monkeypatch.setenv("POC_PUBLISHER_WORKFLOW_SHA", "a" * 40)
+    for value in (evidence["deployment"], evidence["statuses"][0][0]):
+        value["performed_via_github_app"] = {
+            "id": dispatcher.APP_ID,
+            "slug": dispatcher.APP_SLUG,
+        }
+        value["creator"] = {"login": dispatcher.APP_SLUG + "[bot]", "type": "Bot"}
+    repository = {
+        "id": dispatcher.REPOSITORY_ID,
+        "full_name": dispatcher.REPOSITORY,
+        "owner": {"id": module.source_api.admission.OWNER_ID},
+        "default_branch": "main",
+    }
+    application = {
+        **protection_responses(),
+        f"apps/{dispatcher.APP_SLUG}": {
+            "id": dispatcher.APP_ID,
+            "slug": dispatcher.APP_SLUG,
+            "permissions": {"actions": "write"},
+        },
+        dispatcher.API: repository,
+        dispatcher.API + "/git/ref/heads/main": {
+            "object": {"type": "commit", "sha": "a" * 40}
+        },
+        dispatcher.ENDPOINT: {
+            "id": 401,
+            "path": dispatcher.WORKFLOW,
+            "state": "active",
+        },
+    }
+
+    def gh(endpoint, *arguments):
+        if endpoint in application:
+            return application[endpoint]
+        return evidence["gh"](endpoint, *arguments)
+
+    if not proof_success:
+        evidence["jobs"][-1]["conclusion"] = "failure"
+        with pytest.raises(ValueError):
+            dispatcher.prepare(gh=gh)
+        return
+    request, workflow = dispatcher.prepare(gh=gh)
+    assert workflow == 401 and request["registry_phase_receipt_id"] == 301
+    assert (
+        request["registry_contract_sha256"]
+        == evidence["source"]["source"]["contract_sha256"]
+    )
+    with pytest.raises(ValueError):
+        module.publish(
+            evidence["proof"], app_id=dispatcher.APP_ID, app_slug=dispatcher.APP_SLUG
+        )
+
+
 @pytest.mark.parametrize(
     "field,value",
     [

@@ -71,6 +71,7 @@ known_first_party = [
     "poc_phase_admission",
     "poc_phase_source_adapter",
     "poc_provider_runtime",
+    "poc_publisher_dispatch",
     "poc_registry_phase_entrypoint",
     "poc_registry_plan",
     "poc_registry_runner",

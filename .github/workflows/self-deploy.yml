@@ -58,17 +58,21 @@ jobs:
         id: resolve
         run: python3 scripts/pulumi_command_preflight.py --service
 
+      - name: Reject PR deployment until trusted controller installation completes
+        run: |
+          echo "PR deployment is disabled during controller installation; no AWS role is assumed." >&2
+          exit 1
+
   test_preview:
+    # Stage 1: stage 2 must replace this legacy PR execution job atomically.
+    if: ${{ false && always() }}
     name: Test Preview
     environment: test-preview
     runs-on: ubuntu-latest
     needs:
       - preflight
     timeout-minutes: 25
-    permissions:
-      contents: read
-      id-token: write
-      pull-requests: read
+    permissions: {}
     env:
       PULUMI_SKIP_UPDATE_CHECK: "true"
     concurrency:
@@ -191,8 +195,9 @@ jobs:
           retention-days: 7
 
   test_destructive_diff:
+    # Stage 1: stage 2 must replace this legacy PR execution job atomically.
+    if: ${{ false && always() }}
     name: Test Destructive Diff Gate
-    if: github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
     needs:
       - preflight
@@ -227,9 +232,9 @@ jobs:
         run: make test-destructive-diff
 
   test_apply:
+    # Stage 1: stage 2 must replace this legacy PR execution job atomically.
+    if: ${{ false && always() }}
     name: Test Apply
-    if: >-
-      needs.preflight.outputs.command == 'up'
     environment: test
     runs-on: ubuntu-latest
     needs:
@@ -237,10 +242,7 @@ jobs:
       - test_preview
       - test_destructive_diff
     timeout-minutes: 30
-    permissions:
-      contents: read
-      id-token: write
-      pull-requests: read
+    permissions: {}
     env:
       PULUMI_SKIP_UPDATE_CHECK: "true"
     concurrency:
@@ -359,19 +361,16 @@ jobs:
           make pulumi-up-plan
 
   test_post_apply_drift:
+    # Stage 1: stage 2 must replace this legacy PR execution job atomically.
+    if: ${{ false && always() }}
     name: Test Post-Apply Drift
-    if: >-
-      needs.preflight.outputs.command == 'up'
     environment: test-preview
     runs-on: ubuntu-latest
     needs:
       - preflight
       - test_apply
     timeout-minutes: 20
-    permissions:
-      contents: read
-      id-token: write
-      pull-requests: read
+    permissions: {}
     env:
       PULUMI_SKIP_UPDATE_CHECK: "true"
     concurrency:
@@ -433,13 +432,9 @@ jobs:
         run: make test-drift
 
   prod_preview:
+    # Stage 1: stage 2 must replace this legacy PR execution job atomically.
+    if: ${{ false && always() }}
     name: Prod Preview
-    if: >-
-      always() && needs.preflight.result == 'success' &&
-      needs.preflight.outputs.target_environment == 'prod' &&
-      needs.test_preview.result == 'success' &&
-      (needs.preflight.outputs.command == 'plan' ||
-      needs.test_post_apply_drift.result == 'success')
     environment: prod-preview
     runs-on: ubuntu-latest
     needs:
@@ -447,10 +442,7 @@ jobs:
       - test_preview
       - test_post_apply_drift
     timeout-minutes: 25
-    permissions:
-      contents: read
-      id-token: write
-      pull-requests: read
+    permissions: {}
     env:
       PULUMI_SKIP_UPDATE_CHECK: "true"
     concurrency:
@@ -576,10 +568,9 @@ jobs:
           retention-days: 7
 
   prod_destructive_diff:
+    # Stage 1: stage 2 must replace this legacy PR execution job atomically.
+    if: ${{ false && always() }}
     name: Prod Destructive Diff Gate
-    if: >-
-      github.event_name == 'repository_dispatch' &&
-      needs.preflight.outputs.target_environment == 'prod'
     runs-on: ubuntu-latest
     needs:
       - preflight
@@ -614,10 +605,9 @@ jobs:
         run: make test-destructive-diff
 
   prod_apply:
+    # Stage 1: stage 2 must replace this legacy PR execution job atomically.
+    if: ${{ false && always() }}
     name: Prod Apply
-    if: >-
-      needs.preflight.outputs.target_environment == 'prod' &&
-      needs.preflight.outputs.command == 'up'
     runs-on: ubuntu-latest
     needs:
       - preflight
@@ -627,10 +617,7 @@ jobs:
       - prod_destructive_diff
     timeout-minutes: 30
     environment: prod
-    permissions:
-      contents: read
-      id-token: write
-      pull-requests: read
+    permissions: {}
     env:
       PULUMI_SKIP_UPDATE_CHECK: "true"
     concurrency:
@@ -759,20 +746,16 @@ jobs:
           make pulumi-up-plan
 
   prod_post_apply_drift:
+    # Stage 1: stage 2 must replace this legacy PR execution job atomically.
+    if: ${{ false && always() }}
     name: Prod Post-Apply Drift
-    if: >-
-      needs.preflight.outputs.target_environment == 'prod' &&
-      needs.preflight.outputs.command == 'up'
     environment: prod-preview
     runs-on: ubuntu-latest
     needs:
       - preflight
       - prod_apply
     timeout-minutes: 20
-    permissions:
-      contents: read
-      id-token: write
-      pull-requests: read
+    permissions: {}
     env:
       PULUMI_SKIP_UPDATE_CHECK: "true"
     concurrency:
@@ -834,6 +817,8 @@ jobs:
         run: make test-drift
 
   platform_promotion:
+    # Stage 1: stage 2 must replace this legacy PR execution job atomically.
+    if: ${{ false && always() }}
     concurrency:
       group: promotion-status-${{ needs.preflight.outputs.pull_request_number }}
       cancel-in-progress: false
@@ -844,15 +829,10 @@ jobs:
       - test_post_apply_drift
       - prod_apply
       - prod_post_apply_drift
-    if: >-
-      needs.preflight.outputs.command == 'up' &&
-      needs.preflight.outputs.target_environment == 'prod'
     environment: governance-evidence
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions:
-      contents: read
-      pull-requests: read
+    permissions: {}
     env:
       GH_TOKEN: ${{ github.token }}
       PROMOTION_KIND: service
@@ -952,7 +932,8 @@ jobs:
             echo "| Production apply | \`${{ needs.prod_apply.result }}\` |"
             echo "| Production post-apply drift | \`${{ needs.prod_post_apply_drift.result }}\` |"
             echo
-            echo "Production stages are gated behind a successful test apply and test post-apply drift check for the same PR head SHA."
+            echo "PR deployment is disabled during controller installation; no AWS role was assumed."
+            echo "Stage 2 must install and validate the complete trusted controller before new deployment commands can run."
           } > "${body_file}"
 
           pr_number="${{ needs.preflight.outputs.pull_request_number }}"

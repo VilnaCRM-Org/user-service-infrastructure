@@ -18,12 +18,17 @@ import shutil  # noqa: E402
 import subprocess  # noqa: E402  # nosec B404
 import tempfile  # noqa: E402
 
+import poc_backend_observer as backend  # noqa: E402
 import pulumi_command_preflight as preflight  # noqa: E402
 from reviewed_source_admission import verify_reviewed_source  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 PATH = "/opt/pulumi:/usr/local/bin:/usr/bin:/bin"
-JOBS = frozenset({"test_preview", "test_apply", "test_post_apply_drift"})
+JOBS = {
+    "test_preview": "plan",
+    "test_apply": "up-plan",
+    "test_post_apply_drift": "plan",
+}
 FIELDS = (
     "GH_TOKEN",
     "AWS_ACCESS_KEY_ID",
@@ -150,6 +155,10 @@ def execute():
     workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
     require(ROOT == workspace / ".trusted")
     recheck()
+    # Validate installed coordinates before forwarding only this job's role metadata.
+    # The worker repeats this check and verifies the actual native STS caller.
+    backend._target_coordinates(JOBS[job])
+    role_key = backend._operation_identity(JOBS[job])[0]
     public = Path(
         tempfile.mkdtemp(prefix="service-worker-public-", dir=os.environ["RUNNER_TEMP"])
     )
@@ -184,10 +193,10 @@ def execute():
         f"type=bind,src={public},dst=/public",
     ]
     environment = {key: os.environ[key] for key in FIELDS if key in os.environ}
+    environment[role_key] = os.environ[role_key]
     environment["PATH"] = PATH
-    for key in (*FIELDS, "PATH"):
-        if key in environment:
-            command.extend(["-e", key])
+    for key in environment:
+        command.extend(["-e", key])
     command.extend(
         [
             "service-execution-worker",

@@ -45,6 +45,10 @@ apply, destructive override, plugin acquisition, or shared-stack initialization 
 available. Post-apply drift requires the complete expected graph and rejects
 resource changes. AWS credentials are temporary sessions from the existing
 configuration-reader and preview/apply/drift OIDC roles.
+The host validates the selected job's role ARN and backend coordinates against the
+installed observer constants and schema before Docker starts. Only that role ARN
+crosses the environment boundary; backend capture repeats coordinate checks and
+verifies the actual native STS caller. Post-apply drift uses the Preview role.
 
 PROD, workload execution, registry-completion proofs, publisher dispatch, and
 promotion are absent from this controller. The existing main-only initialization
@@ -67,13 +71,17 @@ loopback AWS endpoints; it is not a deployment rehearsal against AWS.
 
 ## Local validation on 2026-09-23
 
-- Official unit gate: 1,576 passed, 5 skipped; 100% required coverage.
+- Official unit gate: 1,594 passed, 5 skipped; 100% required coverage.
+- Focused host/worker/backend/runner regression suite: 165 passed. Eighteen
+  job/fault combinations exercise the production host-to-worker metadata handoff
+  through backend validation to the native STS boundary, including missing,
+  spoofed-role, wrong-account, PROD, and worker-tampered role metadata rejection.
 - Official policy gate: 249 passed; 100% required coverage.
 - Official integration gate: 24 passed; 100% required coverage. The pinned native
   AWS provider validates the fixed registry/SES/DNS graph, replays its saved plan,
   checks readiness changes, and completes a no-change refresh using synthetic
   credentials and loopback endpoints.
-- Official aggregate gate: 5,406 statements and 1,604 branches, none missing or
+- Official aggregate gate: 5,409 statements and 1,602 branches, none missing or
   partial; 100% coverage.
 - The explicit worker container smoke passed separately, including real Pulumi
   preview and saved-plan replay with a local backend, UID 2000 isolation, root-only
@@ -116,6 +124,9 @@ Per-suite coverage files remain separate until the aggregate gate combines them.
 Generated native-test entrypoints preserve source attribution through the existing
 trusted coverage bootstrap only when the official gate explicitly requests it.
 Retained local logs are in `.artifacts/controller-validation/` (ignored by Git).
+The role-handoff repair reran the full unit and aggregate gates, Ruff check/format,
+all ten import contracts, and Bandit; unchanged policy and integration coverage
+results were retained from the preceding run.
 
 Keep the workflow guards until independent review and separate verification of live
 TEST capability enrollment, protected environments, OIDC configuration, backend

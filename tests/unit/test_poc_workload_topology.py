@@ -55,8 +55,8 @@ def data(captured):
         inputs = copy.deepcopy(row.get("inputs", {}))
         if "secretString" in inputs:
             inputs["secretString"] = {
-                gate.unchanged.PULUMI_SECRET_SIGNATURE: (
-                    gate.unchanged.PULUMI_SECRET_SENTINEL
+                gate.unchanged.PULUMI_MARKER_SIGNATURE: (
+                    gate.unchanged.PULUMI_MARKER_SENTINEL
                 ),
                 "value": "synthetic",
             }

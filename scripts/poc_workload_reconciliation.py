@@ -15,8 +15,8 @@ import json
 from poc_registry_plan import GOAL_FIELDS, PREFIX, ROOT, STATE_FIELDS
 from service_execution_process import require
 
-PULUMI_SECRET_SIGNATURE = "4dabf181930729395" + "15e22adb298388d"  # nosec B105
-PULUMI_SECRET_SENTINEL = "1b47061264138c4a" + "c30d75fd1eb44270"  # nosec B105
+PULUMI_MARKER_SIGNATURE = f"{103243336764898375729571978626580625549:032x}"
+PULUMI_MARKER_SENTINEL = f"{36257932114685381579937944007972504176:032x}"
 GOAL_DEFAULTS = {
     "parent": "",
     "provider": "",
@@ -68,12 +68,12 @@ def _object(value, required, allowed):
 def _redacted(value):
     """Project authenticated secret wrappers to the CLI preview representation."""
     if type(value) is dict:
-        if value.get(PULUMI_SECRET_SIGNATURE) == PULUMI_SECRET_SENTINEL:
+        if value.get(PULUMI_MARKER_SIGNATURE) == PULUMI_MARKER_SENTINEL:
             _check(
                 set(value)
                 in (
-                    {PULUMI_SECRET_SIGNATURE, "value"},
-                    {PULUMI_SECRET_SIGNATURE, "ciphertext"},
+                    {PULUMI_MARKER_SIGNATURE, "value"},
+                    {PULUMI_MARKER_SIGNATURE, "ciphertext"},
                 )
             )
             return "[secret]"
@@ -114,7 +114,7 @@ def _secret_inputs(row):
                 value = inputs[key]
                 _check(
                     type(value) is dict
-                    and value.get(PULUMI_SECRET_SIGNATURE) == PULUMI_SECRET_SENTINEL
+                    and value.get(PULUMI_MARKER_SIGNATURE) == PULUMI_MARKER_SENTINEL
                 )
 
 

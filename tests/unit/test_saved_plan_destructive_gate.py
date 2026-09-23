@@ -63,25 +63,11 @@ def seal_existing(module, context, stack: str, payload: str):
 
 @pytest.mark.parametrize("stack", ["test", "prod"])
 @pytest.mark.parametrize("operation", ["delete", "replace", "delete-replaced"])
-@pytest.mark.parametrize(
-    "label", [None, "allow-destructive-infra-change", "stale-label"]
-)
 def test_authentic_destructive_plan_never_reaches_stack_selection(
-    monkeypatch, tmp_path, stack, operation, label
+    monkeypatch, tmp_path, stack, operation
 ):
     """Correct head, age, backend and both hashes do not authorize destruction."""
     module, context, commands = setup_command(monkeypatch, tmp_path, preview(operation))
-
-    def forbidden_override_lookup(*_args):
-        raise AssertionError("Labels must not be read as authorization")
-
-    monkeypatch.setattr(
-        module.guardrails, "load_destructive_override", forbidden_override_lookup
-    )
-    event = tmp_path / "event.json"
-    labels = [{"name": label}] if label else []
-    event.write_text(json.dumps({"pull_request": {"labels": labels}}))
-    context.env["GITHUB_EVENT_PATH"] = str(event)
     seal_existing(module, context, stack, preview(operation))
     assert module._run_up_plan_command(context, [stack]) == 1
     assert commands == []

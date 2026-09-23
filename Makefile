@@ -205,16 +205,10 @@ test-preview: ## Generate non-destructive Pulumi previews for configured stacks.
 
 test-destructive-diff: ## Fail when Pulumi previews delete or replace critical resources.
 	$(COMPOSE) run --rm $(COMPOSE_GITHUB_TOKEN) $(COMPOSE_SERVICE) bash -lc '\
-		event_arg=""; \
-		if [ -f .artifacts/pulumi-preview/pull-request-event.json ]; then \
-			event_arg="--event-path .artifacts/pulumi-preview/pull-request-event.json"; \
-		elif [ -f .artifacts/github-event.json ]; then \
-			event_arg="--event-path .artifacts/github-event.json"; \
-		fi; \
 		if ! compgen -G ".artifacts/pulumi-preview/*.json" >/dev/null; then \
 			uv run --frozen python ./scripts/run_pulumi_preview.py >/dev/null; \
 		fi; \
-		uv run python ./scripts/pulumi_ci_guardrails.py destructive-gate $$event_arg .artifacts/pulumi-preview/*.json'
+	uv run python ./scripts/pulumi_ci_guardrails.py destructive-gate .artifacts/pulumi-preview/*.json'
 
 test-iam-validation: ## Validate previewed IAM policies with AWS IAM Access Analyzer.
 	$(COMPOSE) run --rm $(COMPOSE_GITHUB_TOKEN) $(COMPOSE_SERVICE) bash -lc '\

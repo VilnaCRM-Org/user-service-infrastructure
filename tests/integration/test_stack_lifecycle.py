@@ -56,6 +56,7 @@ def test_managed_helpers_cover_log_policy_and_documentdb_descriptor() -> None:
     assert "service%20db" in _documentdb_url(
         "user", "password", "db.example", 27017, descriptor
     )
+    assert "/?tls=true" in _documentdb_url("user", "password", "db.example", 27017)
 
 
 def test_runtime_descriptor_properties_return_declared_values() -> None:

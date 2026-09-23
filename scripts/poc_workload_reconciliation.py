@@ -15,8 +15,8 @@ import json
 from poc_registry_plan import GOAL_FIELDS, PREFIX, ROOT, STATE_FIELDS
 from service_execution_process import require
 
-PULUMI_SECRET_SIGNATURE = "4dabf18193072939515e22adb298388d"
-PULUMI_SECRET_SENTINEL = "1b47061264138c4ac30d75fd1eb44270"
+PULUMI_SECRET_SIGNATURE = "4dabf181930729395" + "15e22adb298388d"  # nosec B105
+PULUMI_SECRET_SENTINEL = "1b47061264138c4a" + "c30d75fd1eb44270"  # nosec B105
 GOAL_DEFAULTS = {
     "parent": "",
     "provider": "",

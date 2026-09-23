@@ -65,7 +65,7 @@ jobs:
 
   poc_prepare_source:
     # Keep disabled until native graph and aggregate coverage gates pass.
-    if: ${{ false && always() }}
+    if: ${{ false && success() }}
     name: Prepare TEST PoC Source Facts
     needs:
       - preflight
@@ -142,7 +142,7 @@ jobs:
           retention-days: 7
 
   test_preview:
-    if: ${{ false && always() }}
+    if: ${{ false && success() }}
     name: Test Preview
     environment: test-preview
     runs-on: ubuntu-latest

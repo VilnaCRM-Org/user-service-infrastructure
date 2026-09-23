@@ -400,32 +400,6 @@ def test_extract_iam_validation_inputs_covers_identity_resource_and_inline_polic
     )
 
 
-def test_load_destructive_override_reads_github_event_payload(
-    guardrails_module, tmp_path: Path
-) -> None:
-    """Respect the explicit destructive-change override label only."""
-    event_path = tmp_path / "event.json"
-    event_path.write_text(
-        json.dumps(
-            {"pull_request": {"labels": [{"name": "allow-destructive-infra-change"}]}}
-        ),
-        encoding="utf-8",
-    )
-    empty_path = tmp_path / "empty.json"
-    empty_path.write_text("{}", encoding="utf-8")
-    invalid_labels_path = tmp_path / "invalid-labels.json"
-    invalid_labels_path.write_text(
-        json.dumps({"pull_request": {"labels": "invalid"}}), encoding="utf-8"
-    )
-
-    assert guardrails_module.load_destructive_override(str(event_path)) is True
-    assert guardrails_module.load_destructive_override(str(empty_path)) is False
-    assert (
-        guardrails_module.load_destructive_override(str(invalid_labels_path)) is False
-    )
-    assert guardrails_module.load_destructive_override(None) is False
-
-
 def test_validate_iam_inputs_handles_success_and_failing_findings(
     guardrails_module, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -691,12 +665,7 @@ def test_cli_commands_cover_summary_destructive_gate_iam_inputs_and_validation(
     assert guardrails_module.cli(["summarize", str(preview_path)]) == 0
     assert "Pulumi Preview" in capsys.readouterr().out
 
-    assert (
-        guardrails_module.cli(
-            ["destructive-gate", str(preview_path), "--event-path", str(event_path)]
-        )
-        == 1
-    )
+    assert guardrails_module.cli(["destructive-gate", str(preview_path)]) == 1
     assert "destructive change blocked" in capsys.readouterr().err
 
     assert (
@@ -711,24 +680,7 @@ def test_cli_commands_cover_summary_destructive_gate_iam_inputs_and_validation(
     assert guardrails_module.cli(["validate-iam", str(preview_path)]) == 0
     assert "Validated 1 IAM policy document" in capsys.readouterr().out
 
-    override_event_path = tmp_path / "override.json"
-    override_event_path.write_text(
-        json.dumps(
-            {"pull_request": {"labels": [{"name": "allow-destructive-infra-change"}]}}
-        ),
-        encoding="utf-8",
-    )
-    assert (
-        guardrails_module.cli(
-            [
-                "destructive-gate",
-                str(preview_path),
-                "--event-path",
-                str(override_event_path),
-            ]
-        )
-        == 0
-    )
+    assert guardrails_module.cli(["destructive-gate", str(preview_path)]) == 1
 
 
 def test_validate_iam_cli_short_circuits_when_no_policies_present(
@@ -820,3 +772,16 @@ def test_main_guard_runs_cli_entrypoint(
         sys.argv = original_argv
 
     assert "No IAM policy documents" in capsys.readouterr().out
+
+
+def test_destructive_gate_cli_accepts_safe_preview(
+    guardrails_module, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A valid creation passes the CLI gate without an override or warning."""
+    preview_path = _write_preview(
+        tmp_path / "safe-preview.json",
+        steps=[{"op": "create", "newState": {"type": "aws:s3/bucket:Bucket"}}],
+        summary={"create": 1},
+    )
+    assert guardrails_module.cli(["destructive-gate", str(preview_path)]) == 0
+    assert capsys.readouterr().err == ""

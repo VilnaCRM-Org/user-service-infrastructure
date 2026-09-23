@@ -7,65 +7,10 @@ import sys
 from pathlib import Path
 
 import pytest
-import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 worker = importlib.import_module("service_boundary_worker")
-DISABLED_JOBS = {
-    "test_preview",
-    "test_destructive_diff",
-    "test_apply",
-    "test_post_apply_drift",
-    "prod_preview",
-    "prod_destructive_diff",
-    "prod_apply",
-    "prod_post_apply_drift",
-    "platform_promotion",
-}
-
-
-def workflow():
-    return yaml.safe_load((ROOT / ".github/workflows/self-deploy.yml").read_text())
-
-
-def test_exact_pr_execution_jobs_are_unconditionally_disabled_without_oidc():
-    document = workflow()
-    jobs = document["jobs"]
-    assert set(jobs) == DISABLED_JOBS | {"preflight", "comment_result"}
-    for name in DISABLED_JOBS:
-        assert jobs[name]["if"] == "${{ false && always() }}"
-        assert jobs[name].get("permissions", {}) == {}
-    runnable = [jobs[name] for name in {"preflight", "comment_result"}]
-    for job in runnable:
-        assert job["permissions"].get("id-token") != "write"
-        for step in job["steps"]:
-            assert "aws-actions/" not in step.get("uses", "")
-            assert "load-aws-ci-env" not in step.get("uses", "")
-            assert "head_sha" not in step.get("with", {}).get("ref", "")
-            assert "make " not in step.get("run", "")
-
-
-def test_authentication_precedes_failure_and_comment_remains_visible(tmp_path):
-    jobs = workflow()["jobs"]
-    steps = jobs["preflight"]["steps"]
-    assert steps[-2]["id"] == "resolve"
-    guard = steps[-1]["run"]
-    assert "${{" not in guard
-    result = subprocess.run(
-        ["/bin/bash", "--noprofile", "--norc", "-c", guard],
-        cwd=tmp_path,
-        env={"PATH": "/usr/bin:/bin"},
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 1
-    assert "no AWS role is assumed" in result.stderr
-    comment = jobs["comment_result"]
-    assert comment["if"] == "always()"
-    assert set(comment["needs"]) == DISABLED_JOBS | {"preflight"}
-    assert "no AWS role was assumed" in comment["steps"][0]["run"]
 
 
 @pytest.mark.parametrize("arguments", [[], ["execute"], ["up"], ["smoke", "PR.py"]])

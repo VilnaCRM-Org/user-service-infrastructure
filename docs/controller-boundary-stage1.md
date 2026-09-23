@@ -1,3 +1,8 @@
+# Stage-one history
+
+The TEST replacement candidate is documented in [trusted-test-controller.md](trusted-test-controller.md).
+The following describes the original disabled boundary commit, not candidate installation authority.
+
 # First-stage controller boundary
 
 PR comment intake and result comments remain available. Every legacy PR-head

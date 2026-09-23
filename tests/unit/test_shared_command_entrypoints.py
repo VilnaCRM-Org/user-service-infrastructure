@@ -31,6 +31,17 @@ CommandMatcher = Callable[[list[str]], bool]
 CommandResponse = Callable[[list[str]], subprocess.CompletedProcess[str]]
 
 
+def preview_binding(root_dir: Path, stack: str = "test") -> dict[str, str]:
+    """Write a benign preview and supply the mandatory original-preview binding."""
+    path = root_dir / ".artifacts" / "pulumi-preview" / f"{stack}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"steps": [], "changeSummary": {}}', encoding="utf-8")
+    return {
+        "previewFile": str(path.relative_to(root_dir)),
+        "previewSha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
+
+
 def test_run_pulumi_command_builds_expected_pulumi_invocations(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -236,6 +247,7 @@ def test_run_pulumi_command_validates_plan_manifest_error_paths(
         "stack": "test",
         "planFile": ".artifacts/pulumi-plan/test.plan",
         "planSha256": hashlib.sha256(b"plan").hexdigest(),
+        **preview_binding(repo_dir),
     }
     valid_manifest = {
         "schemaVersion": 1,
@@ -345,6 +357,7 @@ def test_run_pulumi_command_rejects_malformed_plan_manifest(
         "stack": "test",
         "planFile": ".artifacts/pulumi-plan/test.plan",
         "planSha256": hashlib.sha256(b"plan").hexdigest(),
+        **preview_binding(repo_dir),
     }
     valid_manifest = {
         "schemaVersion": 1,
@@ -459,6 +472,7 @@ def test_run_pulumi_command_reuses_manifest_for_multiple_plan_applications(
                 "stack": stack,
                 "planFile": f".artifacts/pulumi-plan/{plan_file.name}",
                 "planSha256": hashlib.sha256(f"plan-{stack}".encode()).hexdigest(),
+                **preview_binding(repo_dir, stack),
             }
         )
     (plan_dir / "manifest.json").write_text(
@@ -778,6 +792,7 @@ def test_run_pulumi_command_handles_error_paths_and_plan_application(
                         "stack": "test",
                         "planFile": ".artifacts/pulumi-plan/single.plan",
                         "planSha256": hashlib.sha256(b"plan").hexdigest(),
+                        **preview_binding(repo_dir),
                     }
                 ],
             }
@@ -1170,6 +1185,7 @@ def test_run_pulumi_command_dispatch_propagates_apply_failures(
                         "stack": "test",
                         "planFile": f".artifacts/pulumi-plan/{plan_file.name}",
                         "planSha256": hashlib.sha256(b"plan").hexdigest(),
+                        **preview_binding(context_dir),
                     }
                 ],
             }
@@ -1221,7 +1237,7 @@ def test_run_plan_command_does_not_cancel_before_preview(
             plan_path.write_text("plan", encoding="utf-8")
             stdout = kwargs.get("stdout")
             if stdout is not None:
-                stdout.write("{}")
+                stdout.write('{"steps": []}')
         return subprocess.CompletedProcess(command, 0, stdout="")
 
     context = module.CommandContext(

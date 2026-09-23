@@ -15,9 +15,33 @@ from app.environment import (
     require_application_secrets,
 )
 from app.network import NetworkPlane
-from app.runtime_secrets import RuntimeSecrets
+from app.runtime_secrets import RuntimeSecrets, RuntimeSecretsDescriptor
 
 __all__ = ["DataPlane"]
+
+
+def _documentdb_url(
+    username: str,
+    password: str,
+    endpoint: str,
+    port: int,
+    descriptor: RuntimeSecretsDescriptor | None = None,
+) -> str:
+    """Compose a URL inside the secret Output, preserving legacy defaults."""
+    database = ""
+    options = (
+        "tls=true&replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false"
+    )
+    if descriptor is not None:
+        database = quote(descriptor.database_name, safe="")
+        # DocumentDB authenticates in admin even when an application DB is selected.
+        options += (
+            f"&authSource=admin&tlsCAFile={quote(descriptor.ca_bundle_path, safe='')}"
+        )
+    return (
+        f"mongodb://{quote(username, safe='')}:{quote(password, safe='')}@"
+        f"{endpoint}:{port}/{database}?{options}"
+    )
 
 
 @dataclass(frozen=True)
@@ -174,12 +198,14 @@ class DataPlane(pulumi.ComponentResource):
                 password,
                 documentdb_cluster.endpoint,
             ).apply(
-                lambda parts: (
-                    "mongodb://"
-                    f"{quote(parts[0], safe='')}:{quote(parts[1], safe='')}@"
-                    f"{parts[2]}:{settings.documentdb.port}/"
-                    "?tls=true&replicaSet=rs0&readPreference=secondaryPreferred"
-                    "&retryWrites=false"
+                lambda parts: _documentdb_url(
+                    parts[0],
+                    parts[1],
+                    parts[2],
+                    settings.documentdb.port,
+                    self._runtime_secrets.descriptor
+                    if self._runtime_secrets is not None
+                    else None,
                 )
             ),
         )

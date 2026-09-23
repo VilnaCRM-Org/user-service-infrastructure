@@ -25,6 +25,36 @@ class StackConfigError(ValueError):
     """A stack configuration could not be verified without replacing its key."""
 
 
+# This is deliberately the exact public projection returned by
+# poc_workload_phase_entrypoint.workload_configuration.  It is closed so a
+# caller cannot smuggle provider, backend, or secret settings through the
+# workload path.
+WORKLOAD_CONFIG_KEYS = frozenset(
+    {
+        "user-service-infrastructure:deploymentMode",
+        "user-service-infrastructure:webRepositoryName",
+        "user-service-infrastructure:workerRepositoryName",
+        "user-service-infrastructure:webImage",
+        "user-service-infrastructure:workerImage",
+        "user-service-infrastructure:imageTagMutability",
+        "user-service-infrastructure:executionRoleArn",
+        "user-service-infrastructure:taskRoleArn",
+        "user-service-infrastructure:appEnv",
+        "user-service-infrastructure:appDebug",
+        "user-service-infrastructure:apiBaseUrl",
+        "user-service-infrastructure:apiUrl",
+        "user-service-infrastructure:corsAllowOrigin",
+        "user-service-infrastructure:certificateArn",
+        "user-service-infrastructure:mailSender",
+        "user-service-infrastructure:healthCheckPath",
+        "user-service-infrastructure:healthCheckQueueName",
+        "user-service-infrastructure:awsSqsEndpointBase",
+        "user-service-infrastructure:awsSqsPort",
+    }
+)
+MAX_WORKLOAD_CONFIG_VALUE_BYTES = 4096
+
+
 class _StackConfigLoader(yaml.SafeLoader):
     """Do not let duplicate YAML keys hide an explicit unsafe provider setting."""
 
@@ -340,11 +370,127 @@ def _materialize_provider_pins(config: dict[str, Any], target: dict[str, str]) -
     settings.update({f"aws:{field}": value for field, value in pins.items()})
 
 
+def _workload_image_matches(
+    image: str, account: str, region: str, repository: str
+) -> bool:
+    return bool(
+        re.fullmatch(
+            re.escape(f"{account}.dkr.ecr.{region}.amazonaws.com/{repository}@sha256:")
+            + r"[0-9a-f]{64}",
+            image,
+        )
+    )
+
+
+def _materialize_workload_config(
+    config: dict[str, Any],
+    workload_config: dict[str, str] | None,
+    target: dict[str, str],
+) -> None:
+    """Add only the closed, public workload projection to the config file."""
+    if workload_config is None:
+        return
+    _require(
+        type(workload_config) is dict
+        and set(workload_config) == WORKLOAD_CONFIG_KEYS
+        and all(type(key) is str for key in workload_config),
+        "Workload configuration must contain exactly the generated public settings.",
+    )
+    _require(
+        all(
+            type(value) is str
+            and 0 < len(value.encode()) <= MAX_WORKLOAD_CONFIG_VALUE_BYTES
+            and not any(
+                ord(character) < 32 or ord(character) == 127 for character in value
+            )
+            for value in workload_config.values()
+        ),
+        "Workload configuration values must be bounded public strings.",
+    )
+    account, region = target["accountId"], target["region"]
+    web_repository = workload_config["user-service-infrastructure:webRepositoryName"]
+    worker_repository = workload_config[
+        "user-service-infrastructure:workerRepositoryName"
+    ]
+    repository_pattern = r"[a-z0-9](?:[a-z0-9._/-]{0,254}[a-z0-9])?"
+    _require(
+        all(
+            re.fullmatch(repository_pattern, repository)
+            for repository in (web_repository, worker_repository)
+        )
+        and _workload_image_matches(
+            workload_config["user-service-infrastructure:webImage"],
+            account,
+            region,
+            web_repository,
+        )
+        and _workload_image_matches(
+            workload_config["user-service-infrastructure:workerImage"],
+            account,
+            region,
+            worker_repository,
+        ),
+        "Workload image configuration differs from the protected target.",
+    )
+    api_base_url = workload_config["user-service-infrastructure:apiBaseUrl"]
+    _require(
+        workload_config["user-service-infrastructure:deploymentMode"] == "managed"
+        and workload_config["user-service-infrastructure:imageTagMutability"]
+        == "IMMUTABLE"
+        and workload_config["user-service-infrastructure:appEnv"] == "prod"
+        and workload_config["user-service-infrastructure:appDebug"] == "0"
+        and workload_config["user-service-infrastructure:apiUrl"] == api_base_url
+        and re.fullmatch(r"https://[a-z0-9.-]+", api_base_url)
+        and workload_config["user-service-infrastructure:corsAllowOrigin"]
+        == "^" + re.escape(api_base_url) + "$"
+        and all(
+            re.fullmatch(rf"arn:aws:iam::{account}:role/[A-Za-z0-9+=,.@_/-]+", role)
+            for role in (
+                workload_config["user-service-infrastructure:executionRoleArn"],
+                workload_config["user-service-infrastructure:taskRoleArn"],
+            )
+        )
+        and bool(
+            re.fullmatch(
+                rf"arn:aws:acm:{region}:{account}:certificate/[0-9a-f-]+",
+                workload_config["user-service-infrastructure:certificateArn"],
+            )
+        )
+        and bool(
+            re.fullmatch(
+                r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+",
+                workload_config["user-service-infrastructure:mailSender"],
+            )
+        )
+        and bool(
+            re.fullmatch(
+                r"/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*",
+                workload_config["user-service-infrastructure:healthCheckPath"],
+            )
+        )
+        and workload_config["user-service-infrastructure:healthCheckQueueName"]
+        == "health-check-queue"
+        and workload_config["user-service-infrastructure:awsSqsEndpointBase"]
+        == f"https://sqs.{region}.amazonaws.com"
+        and workload_config["user-service-infrastructure:awsSqsPort"] == "443",
+        "Workload configuration differs from the generated public projection.",
+    )
+    settings = config.setdefault("config", {})
+    _require(isinstance(settings, dict), "Stack config must be a mapping.")
+    for key, value in workload_config.items():
+        _require(
+            key not in settings or settings[key] == value,
+            "Committed workload configuration differs from the protected projection.",
+        )
+    settings.update(workload_config)
+
+
 def _configuration(
     context: CommandContext,
     stack: str,
     provider: dict[str, Any],
     target: dict[str, str],
+    workload_config: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     config = _yaml_document(context.pulumi_dir / f"Pulumi.{stack}.yaml")
     state = provider["state"]
@@ -357,15 +503,23 @@ def _configuration(
     config.pop("encryptionsalt", None)
     config.update(secretsprovider=state["url"], encryptedkey=state["encryptedkey"])
     _materialize_provider_pins(config, target)
+    _materialize_workload_config(config, workload_config, target)
     return config
 
 
 @contextmanager
 def prepared_stack_configuration(
-    context: CommandContext, stack: str
+    context: CommandContext,
+    stack: str,
+    *,
+    workload_config: dict[str, str] | None = None,
 ) -> Iterator[CommandContext]:
     """Use the existing encrypted key in a private, automatically removed config."""
     if context.backend_url.startswith("file://"):
+        _require(
+            workload_config is None,
+            "Workload configuration requires protected shared stack preparation.",
+        )
         yield context
         return
     target = _coordinates(context, stack)
@@ -383,7 +537,7 @@ def prepared_stack_configuration(
         before == _checkpoint_version(context, target),
         "Checkpoint changed during configuration preparation.",
     )
-    config = _configuration(context, stack, provider, target)
+    config = _configuration(context, stack, provider, target, workload_config)
     binding = {
         **{k: target[k] for k in ("accountId", "backendUrl", "project", "stack")},
         **before,

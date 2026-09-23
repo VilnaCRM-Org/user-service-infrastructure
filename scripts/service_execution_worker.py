@@ -1,7 +1,7 @@
 """Installed service worker: authenticate in root, execute Pulumi as UID 2000.
 
 The workflow supplies immutable mounts and its existing credentials. This entry
-point neither admits workload phases nor changes the current TEST/PROD DAG.
+point observes workload prerequisites but does not execute a workload graph.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import tempfile  # noqa: E402
 
 import poc_registry_runner as registry  # noqa: E402
 import poc_scheduled_registry_drift as scheduled  # noqa: E402
+import poc_workload_admission as workload  # noqa: E402
 from service_execution_process import require, run  # noqa: E402
 from service_execution_transport import ServiceTransport, copy_tree  # noqa: E402
 
@@ -138,6 +139,28 @@ def _prod(port, command, head):
     return registry.runner._dispatch_command(command, port.bind(context), ["prod"])
 
 
+def _test(port, command, head):
+    references = {
+        "artifact_id": os.environ["POC_SOURCE_ARTIFACT_ID"],
+        "archive_sha256": os.environ["POC_SOURCE_ARCHIVE_SHA256"],
+        "source_sha256": os.environ["POC_SOURCE_SHA256"],
+    }
+    source, contract = registry.artifact.load_verified_contract(**references)
+    require(
+        source["source"]["head_sha"] == head
+        and source["source"]["base_sha"] == os.environ["GITHUB_SHA"]
+        and source["request"]["target_environment"] == "test",
+        "workload-source-binding",
+    )
+    registry._review(source)
+    if contract["phase"] == "workload":
+        workload.inspect_workload(
+            source, contract, workload.authority_from_environment(os.environ), command
+        )
+        raise ValueError("workload-execution-not-enabled")
+    return registry.execute(command, **references, transport=port)
+
+
 def execute(job, area):
     require(job in JOBS and os.environ.get("GITHUB_JOB") == job, "worker-job")
     account, command = JOBS[job]
@@ -157,13 +180,7 @@ def execute(job, area):
     if job == "scheduled_test_drift":
         result = scheduled.execute(transport=port)
     elif account == "test":
-        result = registry.execute(
-            command,
-            artifact_id=os.environ["POC_SOURCE_ARTIFACT_ID"],
-            archive_sha256=os.environ["POC_SOURCE_ARCHIVE_SHA256"],
-            source_sha256=os.environ["POC_SOURCE_SHA256"],
-            transport=port,
-        )
+        result = _test(port, command, head)
     else:
         result = _prod(port, command, head)
     require(result == 0, "worker-execution")

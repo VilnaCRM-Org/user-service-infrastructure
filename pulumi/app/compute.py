@@ -9,6 +9,7 @@ from typing import Any, Optional, cast
 import pulumi_aws as aws
 
 import pulumi
+from app.access_logs import AlbAccessLogs
 from app.data import DataPlane
 from app.environment import (
     StackSettings,
@@ -169,6 +170,7 @@ class ComputePlane(pulumi.ComponentResource):
             override=settings.images.worker_image_override,
         )
 
+        access_logs_bucket, access_logs_dependencies = self._access_logs(settings)
         load_balancer = aws.lb.LoadBalancer(
             "user-service-alb",
             name=build_resource_name(settings.stack_tag, "alb", max_length=32),
@@ -177,13 +179,15 @@ class ComputePlane(pulumi.ComponentResource):
             security_groups=[network.outputs.alb_security_group_id],
             subnets=network.outputs.public_subnet_ids,
             access_logs=aws.lb.LoadBalancerAccessLogsArgs(
-                bucket=settings.runtime.access_logs_bucket_name,
+                bucket=access_logs_bucket,
                 enabled=True,
                 prefix=f"{settings.stack_tag}/alb",
             ),
             drop_invalid_header_fields=True,
             idle_timeout=60,
-            opts=pulumi.ResourceOptions(parent=self),
+            opts=pulumi.ResourceOptions(
+                parent=self, depends_on=access_logs_dependencies
+            ),
         )
 
         target_group = aws.lb.TargetGroup(
@@ -488,6 +492,21 @@ class ComputePlane(pulumi.ComponentResource):
             ],
         )
 
+    def _access_logs(
+        self, settings: StackSettings
+    ) -> tuple[pulumi.Input[str] | None, list[pulumi.Resource]]:
+        """Preserve legacy external storage; generated workload owns its log bucket."""
+        if self._runtime_secrets is None:
+            return settings.runtime.access_logs_bucket_name, []
+        self._runtime_secrets.descriptor.validate_target(settings)
+        logs = AlbAccessLogs(
+            "access-logs",
+            settings=settings,
+            account_id=self._runtime_secrets.descriptor.account_id,
+            opts=pulumi.ResourceOptions(parent=self),
+        )
+        return logs.bucket.bucket, [logs.policy]
+
     def _worker_container_definitions(
         self,
         *,
@@ -518,6 +537,20 @@ class ComputePlane(pulumi.ComponentResource):
             ),
             secrets=self._common_secrets(data, runtime_secret_arns),
             port_mappings=None,
+            health_check=(
+                {
+                    "command": [
+                        "CMD",
+                        *self._runtime_secrets.descriptor.worker_health_command,
+                    ],
+                    "interval": 30,
+                    "timeout": 5,
+                    "retries": 3,
+                    "startPeriod": 60,
+                }
+                if self._runtime_secrets is not None
+                else None
+            ),
         )
 
     def _container_definitions_json(
@@ -531,6 +564,7 @@ class ComputePlane(pulumi.ComponentResource):
         environment: list[dict[str, pulumi.Input[str]]],
         secrets: list[dict[str, pulumi.Input[str]]],
         port_mappings: list[dict[str, Any]] | None,
+        health_check: dict[str, Any] | None = None,
     ) -> pulumi.Output[str]:
         """Serialize a single-container task definition."""
         return pulumi.Output.all(
@@ -549,6 +583,7 @@ class ComputePlane(pulumi.ComponentResource):
                         "environment": parts[1],
                         "secrets": parts[2],
                         "portMappings": port_mappings or [],
+                        **({"healthCheck": health_check} if health_check else {}),
                         "logConfiguration": {
                             "logDriver": "awslogs",
                             "options": {

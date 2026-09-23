@@ -300,6 +300,10 @@ jobs:
           POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
           POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
           POC_SOURCE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
+          GOVERNANCE_PROMOTION_APP_ID: ${{ vars.GOVERNANCE_PROMOTION_APP_ID }}
+          GOVERNANCE_PROMOTION_APP_SLUG: ${{ vars.GOVERNANCE_PROMOTION_APP_SLUG }}
+          POC_REGISTRY_WORKFLOW_SHA: ${{ vars.POC_REGISTRY_WORKFLOW_SHA }}
+          POC_PUBLISHER_WORKFLOW_SHA: ${{ vars.POC_PUBLISHER_WORKFLOW_SHA }}
         run: |
           "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
             "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" execute
@@ -526,6 +530,10 @@ jobs:
           POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
           POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
           POC_SOURCE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
+          GOVERNANCE_PROMOTION_APP_ID: ${{ vars.GOVERNANCE_PROMOTION_APP_ID }}
+          GOVERNANCE_PROMOTION_APP_SLUG: ${{ vars.GOVERNANCE_PROMOTION_APP_SLUG }}
+          POC_REGISTRY_WORKFLOW_SHA: ${{ vars.POC_REGISTRY_WORKFLOW_SHA }}
+          POC_PUBLISHER_WORKFLOW_SHA: ${{ vars.POC_PUBLISHER_WORKFLOW_SHA }}
           PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
           EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
           EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
@@ -682,6 +690,10 @@ jobs:
           POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
           POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
           POC_SOURCE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
+          GOVERNANCE_PROMOTION_APP_ID: ${{ vars.GOVERNANCE_PROMOTION_APP_ID }}
+          GOVERNANCE_PROMOTION_APP_SLUG: ${{ vars.GOVERNANCE_PROMOTION_APP_SLUG }}
+          POC_REGISTRY_WORKFLOW_SHA: ${{ vars.POC_REGISTRY_WORKFLOW_SHA }}
+          POC_PUBLISHER_WORKFLOW_SHA: ${{ vars.POC_PUBLISHER_WORKFLOW_SHA }}
         run: |
           "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
             "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" execute

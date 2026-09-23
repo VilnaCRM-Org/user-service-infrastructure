@@ -63,6 +63,8 @@ def _mutate(value, registries, mutation):
 
 def _generated_outputs(args, values):
     """Supply deterministic synthetic provider outputs without real generation."""
+    if args.typ == "aws:s3/bucketV2:BucketV2":
+        values["arn"] = f"arn:aws:s3:::{args.inputs['bucket']}"
     if args.typ == "random:index/randomPassword:RandomPassword":
         values["result"] = "synthetic-password-unchanging"
     if args.typ == "random:index/randomBytes:RandomBytes":
@@ -101,6 +103,47 @@ def _fixture_contract(root, config):
     return contract
 
 
+def _bridge(contract, config, aws_config, mutation):
+    """Use the actual bridge with synthetic evidence in an isolated child."""
+    from poc_workload_phase_entrypoint import (
+        project_workload_phase,
+        run_workload_phase,
+        workload_configuration,
+    )
+    from pulumi.runtime import set_all_config
+    from test_poc_registry_phase_entrypoint import source
+
+    images = {
+        kind: {
+            "uri": row["repository_uri"] + "@" + row["digest"],
+            "platform": "linux/amd64",
+            "manifest_media_type": "application/vnd.oci.image.manifest.v1+json",
+            "config_digest": "sha256:" + "c" * 64,
+            "config_size": 100,
+        }
+        for kind, row in contract["workload"]["release"].items()
+        if kind in ("web", "worker")
+    }
+    projection = project_workload_phase(source(contract), contract, images)
+    generated = workload_configuration(projection)
+    if mutation == "config":
+        generated["user-service-infrastructure:webImage"] = "foreign"
+    set_all_config(
+        {
+            **{
+                f"user-service-infrastructure:{key}": val for key, val in config.items()
+            },
+            **{f"aws:{key}": val for key, val in aws_config.items()},
+            **generated,
+        }
+    )
+    with patch(
+        "app.environment._secret_value",
+        side_effect=AssertionError("manual secret lookup"),
+    ):
+        run_workload_phase(projection)
+
+
 def _probe(root, mode, mutation, coverage_path):
     """Run both actual component compositions in independent Python runtimes."""
     sys.path[:0] = [
@@ -117,7 +160,9 @@ def _probe(root, mode, mutation, coverage_path):
             str(root / "pulumi/app/runtime_secrets.py"),
             str(root / "pulumi/app/data.py"),
             str(root / "pulumi/app/compute.py"),
+            str(root / "pulumi/app/access_logs.py"),
             str(root / "pulumi/app/environment.py"),
+            str(root / "scripts/poc_workload_phase_entrypoint.py"),
         ],
         data_file=str(coverage_path),
     )
@@ -143,6 +188,7 @@ def _probe(root, mode, mutation, coverage_path):
                 "custom": request.custom,
                 "inputs": rpc.deserialize_properties(request.object),
                 "protect": request.protect,
+                "dependencies": list(request.dependencies),
                 "version": request.version,
                 "additional_secret_outputs": list(request.additionalSecretOutputs),
             }
@@ -174,7 +220,6 @@ def _probe(root, mode, mutation, coverage_path):
         "owner": "team-user-service",
         "costCenter": "core",
         "deploymentMode": "managed",
-        "accessLogsBucketName": "synthetic-test-access-logs",
         "repoSlug": "user-service-infrastructure",
         "pulumiBackendUrl": "s3://pulumi-user-service-infrastructure-test-state",
         "pulumiSecretsProvider": "awskms://alias/pulumi-user-service-infrastructure-test-secrets?region=eu-central-1",
@@ -221,6 +266,9 @@ def _probe(root, mode, mutation, coverage_path):
             cost_center="core",
         )
         contract = _fixture_contract(root, config)
+        if mode == "bridge":
+            _bridge(contract, config, aws_config, mutation)
+            return
         with patch(
             "app.environment._secret_value",
             side_effect=AssertionError("manual secret lookup"),

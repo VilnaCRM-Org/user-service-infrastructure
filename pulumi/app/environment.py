@@ -305,6 +305,20 @@ def _required_managed_string(
     return preview_default
 
 
+def _access_logs_bucket(
+    config: pulumi.Config, *, managed: bool, generated_secrets: bool
+) -> str | None:
+    """Generated composition owns log storage; legacy settings require its name."""
+    if generated_secrets:
+        return None
+    return _required_managed_string(
+        config,
+        "accessLogsBucketName",
+        managed=managed,
+        preview_default=_preview_placeholder("alb-access-logs"),
+    )
+
+
 def _secret_value(
     config: pulumi.Config,
     key: str,
@@ -787,11 +801,10 @@ def resolve_stack_settings(
     runtime = RuntimeSettings(
         execution_role_arn=config.get("executionRoleArn"),
         task_role_arn=config.get("taskRoleArn"),
-        access_logs_bucket_name=_required_managed_string(
+        access_logs_bucket_name=_access_logs_bucket(
             config,
-            "accessLogsBucketName",
             managed=deployment_mode == "managed",
-            preview_default=_preview_placeholder("alb-access-logs"),
+            generated_secrets=generated_secrets,
         ),
         app_env=resolve_config_value(None, config.get("appEnv"), default="prod"),
         app_debug=resolve_config_value(None, config.get("appDebug"), default="0"),

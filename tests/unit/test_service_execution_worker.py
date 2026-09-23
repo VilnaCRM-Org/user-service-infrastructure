@@ -122,6 +122,19 @@ def test_every_route_preserves_checks_and_exports_only_plan(monkeypatch, tmp_pat
     ):
         monkeypatch.setenv(key, "synthetic")
     calls = []
+    monkeypatch.setenv("GITHUB_SHA", "b" * 40)
+    monkeypatch.setattr(
+        worker.registry.artifact,
+        "load_verified_contract",
+        lambda **_: (
+            {
+                "source": {"head_sha": "a" * 40, "base_sha": "b" * 40},
+                "request": {"target_environment": "test"},
+            },
+            {"phase": "registry"},
+        ),
+    )
+    monkeypatch.setattr(worker.registry, "_review", lambda _: None)
     monkeypatch.setattr(worker, "admit", lambda _: calls.append("admit") or "a" * 40)
 
     class Port:
@@ -149,6 +162,45 @@ def test_every_route_preserves_checks_and_exports_only_plan(monkeypatch, tmp_pat
     assert ("replay" in calls) == (command == "up-plan")
     assert len(copied) == (2 if command == "plan" else 0)
     assert all(target.parent == Path("/public") for _, target in copied)
+
+
+def test_workload_branch_reads_verified_source_and_cannot_fall_through(monkeypatch):
+    for key in (
+        "POC_SOURCE_ARTIFACT_ID",
+        "POC_SOURCE_ARCHIVE_SHA256",
+        "POC_SOURCE_SHA256",
+    ):
+        monkeypatch.setenv(key, "synthetic")
+    monkeypatch.setenv("GITHUB_SHA", "b" * 40)
+    source = {
+        "source": {"head_sha": "a" * 40, "base_sha": "b" * 40},
+        "request": {"target_environment": "test"},
+    }
+    contract = {"phase": "workload"}
+    calls = []
+    monkeypatch.setattr(
+        worker.registry.artifact,
+        "load_verified_contract",
+        lambda **_: (source, contract),
+    )
+    monkeypatch.setattr(worker.registry, "_review", lambda _: calls.append("review"))
+    monkeypatch.setattr(
+        worker.workload, "authority_from_environment", lambda _: "protected"
+    )
+    monkeypatch.setattr(
+        worker.workload, "inspect_workload", lambda *args: calls.append(args)
+    )
+    monkeypatch.setattr(
+        worker.registry,
+        "execute",
+        lambda *_a, **_k: pytest.fail("registry execution after workload admission"),
+    )
+    with pytest.raises(ValueError, match="workload-execution-not-enabled"):
+        worker._test(None, "plan", "a" * 40)
+    assert calls == ["review", (source, contract, "protected", "plan")]
+    source["source"]["head_sha"] = "c" * 40
+    with pytest.raises(ValueError, match="workload-source-binding"):
+        worker._test(None, "plan", "a" * 40)
 
 
 def test_failure_and_changed_final_head_cannot_publish(monkeypatch, tmp_path):

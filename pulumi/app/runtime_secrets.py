@@ -72,6 +72,26 @@ class RuntimeSecretsDescriptor:
         """Derive a credential-free SES API endpoint from the closed region."""
         return f"ses+api://default?region={self._contract['region']}"
 
+    @property
+    def database_name(self) -> str:
+        """Return the validated application database selected by the workload."""
+        return self._contract["workload"]["runtime"]["database_name"]
+
+    @property
+    def ca_bundle_path(self) -> str:
+        """Return the declared container path without claiming the file exists."""
+        return self._contract["workload"]["runtime"]["ca_bundle_path"]
+
+    @property
+    def account_id(self) -> str:
+        """Return the account bound to the protected deployment context."""
+        return self._contract["account_id"]
+
+    @property
+    def worker_health_command(self) -> list[str]:
+        """Return a detached copy of the validated worker health command."""
+        return list(self._contract["workload"]["runtime"]["worker_health_command"])
+
     def validate_target(self, settings: Any) -> None:
         """Bind declarations to protected configuration and workload roles."""
         self.validate_context()

@@ -51,6 +51,7 @@ TAGGABLE_TYPES = frozenset(
         "aws:lb/loadBalancer:LoadBalancer",
         "aws:lb/targetGroup:TargetGroup",
         "aws:secretsmanager/secret:Secret",
+        "aws:s3/bucketV2:BucketV2",
         "aws:sqs/queue:Queue",
     }
 )

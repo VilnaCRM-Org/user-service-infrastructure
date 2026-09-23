@@ -85,6 +85,7 @@ known_first_party = [
     "poc_secret_observation",
     "poc_source_artifact",
     "poc_workload_admission",
+    "poc_workload_capabilities",
     "poc_workload_images",
     "poc_workload_phase_entrypoint",
     "pulumi_ci_guardrails",

@@ -105,12 +105,13 @@ def _fixture_contract(root, config):
     return contract
 
 
-def _bridge(contract, config, aws_config, mutation):
+def _bridge(contract, config, aws_config, mutation, *, generated_child=False):
     """Use the actual bridge with synthetic evidence in an isolated child."""
     from poc_workload_phase_entrypoint import (
         project_workload_phase,
         run_workload_phase,
         workload_configuration,
+        workload_program_source,
     )
     from pulumi.runtime import set_all_config
     from test_poc_registry_phase_entrypoint import source
@@ -143,7 +144,21 @@ def _bridge(contract, config, aws_config, mutation):
         "app.environment._secret_value",
         side_effect=AssertionError("manual secret lookup"),
     ):
-        run_workload_phase(projection)
+        if generated_child:
+            arguments = ["/protected/pulumi/__main__.py"]
+            if mutation == "cli":
+                arguments.extend(["--phase", "workload"])
+            with patch.object(sys, "argv", arguments):
+                exec(
+                    compile(
+                        workload_program_source(projection),
+                        "/protected/pulumi/__main__.py",
+                        "exec",
+                    ),
+                    {"__name__": "__main__"},
+                )
+        else:
+            run_workload_phase(projection)
 
 
 def _probe(root, mode, mutation, coverage_path):
@@ -268,8 +283,14 @@ def _probe(root, mode, mutation, coverage_path):
             cost_center="core",
         )
         contract = _fixture_contract(root, config)
-        if mode == "bridge":
-            _bridge(contract, config, aws_config, mutation)
+        if mode in {"bridge", "generated-child"}:
+            _bridge(
+                contract,
+                config,
+                aws_config,
+                mutation,
+                generated_child=mode == "generated-child",
+            )
             return
         with patch(
             "app.environment._secret_value",

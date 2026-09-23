@@ -30,6 +30,10 @@ require Pulumi secret wrappers. The no-change/prior-state validator is unchanged
 boolean, caller assertion or synthetic receipt that bypasses this stop. The
 existing worker stops also remain unchanged.
 
+The worker now runs bounded native role/boundary, execution-role ECR simulation
+and certificate prerequisites described in [workload admission](poc-workload-admission.md).
+They do not satisfy the complete capability/input or saved-plan replay gate here.
+
 Topology does not establish all workload input semantics, generated unknown
 values, installed runtime/deployer IAM intersection, current native resources,
 artifact provenance, authenticated prior/result receipts or cloud health. Those

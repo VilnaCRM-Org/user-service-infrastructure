@@ -7,16 +7,20 @@ The existing worker remains disabled until native plan/replay gates are connecte
 from __future__ import annotations
 
 import copy
+import json
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields
 from types import SimpleNamespace
 from typing import Any, cast
 
 import poc_contract
-from poc_phase_admission import SourceAdmission
+from poc_phase_admission import CONTRACT_PATH, SourceAdmission
 from poc_registry_phase_entrypoint import _stable_registries
 from poc_workload_images import MAX_CONFIG_BYTES, MEDIA
 from service_execution_process import require
+
+MAX_PROJECTION_BYTES = poc_contract.MAX_BYTES + 16384
+PROJECTION_VERSION = "poc-workload-child-v1"
 
 
 @dataclass(frozen=True)
@@ -26,6 +30,20 @@ class WorkloadPhaseProjection:
     source: SourceAdmission
     contract: dict[str, Any]
     images: dict[str, Any]
+
+
+def _source(source):
+    """Validate every source field without treating typed facts as authentication."""
+    require(type(source) is SourceAdmission, "workload-source-facts")
+    require(source.path == CONTRACT_PATH, "workload-source-path")
+    for key, value in asdict(source).items():
+        if key == "path":
+            continue
+        length = 40 if key in {"head_sha", "base_sha", "blob_sha"} else 64
+        require(
+            type(value) is str and re.fullmatch(rf"[0-9a-f]{{{length}}}", value),
+            "workload-source-identity",
+        )
 
 
 def _images(contract, observed):
@@ -74,7 +92,7 @@ def _images(contract, observed):
 
 def project_workload_phase(source, contract, images):
     """Bind already-authenticated facts without contacting AWS or resolving secrets."""
-    require(type(source) is SourceAdmission, "workload-source-facts")
+    _source(source)
     require(type(contract) is dict, "workload-contract-object")
     document = copy.deepcopy(contract)
     poc_contract._validate_document(document)
@@ -104,6 +122,91 @@ def _checked(projection):
     return project_workload_phase(
         projection.source, projection.contract, projection.images
     )
+
+
+def encode_workload_projection(projection):
+    """Encode detached nonsecret data for a future root-owned generated program."""
+    checked = _checked(projection)
+    raw = json.dumps(
+        {
+            "schema_version": PROJECTION_VERSION,
+            "source": asdict(checked.source),
+            "contract": checked.contract,
+            "images": checked.images,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode()
+    require(len(raw) <= MAX_PROJECTION_BYTES, "workload-projection-bound")
+    return raw
+
+
+def decode_workload_projection(raw):
+    """Decode the closed wire shape; caller must authenticate its protected bytes."""
+    require(
+        type(raw) is bytes and 0 < len(raw) <= MAX_PROJECTION_BYTES,
+        "workload-projection-bound",
+    )
+    try:
+        document = json.loads(
+            raw,
+            object_pairs_hook=poc_contract._pairs,
+            parse_constant=poc_contract._reject_nonfinite,
+        )
+    except (ValueError, UnicodeError, RecursionError):
+        raise ValueError("workload-projection-json") from None
+    require(
+        type(document) is dict
+        and set(document) == {"schema_version", "source", "contract", "images"}
+        and document["schema_version"] == PROJECTION_VERSION,
+        "workload-projection-fields",
+    )
+    source = document["source"]
+    require(
+        type(source) is dict
+        and set(source) == {field.name for field in fields(SourceAdmission)},
+        "workload-source-fields",
+    )
+    projection = project_workload_phase(
+        SourceAdmission(**source), document["contract"], document["images"]
+    )
+    require(
+        raw == encode_workload_projection(projection), "workload-projection-canonical"
+    )
+    return projection
+
+
+def workload_program_source(projection):
+    """Generate only a fixed installed import and literal data, never caller code.
+
+    The future root materializer must protect this program, its config and the
+    installed runtime. This function neither writes files nor launches a child.
+    """
+    raw = encode_workload_projection(projection)
+    return (
+        "import sys\n"
+        "if not sys.flags.isolated or len(sys.argv) != 1:\n"
+        "    raise ValueError('workload-isolated-child-required')\n"
+        "sys.path[:0] = ['/trusted/scripts', '/trusted/pulumi']\n"
+        "from poc_workload_phase_entrypoint import run_workload_program\n"
+        f"run_workload_program({raw!r})\n"
+    )
+
+
+def workload_python_wrapper_source():
+    """Return the future protected launcher; never execute or install it here."""
+    return (
+        "#!/opt/service-runtime/bin/python -I\n"
+        "import os, sys\n"
+        "os.execv('/opt/service-runtime/bin/python', "
+        "['/opt/service-runtime/bin/python', '-I', *sys.argv[1:]])\n"
+    )
+
+
+def run_workload_program(raw):
+    """Execute the sole graph from embedded data; no path/config/CLI phase input."""
+    return run_workload_phase(decode_workload_projection(raw))
 
 
 def workload_configuration(projection):
@@ -194,3 +297,7 @@ def run_workload_phase(projection):
     return WorkloadPhaseStack(
         settings=settings, registries=registries, secrets=descriptor
     )
+
+
+if __name__ == "__main__":
+    raise SystemExit("workload-internal-entrypoint-required")

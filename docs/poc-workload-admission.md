@@ -40,7 +40,8 @@ declared byte size and SHA-256, then its native `os` and `architecture` are comp
 with the reviewed `linux/amd64` or `linux/arm64` release platform. Only platform,
 config digest and size join the image projection. Image environment, labels,
 history and other configuration never enter the projection or diagnostic errors.
-Installed runtime role/capability checks remain required before constructing
+The bounded role/input prerequisite reader below now runs before the worker stop.
+Full installed runtime capability admission remains required before constructing
 workload settings.
 The observer supports at most 100 layers and deliberately accepts only compressed
 Docker gzip or OCI gzip/zstd layers. A different valid image shape requires a
@@ -93,13 +94,40 @@ permission denial fails closed and is not evidence of an empty registry.
 
 ## Remaining enabling work
 
+The trusted worker also calls `poc_workload_capabilities.inspect_capabilities`.
+It requires the fixed central TEST execution/task role ARNs, native names, root
+paths, IAM role IDs, and exact independently enrolled `issue219/test/boundary/`
+policy ARNs. Execution trust must match the existing central ECS task service
+principal and TEST account/region conditions. The declared ACM certificate must
+be issued, currently valid, list the exact application domain and allow TLS server
+authentication. Only the current AMD64 settings bridge is supported.
+
+Seven singleton native IAM simulations use the installed execution role: regional
+ECR authorization plus each of the three image-pull actions on each fixed
+repository. No replacement policy, boundary, resource policy or caller-selected
+context is supplied. Every response must be complete, with the exact requested
+action/resource, an allowed result, no unresolved context and explicit boundary
+allowance. An observed organization denial or resource-specific denial rejects.
+AWS documents that [IAM simulation does not perform the operation and cannot
+simulate resource policies for roles](https://docs.aws.amazon.com/IAM/latest/APIReference/API_SimulatePrincipalPolicy.html).
+This prerequisite is not evidence of an actual ECS pull, an organization-wide
+effective grant, or the complete workload capability. Missing organization detail
+does not establish organization permission. Native role and certificate metadata
+are checked again after simulations; this is not an atomic installation proof.
+
+The adapter uses only the admitted root AWS session and fixed IAM/ACM read APIs
+and endpoints, with bounded output, no ambient profiles, credentials files or
+endpoint overrides. Access denial fails closed. Offline tests use synthetic native
+responses; no AWS validation or successful workload receipt is claimed.
+
 Successful reads currently end with
 `workload-native-image-capability-and-plan-gates-required`. No plan artifact is
 published and no workload is registered or applied. This is an intentional
 execution boundary, not an acceptance result.
 
-Before enabling the full graph, connect native image/platform and runtime pull
-checks, installed central capability/role and approved endpoint/log/mail metadata,
+Before enabling the full graph, establish actual runtime pulls, authenticated seed
+inventory/revision and immutable guard/policy installation, full task and deployer
+capabilities and approved endpoint/log/mail metadata,
 the generated-settings child entrypoint, and actual workload saved-plan validation
 and replay bindings. Extend result observation and scheduled drift for the accepted
 workload phase, including native secret version history across releases/rollback.

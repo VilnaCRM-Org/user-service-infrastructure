@@ -23,6 +23,41 @@ materializer must merge this map into its authenticated baseline using protected
 files and retain the existing canonical provider/checkpoint preparation. This
 unit introduces no config/CLI phase switch, file writer or local state backend.
 
+## Closed child program
+
+`encode_workload_projection` and `decode_workload_projection` define a bounded,
+canonical JSON wire format with exactly `schema_version`, `source`, `contract`
+and `images`. They reject duplicate keys, nonfinite numbers, malformed source
+hashes, alternate contract paths, extra fields, noncanonical bytes and changed
+contract/image bindings. Decoding reuses the same full projection validation;
+serialization does not authenticate evidence or grant phase authority.
+
+`workload_program_source` embeds those bytes as a Python bytes literal and imports
+only the fixed installed bridge from `/trusted/scripts` and `/trusted/pulumi`.
+Contract text cannot become executable code. The generated program requires
+Python isolated mode and no application arguments before importing that bridge.
+`run_workload_program` decodes its embedded bytes and calls the existing workload
+composition/settings path. There is no contract filename, environment variable,
+config phase selector or public CLI that selects this graph. Direct execution of
+the bridge module rejects.
+
+The current registry runner uses a plain Python `PULUMI_PYTHON_CMD`; it **cannot
+run this generated child**. `workload_python_wrapper_source` supplies source for
+a future root-owned executable with a fixed `/opt/service-runtime/bin/python -I`
+shebang. That wrapper uses `os.execv` to execute the same fixed interpreter with
+`-I`, preserving native Pulumi arguments without shell expansion. The trusted
+materializer must install/protect this wrapper, select it as `PULUMI_PYTHON_CMD`,
+protect the generated program/config, and bind all resulting bytes to the saved
+plan. No caller, PR config or environment override may select its interpreter.
+These helpers generate source only; no wrapper or project is installed here.
+
+The wrapper test verifies the fixed interpreter/flag/argv contract. Separate
+isolated Python subprocesses execute the generated program with Pulumi mocks and
+verify the unchanged registry baseline, complete existing workload graph and
+exact image/secret references. Plain Python, extra program arguments and changed
+release config reject before AWS resource registration. These are source/mocked
+runtime checks, not a native Pulumi language-host or provider acceptance run.
+
 `resolve_workload_inputs` runs in the isolated Pulumi child after that preparation.
 It requires current protected config to equal every generated field, checks the
 descriptor's project/stack/account/region, and reuses
@@ -54,8 +89,11 @@ declaration remains attached to the descriptor.
 - `ComputePlane` now maps the declared `runtime.worker_health_command` to an ECS
   `CMD` health check. The command must exist in the admitted image; actual worker
   health remains a native acceptance check.
-- Root-side authenticated image/capability observation, protected config and
-  child-entrypoint materialization, native saved-plan graph/replay bindings,
+- The exact next integration blocker is protected root materialization: install
+  the fixed isolated interpreter wrapper, merge the generated public settings
+  into admitted config, and protect/hash the generated child program before the
+  first workload preview. The worker currently has no dispatcher for this path.
+  Full authenticated capability acceptance, native saved-plan graph/replay bindings,
   phase-aware result/drift and actual workload health/release/rollback remain
   unconnected. Do not remove either existing execution stop based on this unit.
 

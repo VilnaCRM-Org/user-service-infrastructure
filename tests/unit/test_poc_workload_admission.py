@@ -500,10 +500,15 @@ def test_combined_path_stops_before_any_workload_program(monkeypatch):
     monkeypatch.setattr(
         module.images, "inspect_images", lambda *_: calls.append("images")
     )
+    monkeypatch.setattr(
+        module.capabilities,
+        "inspect_capabilities",
+        lambda *_: calls.append("capabilities"),
+    )
     with pytest.raises(ValueError, match="native-image-capability-and-plan"):
         module.inspect_workload({}, {}, AUTHORITY, "plan")
 
-    assert calls == ["registry", "release", "images", "registry"]
+    assert calls == ["registry", "release", "images", "capabilities", "registry"]
     values = iter(("old", "changed"))
     monkeypatch.setattr(module, "inspect_registry", lambda *_: next(values))
     with pytest.raises(ValueError, match="prior-changed"):
@@ -553,6 +558,11 @@ def test_worker_reaches_real_receipt_release_and_native_graph_checks(
         module.images, "inspect_images", lambda *_: calls.append("images")
     )
     monkeypatch.setattr(
+        module.capabilities,
+        "inspect_capabilities",
+        lambda *_: calls.append("capabilities"),
+    )
+    monkeypatch.setattr(
         worker.registry, "execute", lambda *_a, **_k: pytest.fail("program dispatched")
     )
     with pytest.raises(
@@ -563,6 +573,7 @@ def test_worker_reaches_real_receipt_release_and_native_graph_checks(
     assert any("/attempts/1/jobs" in value for value in calls)
     assert any(module.APP_API + "/actions/artifacts/" in value for value in calls)
     assert "images" in calls
+    assert "capabilities" in calls
 
 
 def test_native_image_failure_stops_before_state_recheck_and_program(monkeypatch):
@@ -578,6 +589,24 @@ def test_native_image_failure_stops_before_state_recheck_and_program(monkeypatch
     with pytest.raises(ValueError, match="image-read-failures"):
         module.inspect_workload({}, {}, AUTHORITY, "up-plan")
     assert calls == ["registry", "release", "images"]
+
+
+def test_native_capability_failure_stops_before_state_recheck(monkeypatch):
+    calls = []
+    monkeypatch.setattr(module, "inspect_registry", lambda *_: calls.append("registry"))
+    monkeypatch.setattr(module, "inspect_release", lambda *_: calls.append("release"))
+    monkeypatch.setattr(
+        module.images, "inspect_images", lambda *_: calls.append("images")
+    )
+
+    def reject(_contract):
+        calls.append("capabilities")
+        raise ValueError("workload-execution-pull-decision")
+
+    monkeypatch.setattr(module.capabilities, "inspect_capabilities", reject)
+    with pytest.raises(ValueError, match="execution-pull-decision"):
+        module.inspect_workload({}, {}, AUTHORITY, "plan")
+    assert calls == ["registry", "release", "images", "capabilities"]
 
 
 def test_authority_inputs_are_root_only_and_workflow_protected(installed):

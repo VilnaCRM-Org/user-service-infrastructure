@@ -18,6 +18,7 @@ import poc_contract as contract_api
 import poc_registry_completion as completion
 import poc_registry_runner as registry
 import poc_source_artifact as artifacts
+import poc_workload_capabilities as capabilities
 import poc_workload_images as images
 from poc_registry_phase_entrypoint import RegistryPhaseProjection
 from service_execution_process import require, run
@@ -444,6 +445,7 @@ def inspect_workload(source, contract, authority, command):
     inspect_release(contract, authority)
     images.inspect_images(contract)
     registry.graph.mail.inspect_identity(ready=True)
+    capabilities.inspect_capabilities(contract)
     require(
         inspect_registry(source, contract, authority, command) == anchor,
         "workload-prior-changed",

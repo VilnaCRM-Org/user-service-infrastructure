@@ -9,6 +9,22 @@ from pathlib import Path
 from coverage import Coverage
 
 
+def mock_outputs(args):
+    """Supply deterministic public provider outputs for the graph probe."""
+    values = dict(args.inputs)
+    if args.typ == "aws:ecr/repository:Repository":
+        values.update({"arn": args.name, "repositoryUrl": args.name})
+    if args.typ == "aws:sesv2/emailIdentity:EmailIdentity":
+        values["dkimSigningAttributes"] = {
+            "tokens": [letter * 32 for letter in "abc"],
+            "domainSigningPrivateKey": {
+                "4dabf18193072939515e22adb298388d": "1b47061264138c4ac30d75fd1eb44270",
+                "value": "",
+            },
+        }
+    return values
+
+
 def main():
     """Return graph and coverage evidence without sharing the pytest event loop."""
     root = Path(sys.argv[1])
@@ -20,6 +36,7 @@ def main():
         include=[
             str(root / "scripts/poc_registry_phase_entrypoint.py"),
             str(root / "pulumi/app/registry_phase.py"),
+            str(root / "pulumi/app/mail_identity.py"),
         ],
         data_file=sys.argv[3],
     )
@@ -36,10 +53,7 @@ def main():
 
         def new_resource(self, args):
             self.rows.append(args)
-            values = dict(args.inputs)
-            if args.typ == "aws:ecr/repository:Repository":
-                values.update({"arn": args.name, "repositoryUrl": args.name})
-            return args.name, values
+            return args.name, mock_outputs(args)
 
         def call(self, args):
             raise AssertionError(args.token)

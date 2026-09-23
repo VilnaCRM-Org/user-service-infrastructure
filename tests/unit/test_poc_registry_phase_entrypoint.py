@@ -89,7 +89,11 @@ def test_registry_entrypoint_owns_only_the_stable_two_repository_graph(
 ) -> None:
     """The phase has the future workload's root/child URNs without workload planes."""
     receipt = graph_receipt(tmp_path)
-    custom = [item for item in receipt["resources"] if item["custom"]]
+    custom = [
+        item
+        for item in receipt["resources"]
+        if item["type"] == "aws:ecr/repository:Repository"
+    ]
     parents = receipt["parents"]
     assert parents["registries"] == receipt["urns"]["user-service"]
     for name in ("user-service-web-repository", "user-service-worker-repository"):
@@ -120,8 +124,8 @@ def test_registry_entrypoint_owns_only_the_stable_two_repository_graph(
     )
     # Mock new_resource omits the root and implicit provider. Parent receipts
     # separately establish the root; the saved-plan tests bind the provider.
-    assert len(receipt["resources"]) == 5
-    assert len(receipt["urns"]) == 6
+    assert len(receipt["resources"]) == 9
+    assert len(receipt["urns"]) == 10
     import poc_registry_plan as graph
 
     assert receipt["policy_failures"] == []

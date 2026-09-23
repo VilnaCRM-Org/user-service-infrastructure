@@ -114,7 +114,7 @@ def scheduled(tmp_path, monkeypatch):
 @pytest.fixture
 def diagnostic(scheduled, monkeypatch):
     """Run real dispatch, plan generation and manifest sealing with fake CLI I/O."""
-    data = graph_tests.case("repeat")
+    data = graph_tests.case("repeat", refresh=True)
     captures = []
     operations = []
 
@@ -290,7 +290,7 @@ def test_isolated_scheduled_route_keeps_complete_graph_gate(diagnostic):
 @pytest.mark.parametrize("kind", ["baseline", "new", "unknown", "foreign-provider"])
 def test_no_initialization_partial_graph_or_unsafe_provider(diagnostic, kind):
     if kind in ("baseline", "new"):
-        diagnostic["plan"]["prior_resources"] = graph_tests.case(kind)[
+        diagnostic["plan"]["prior_resources"] = graph_tests.case(kind, refresh=True)[
             "prior_resources"
         ]
     elif kind == "unknown":
@@ -434,3 +434,12 @@ def test_real_isolated_cli_rejects_untrusted_context_and_write_commands(
     assert result.returncode != 0
     assert result.stdout == ""
     assert "PR IMPORT" not in result.stderr
+
+
+@pytest.fixture(autouse=True)
+def isolated_mail_metadata(monkeypatch):
+    """These driver tests isolate SES/DNS; native bindings have their own suite."""
+    import poc_mail_prerequisite as mail
+
+    monkeypatch.setattr(mail, "inspect_inventory", lambda *_: None)
+    monkeypatch.setattr(mail, "inspect_identity", lambda **_: None)

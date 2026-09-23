@@ -14,6 +14,7 @@ import hashlib
 import json
 from typing import Any
 
+import poc_mail_prerequisite as mail
 from poc_registry_phase_entrypoint import RegistryPhaseProjection
 from pulumi_ci_guardrails import preview_steps, step_resource_type
 
@@ -113,6 +114,11 @@ def _graph(projection):
             REGISTRY_URN,
             True,
         )
+    for name, kind in [
+        (mail.IDENTITY_NAME, mail.SES),
+        *[(f"user-service-mail-dkim-{index}", mail.DNS) for index in range(3)],
+    ]:
+        result[f"{PREFIX}{SERVICE}${kind}::{name}"] = (kind, SERVICE_URN, True)
     return result
 
 
@@ -163,7 +169,36 @@ def _computed(outputs, expected, *, new):
         _require(value == expected[key] or (new and value == UNKNOWN))
 
 
+ECR_PROVIDER_OUTPUTS = {
+    "__meta": '{"e2bfb730-ecaa-11e6-8f88-34363bc7c4c0":{"delete":1200000000000}}',
+    "__pulumi_raw_state_delta": {
+        "obj": {
+            "ps": {
+                "encryptionConfigurations": {"arr": {"el": {"0": {"obj": {}}}}},
+                "imageScanningConfiguration": {"plu": {"i": {"obj": {}}}},
+                "imageTagMutabilityExclusionFilters": {"arr": {}},
+                "tags": {"map": {}},
+                "tagsAll": {"map": {}},
+            },
+            "renamed": {
+                "encryptionConfigurations": "encryption_configuration",
+                "imageTagMutabilityExclusionFilters": (
+                    "image_tag_mutability_exclusion_filter"
+                ),
+            },
+        }
+    },
+    "encryptionConfigurations": [{"encryptionType": "AES256", "kmsKey": ""}],
+    "imageTagMutabilityExclusionFilters": [],
+    "region": REGION,
+    "tagsAll": DEFAULT_TAGS,
+}
+
+
 def _ecr_values(row, inputs, outputs, *, new):
+    # AWS 7.23.0 Check adds these exact fields to the source inputs. Keep
+    # semantic equality below; no other defaults or properties are discarded.
+    inputs = _ecr_checked_inputs(inputs)
     name = _repository(row["urn"])
     expected = {
         "name": name,
@@ -177,6 +212,8 @@ def _ecr_values(row, inputs, outputs, *, new):
         outputs,
         {
             **expected,
+            **ECR_PROVIDER_OUTPUTS,
+            "id": name,
             "arn": f"arn:aws:ecr:{REGION}:{ACCOUNT}:repository/{name}",
             "repositoryUrl": f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/{name}",
             "registryId": ACCOUNT,
@@ -191,6 +228,23 @@ def _ecr_values(row, inputs, outputs, *, new):
         )
     else:
         _require(row.get("id", "") in ("", UNKNOWN))
+
+
+def _ecr_checked_inputs(inputs):
+    result = dict(inputs)
+    for key, expected in (
+        ("__defaults", []),
+        ("region", REGION),
+        ("tagsAll", DEFAULT_TAGS),
+    ):
+        if key in result:
+            _require(result.pop(key) == expected)
+    scanning = dict(result.get("imageScanningConfiguration", {}))
+    if "__defaults" in scanning:
+        _require(scanning.pop("__defaults") == [])
+    if "imageScanningConfiguration" in result:
+        result["imageScanningConfiguration"] = scanning
+    return result
 
 
 def _component_outputs(kind):
@@ -221,7 +275,7 @@ def _provider_values(row, inputs, outputs, *, legacy):
     _require(outputs == public or outputs == inputs or outputs == {})
 
 
-def _inputs_outputs(row, *, new, legacy=False):
+def _inputs_outputs(row, *, new, legacy=False, preview=False):
     inputs, outputs = row.get("inputs", {}), row.get("outputs", {})
     _require(type(inputs) is dict and type(outputs) is dict)
     kind = row["type"]
@@ -229,6 +283,8 @@ def _inputs_outputs(row, *, new, legacy=False):
         _provider_values(row, inputs, outputs, legacy=legacy)
     elif kind == ECR:
         _ecr_values(row, inputs, outputs, new=new)
+    elif kind in (mail.SES, mail.DNS):
+        mail.validate_row(row, new=new, tags=DEFAULT_TAGS, preview=preview)
     else:
         _require(inputs == {})
         expected = _component_outputs(kind)
@@ -238,7 +294,7 @@ def _inputs_outputs(row, *, new, legacy=False):
         _require(not row.get("id"))
 
 
-def _state(row, graph, *, new, legacy=False):
+def _state(row, graph, *, new, legacy=False, preview=False):
     _object(row, {"urn", "type", "custom"}, STATE_FIELDS)
     urn = row["urn"]
     _require(urn in graph)
@@ -268,13 +324,17 @@ def _state(row, graph, *, new, legacy=False):
     ):
         _require(not row.get(key))
     _require(type(row.get("protect", False)) is bool)
-    _inputs_outputs(row, new=new, legacy=legacy)
+    _inputs_outputs(row, new=new, legacy=legacy, preview=preview)
     return row
 
 
 def _references(row, graph, provider_id):
     _require(not row.get("parent") or row["parent"] in graph)
-    expected = f"{PROVIDER_URN}::{provider_id}" if row["type"] == ECR else ""
+    expected = (
+        f"{PROVIDER_URN}::{provider_id}"
+        if row["type"] in (ECR, mail.SES, mail.DNS)
+        else ""
+    )
     _require(row.get("provider", "") == expected)
     dependencies = row.get("dependencies", [])
     _require(type(dependencies) is list and len(dependencies) == len(set(dependencies)))
@@ -303,7 +363,7 @@ def _legacy_snapshot(resources):
 
 
 def _prior(resources, graph):
-    _require(type(resources) is list and len(resources) <= 7)
+    _require(type(resources) is list and len(resources) <= len(graph))
     legacy = _legacy_snapshot(resources)
     result = {}
     for value in resources:
@@ -323,6 +383,7 @@ def _prior(resources, graph):
         identifier = UNKNOWN
     for row in result.values():
         _references(row, result, identifier)
+    mail.validate_bindings(list(result.values()))
     return result
 
 
@@ -361,14 +422,52 @@ def _diff(value, old):
     }
 
 
+def _semantic_inputs(kind, inputs):
+    if kind == ECR:
+        return _ecr_checked_inputs(inputs)
+    if kind in (mail.SES, mail.DNS):
+        return mail.checked_inputs(kind, inputs, DEFAULT_TAGS)
+    return inputs
+
+
+def _recheck_inputs(goal, prior):
+    """Reconstruct only AWS 7.23.0's observed post-refresh empty-default delta."""
+    kind = goal["type"]
+    if prior is None or kind not in (ECR, mail.SES, mail.DNS):
+        return None
+    expected = {"adds": {"__defaults": []}}
+    nested = {
+        ECR: ("imageScanningConfiguration", {"scanOnPush": True}),
+        mail.SES: ("dkimSigningAttributes", {"nextSigningKeyLength": "RSA_2048_BIT"}),
+    }.get(kind)
+    if nested:
+        key, value = nested
+        expected["updates"] = {key: {**value, "__defaults": []}}
+    if goal.get("inputDiff") != expected:
+        return None
+    # Refresh removes Check's defaults before the saved diff is calculated.
+    # Do not apply this diff to the original already-defaulted input map.
+    base = dict(prior["inputs"])
+    if "__defaults" in base:
+        _require(base.pop("__defaults") == [])
+    result = _diff(expected, base)
+    _require(_semantic_inputs(kind, result) == _semantic_inputs(kind, prior["inputs"]))
+    return result
+
+
 def _goal_values(goal, prior, *, hardening=False):
-    inputs = _diff(goal.get("inputDiff", {}), prior.get("inputs", {}) if prior else {})
+    rechecked = _recheck_inputs(goal, prior)
+    inputs = (
+        rechecked
+        if rechecked is not None
+        else _diff(goal.get("inputDiff", {}), prior.get("inputs", {}) if prior else {})
+    )
     outputs = _diff(
         goal.get("outputDiff", {}), prior.get("outputs", {}) if prior else {}
     )
     if prior is not None and not hardening:
         _require(
-            not any(goal.get("inputDiff", {}).values())
+            (rechecked is not None or not any(goal.get("inputDiff", {}).values()))
             and not any(goal.get("outputDiff", {}).values())
         )
     return inputs, outputs
@@ -429,19 +528,45 @@ def _ownership(row):
     }
 
 
-def _preview_old(step, old, graph):
+def _verification_telemetry(outputs):
+    """Ignore only values of validated public telemetry, preserving key presence."""
+    result = mail.redacted_outputs(outputs)
+    for key in ("verificationStatus", "verifiedForSendingStatus"):
+        if key in result:
+            result[key] = None
+    attributes = result.get("dkimSigningAttributes", {})
+    if "status" in attributes:
+        attributes["status"] = None
+    return result
+
+
+def _preview_old(step, old, graph, *, refreshed=False):
     if old:
-        observed_old = _state(step.get("oldState"), graph, new=False)
+        observed_old = _state(step.get("oldState"), graph, new=False, preview=True)
+        actual_outputs, expected_outputs = (
+            observed_old.get("outputs", {}),
+            old.get("outputs", {}),
+        )
+        if old["type"] == mail.SES:
+            normalize = _verification_telemetry if refreshed else mail.redacted_outputs
+            actual_outputs, expected_outputs = map(
+                normalize, (actual_outputs, expected_outputs)
+            )
         _require(
             _ownership(observed_old) == _ownership(old)
-            and observed_old.get("inputs", {}) == old.get("inputs", {})
-            and observed_old.get("outputs", {}) == old.get("outputs", {})
+            and (
+                _semantic_inputs(old["type"], observed_old.get("inputs", {}))
+                == _semantic_inputs(old["type"], old.get("inputs", {}))
+                if refreshed
+                else observed_old.get("inputs", {}) == old.get("inputs", {})
+            )
+            and actual_outputs == expected_outputs
         )
     else:
         _require(step.get("oldState") is None)
 
 
-def _preview_step(step, prior, desired, graph, seen):
+def _preview_step(step, prior, desired, graph, seen, *, refreshed=False):
     _object(
         step,
         {"urn", "op", "newState"},
@@ -469,8 +594,20 @@ def _preview_step(step, prior, desired, graph, seen):
         and not step.get("detailedDiff")
     )
     _require(step.get("provider", "") == desired[urn].get("provider", ""))
-    _preview_old(step, old, graph)
-    new = _state(step["newState"], graph, new=old is None)
+    _preview_old(step, old, graph, refreshed=refreshed)
+    candidate = step["newState"]
+    _require(type(candidate) is dict and type(candidate.get("outputs", {})) is dict)
+    if refreshed and old and "id" not in candidate and old.get("custom"):
+        # Native same.newState also omits the existing physical ID. Its exact
+        # identity was established by original state and validated same.oldState.
+        candidate = {**candidate, "id": old["id"]}
+    if refreshed and old and not candidate.get("outputs"):
+        # Native final same events omit outputs. Validate the remaining row
+        # with original private outputs in memory; never persist preview state.
+        candidate = {**candidate, "outputs": old.get("outputs", {})}
+    elif refreshed and old:
+        _preview_old({"oldState": candidate}, old, graph, refreshed=True)
+    new = _state(candidate, graph, new=old is None, preview=True)
     if old is None and new.get("id") == UNKNOWN:
         new = {**new, "id": ""}
     _require(
@@ -479,7 +616,29 @@ def _preview_step(step, prior, desired, graph, seen):
     )
 
 
-def _preview(preview, prior, desired, graph):
+def _refresh_step(step, prior, graph, seen):
+    _object(
+        step,
+        {"urn", "op", "oldState", "newState"},
+        {
+            "urn",
+            "op",
+            "oldState",
+            "newState",
+            "provider",
+            "detailedDiff",
+        },
+    )
+    urn = step["urn"]
+    _require(urn in prior and urn != PROVIDER_URN and urn not in seen)
+    _require(not step.get("detailedDiff"))
+    _require(step.get("provider", "") == prior[urn].get("provider", ""))
+    _preview_old(step, prior[urn], graph)
+    _preview_old({"oldState": step["newState"]}, prior[urn], graph)
+    seen.add(urn)
+
+
+def _preview(preview, prior, desired, graph, *, require_refresh=False):
     _object(
         preview,
         {"steps"},
@@ -490,12 +649,21 @@ def _preview(preview, prior, desired, graph):
         and len(preview_steps(preview)) == len(preview["steps"])
     )
     _require(preview.get("maybeCorrupt", False) is False)
-    seen = set()
+    seen, refreshed = set(), set()
     for step in preview_steps(preview):
-        _preview_step(step, prior, desired, graph, seen)
+        if step.get("op") == "refresh":
+            _require(not seen)
+            _refresh_step(step, prior, graph, refreshed)
+            continue
+        _preview_step(step, prior, desired, graph, seen, refreshed=bool(refreshed))
         seen.add(step["urn"])
-    # Pulumi hides the default provider and may omit unchanged resources.
-    _require(set(graph) - set(prior) - {PROVIDER_URN} <= seen)
+    if refreshed or require_refresh:
+        _require(refreshed == set(prior) - {PROVIDER_URN})
+        _require(seen == set(graph) - {PROVIDER_URN})
+    else:
+        # Unrefreshed fixtures may omit unchanged resources; deployed registry
+        # commands require refresh and show-sames together.
+        _require(set(graph) - set(prior) - {PROVIDER_URN} <= seen)
 
 
 def validate(
@@ -504,6 +672,7 @@ def validate(
     saved_plan: dict[str, Any],
     prior_resources: list[dict[str, Any]],
     projection: RegistryPhaseProjection,
+    require_refresh: bool = False,
 ) -> None:
     """Require one coherent old/goal/preview graph. Provenance belongs to caller."""
     graph = _graph(projection)
@@ -530,4 +699,5 @@ def validate(
     provider_id = desired[PROVIDER_URN]["id"]
     for row in desired.values():
         _references(row, desired, provider_id)
-    _preview(preview, prior, desired, graph)
+    mail.validate_bindings(list(desired.values()))
+    _preview(preview, prior, desired, graph, require_refresh=require_refresh)

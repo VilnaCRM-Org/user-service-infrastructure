@@ -176,6 +176,8 @@ def _pulumi_command(context: CommandContext, request: StackCommand) -> list[str]
         "--non-interactive",
         *invocation.static_args,
     ]
+    if request.command == "plan" and context.registry_plan_gate is not None:
+        command.append("--show-sames")
     include_policy_pack = (
         invocation.include_policy_pack
         if request.include_policy_pack is None

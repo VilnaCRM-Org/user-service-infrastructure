@@ -75,7 +75,7 @@ def project_registry_phase(
 
 
 def run_registry_phase(projection: RegistryPhaseProjection):
-    """Register the internal two-repository graph after a trusted caller projects it."""
+    """Register the closed registry/prerequisite graph after source projection."""
     _require(
         type(projection) is RegistryPhaseProjection, "Registry projection required"
     )

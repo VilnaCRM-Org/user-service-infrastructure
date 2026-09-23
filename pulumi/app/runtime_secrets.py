@@ -64,7 +64,7 @@ class RuntimeSecretsDescriptor:
 
     @property
     def mail_sender(self) -> str:
-        """Return the declared sender; identity verification remains external."""
+        """Return the declared sender; native admission checks identity verification."""
         return self._contract["workload"]["external"]["mail"]["sender"]
 
     @property

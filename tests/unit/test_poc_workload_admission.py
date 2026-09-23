@@ -602,3 +602,12 @@ def test_authority_inputs_are_root_only_and_workflow_protected(installed):
     assert all(key in host.FIELDS for key in keys)
     port, _ = installed
     assert all(key not in port.environment for key in keys)
+
+
+@pytest.fixture(autouse=True)
+def isolated_mail_metadata(monkeypatch):
+    """These driver tests isolate SES/DNS; native bindings have their own suite."""
+    import poc_mail_prerequisite as mail
+
+    monkeypatch.setattr(mail, "inspect_inventory", lambda *_: None)
+    monkeypatch.setattr(mail, "inspect_identity", lambda **_: None)

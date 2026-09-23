@@ -48,7 +48,10 @@ def test_projection_binds_release_settings_without_mutating_source_or_provider()
     assert (
         values["user-service-infrastructure:apiUrl"] == "https://user.vilnacrmtest.com"
     )
-    assert values["user-service-infrastructure:mailSender"] == "sender@poc.example"
+    assert (
+        values["user-service-infrastructure:mailSender"]
+        == "sender@user.vilnacrmtest.com"
+    )
     assert values["user-service-infrastructure:deploymentMode"] == "managed"
     assert all(key.startswith("user-service-infrastructure:") for key in values)
     assert not any(

@@ -256,6 +256,7 @@ def _capture(source, command, projection):
     _require(capture.summary["state"]["kind"] == "observed_checkpoint")
     graph._prior(capture.resources, graph._graph(projection))
     _ecr_inventory(capture.resources)
+    graph.mail.inspect_inventory(capture.resources, graph.DEFAULT_TAGS)
     return capture
 
 
@@ -310,6 +311,7 @@ def _gate(source, command, projection, initial):
             saved_plan=plan,
             prior_resources=current.resources,
             projection=projection,
+            require_refresh=True,
         )
         _require(
             plan_path.read_bytes() == plan_raw
@@ -337,7 +339,7 @@ def execute(command, *, artifact_id, archive_sha256, source_sha256, transport=No
     operation = "up-plan" if command == "up-plan" else "plan"
     initial = _capture(source, operation, projection)
     if command == "drift":
-        _require(len(initial.resources) == 7)
+        _require(len(initial.resources) == len(graph._graph(projection)))
     root = ROOT if transport is None else transport.repo
     with _project(projection, root=root) as project:
         context = runner.CommandContext(
@@ -356,7 +358,7 @@ def execute(command, *, artifact_id, archive_sha256, source_sha256, transport=No
         status = runner._dispatch_command(operation, context, ["test"])
         if status == 0 and command == "up-plan":
             final = _capture(source, operation, projection)
-            _require(len(final.resources) == 7)
+            _require(len(final.resources) == len(graph._graph(projection)))
         return status
 
 

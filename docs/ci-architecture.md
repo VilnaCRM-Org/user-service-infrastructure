@@ -89,8 +89,10 @@ workload phase or change registry resource ownership.
 After successful TEST registry apply and drift jobs, `test_registry_observation`
 starts on a fresh trusted-main checkout. It authenticates source, current review
 and requester before each credential transition. With the existing Preview
-identity it performs version-bound backend reads, validates the exact seven-record
-graph, and checks both repositories' native immutability, scanning and tags.
+identity it performs version-bound backend reads, validates the exact eleven-resource
+graph, and checks both repositories' native immutability, scanning and tags plus
+the owned SES identity and three Easy DKIM CNAME records. SES verification may
+remain pending here; workload admission requires native verification success.
 It runs no PR program or Pulumi child. Only public metadata is uploaded;
 checkpoint contents stay private.
 

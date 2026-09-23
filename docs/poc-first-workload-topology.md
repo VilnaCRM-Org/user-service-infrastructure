@@ -1,7 +1,7 @@
 # First-workload topology prerequisite
 
 `poc_workload_topology.py` checks the exact current two-AZ workload owner graph:
-the unchanged seven-resource registry baseline, pinned AWS/Random/TLS providers,
+the unchanged eleven-resource registry/prerequisite baseline, pinned AWS/Random/TLS providers,
 generated secret resources, network/data/queue planes, ECS Fargate web and worker,
 public HTTPS ALB, and service-owned ALB log storage. No AWS apply is enabled.
 

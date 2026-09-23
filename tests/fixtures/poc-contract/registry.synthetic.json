@@ -47,5 +47,13 @@
     "publisher_workflow_path": ".github/workflows/synthetic-publish.yml",
     "publisher_environment": "synthetic-poc-publish",
     "publisher_claim_kind": "ordinary-workflow-protected-environment"
+  },
+  "mail_identity": {
+    "owner": "service",
+    "domain": "user.vilnacrmtest.com",
+    "identity_arn": "arn:aws:ses:eu-central-1:891377212104:identity/user.vilnacrmtest.com",
+    "hosted_zone_id": "Z04999481RZ4UQK2NANVH",
+    "hosted_zone_name": "vilnacrmtest.com",
+    "dkim": "easy-rsa-2048"
   }
 }

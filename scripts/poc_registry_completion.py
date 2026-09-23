@@ -170,7 +170,7 @@ def observe(reference):
     """Run only in a fresh trusted job that never starts a Pulumi/PR child."""
     source, projection = admit(reference)
     first = runtime._capture(source, "plan", projection)
-    _require(len(first.resources) == 7)
+    _require(len(first.resources) == len(runtime.graph._graph(projection)))
     _native_tags()
     second = runtime._capture(source, "plan", projection)
     _require(first.summary["state"] == second.summary["state"])
@@ -196,6 +196,7 @@ def observe(reference):
             _canonical(
                 {
                     "registries": runtime.graph.REGISTRIES,
+                    "mail_identity": runtime.graph.mail.DECLARATION,
                     "tags": runtime.graph.DEFAULT_TAGS,
                 }
             )
@@ -275,7 +276,11 @@ def _observation(reference, run_id, workflow_sha, *, gh, download):
     _require(observed <= created <= datetime.now(timezone.utc))
     expected_controls = _digest(
         _canonical(
-            {"registries": runtime.graph.REGISTRIES, "tags": runtime.graph.DEFAULT_TAGS}
+            {
+                "registries": runtime.graph.REGISTRIES,
+                "mail_identity": runtime.graph.mail.DECLARATION,
+                "tags": runtime.graph.DEFAULT_TAGS,
+            }
         )
     )
     _require(value["registry_controls_sha256"] == expected_controls)

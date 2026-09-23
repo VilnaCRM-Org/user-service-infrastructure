@@ -108,15 +108,8 @@ def _mail_semantics(mail: dict[str, Any]) -> None:
         "arn:aws:ses:eu-central-1:891377212104:identity/"
     )
     sender = mail["sender"]
-    if "@" in identity:
-        if not re.fullmatch(address_pattern, identity) or sender != identity:
-            raise ValueError("SES sender/email identity mismatch")
-    else:
-        sender_domain = sender.split("@")[1]
-        if not re.fullmatch(domain_pattern, identity) or not (
-            sender_domain == identity or sender_domain.endswith("." + identity)
-        ):
-            raise ValueError("SES sender/domain identity mismatch")
+    if identity != "user.vilnacrmtest.com" or sender.split("@")[1] != identity:
+        raise ValueError("SES identity/sender must match the TEST owned domain")
 
 
 def _registry_semantics(registries: dict[str, Any]) -> None:
@@ -192,7 +185,14 @@ def _validate_transition(previous: dict[str, Any], contract: dict[str, Any]) -> 
     """Keep one authenticated contract's immutable ownership and secret bindings."""
     if previous["phase"] == "workload" and contract["phase"] != "workload":
         raise ValueError("workload to registry downgrade forbidden")
-    for field in ("account_id", "region", "environment", "backend", "registries"):
+    for field in (
+        "account_id",
+        "region",
+        "environment",
+        "backend",
+        "registries",
+        "mail_identity",
+    ):
         if previous[field] != contract[field]:
             raise ValueError("stack or registry ownership changed")
     _registry_transition(previous, contract)

@@ -83,7 +83,7 @@
         "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
       },
       "registry_phase_receipt_id": 17,
-      "registry_contract_digest": "7c5754abacb9b811e96e7082c5a94b56ade6bbf8ba659e6b77915be6b2bcefb0",
+      "registry_contract_digest": "ce5bde5edcff5274840bdbfe078d1d38f52993ed4b2e4b0069984b957356b831",
       "registry_checkpoint_version": "synthetic-registry-version/+=="
     },
     "external": {
@@ -104,8 +104,8 @@
         "authentication": "ecs-task-role",
         "account_id": "891377212104",
         "region": "eu-central-1",
-        "identity_arn": "arn:aws:ses:eu-central-1:891377212104:identity/poc.example",
-        "sender": "sender@poc.example",
+        "identity_arn": "arn:aws:ses:eu-central-1:891377212104:identity/user.vilnacrmtest.com",
+        "sender": "sender@user.vilnacrmtest.com",
         "recipients": [
           "recipient@poc.example"
         ],
@@ -226,5 +226,13 @@
         "/synthetic/check-worker"
       ]
     }
+  },
+  "mail_identity": {
+    "owner": "service",
+    "domain": "user.vilnacrmtest.com",
+    "identity_arn": "arn:aws:ses:eu-central-1:891377212104:identity/user.vilnacrmtest.com",
+    "hosted_zone_id": "Z04999481RZ4UQK2NANVH",
+    "hosted_zone_name": "vilnacrmtest.com",
+    "dkim": "easy-rsa-2048"
   }
 }

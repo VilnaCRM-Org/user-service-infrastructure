@@ -86,7 +86,7 @@ def driver(tmp_path, monkeypatch):
         module.preflight, "revalidate_requester", lambda request: None, raising=False
     )
     monkeypatch.setattr(module, "_review", lambda source: calls.append("review"))
-    data = graph_tests.case("baseline")
+    data = graph_tests.case("baseline", refresh=True)
 
     def capture(source, operation):
         calls.append(operation)
@@ -204,10 +204,10 @@ def test_real_driver_project_and_gate_path(driver, command):
 
 
 def test_initial_provider_and_repeated_registry(driver, monkeypatch):
-    driver["data"].update(graph_tests.case("new"))
+    driver["data"].update(graph_tests.case("new", refresh=True))
     assert execute() == 0
     driver["calls"].clear()
-    driver["data"].update(graph_tests.case("repeat"))
+    driver["data"].update(graph_tests.case("repeat", refresh=True))
     monkeypatch.setattr(module, "ecr_read", repository)
     assert execute() == 0
 
@@ -262,7 +262,7 @@ def test_existing_foreign_repository_cannot_be_adopted(driver, monkeypatch):
 def test_repeat_requires_actual_registry_identity_and_controls(
     driver, monkeypatch, field, value
 ):
-    driver["data"].update(graph_tests.case("repeat"))
+    driver["data"].update(graph_tests.case("repeat", refresh=True))
     monkeypatch.setattr(
         module, "ecr_read", lambda name: {**repository(name), field: value}
     )
@@ -463,7 +463,7 @@ def test_drift_requires_full_registry_and_uses_preview_session(driver, monkeypat
         execute("drift")
     assert "dispatch" not in driver["calls"]
     driver["calls"].clear()
-    driver["data"].update(graph_tests.case("repeat"))
+    driver["data"].update(graph_tests.case("repeat", refresh=True))
     monkeypatch.setattr(module, "ecr_read", repository)
     assert execute("drift") == 0
     assert driver["calls"] == [
@@ -654,3 +654,12 @@ def test_provider_environment_reaches_actual_pulumi_subprocess(driver, monkeypat
     assert observed["env"]["PULUMI_DISABLE_AUTOMATIC_PLUGIN_ACQUISITION"] == "true"
     assert observed["env"]["PULUMI_IGNORE_AMBIENT_PLUGINS"] == "true"
     assert "GH_TOKEN" not in observed["env"] and "PYTHONPATH" not in observed["env"]
+
+
+@pytest.fixture(autouse=True)
+def isolated_mail_metadata(monkeypatch):
+    """These driver tests isolate SES/DNS; native bindings have their own suite."""
+    import poc_mail_prerequisite as mail
+
+    monkeypatch.setattr(mail, "inspect_inventory", lambda *_: None)
+    monkeypatch.setattr(mail, "inspect_identity", lambda **_: None)

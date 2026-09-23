@@ -6,6 +6,20 @@ import pytest
 from test_saved_plan_destructive_gate import preview, seal_existing, setup_command
 
 
+@pytest.mark.parametrize("command", ["plan", "up-plan", "preview"])
+@pytest.mark.parametrize("registry", [False, True])
+def test_show_sames_is_required_only_for_registry_plan(
+    monkeypatch, tmp_path, command, registry
+):
+    module, context, _ = setup_command(monkeypatch, tmp_path, preview())
+    if registry:
+        context = replace(context, registry_plan_gate=lambda *_: None)
+    invocation = module._pulumi_command(
+        context, module.StackCommand(command, "test", plan_path=tmp_path / "test.plan")
+    )
+    assert ("--show-sames" in invocation) is (registry and command == "plan")
+
+
 def test_isolated_policy_and_summary_hooks_preserve_legacy_plan_gates(
     monkeypatch, tmp_path
 ):

@@ -82,6 +82,8 @@ def _generated_outputs(args, values):
         )
     if args.typ == "aws:secretsmanager/secretVersion:SecretVersion":
         values["versionId"] = "1" * 32
+    if args.typ == "aws:sesv2/emailIdentity:EmailIdentity":
+        values["dkimSigningAttributes"] = {"tokens": [letter * 32 for letter in "abc"]}
     return values
 
 
@@ -354,13 +356,17 @@ def test_workload_extends_actual_registry_registrations_without_changing_baselin
         "registries",
         "user-service-web-repository",
         "user-service-worker-repository",
+        "user-service-mail-identity",
+        "user-service-mail-dkim-0",
+        "user-service-mail-dkim-1",
+        "user-service-mail-dkim-2",
     }
     assert {name: workload[name] for name in baseline} == baseline
     assert all(
         after["outputs"][urn] == value for urn, value in before["outputs"].items()
     )
     assert after["aws_config"] == before["aws_config"]
-    # MockMonitor omits the implicit AWS provider. No synthetic seventh record
+    # MockMonitor omits the implicit AWS provider. No synthetic provider record
     # is invented; native provider identity/no-change still needs a real preview.
     assert not any(row["type"] == "pulumi:providers:aws" for row in workload.values())
     assert all(row["provider"] == "" for row in workload.values())
@@ -393,7 +399,10 @@ def test_workload_extends_actual_registry_registrations_without_changing_baselin
     for row in workload.values():
         if row["type"] in TAGGABLE_TYPES:
             assert row["inputs"]["tags"] == TAGS
-        elif row["type"] != "aws:ecr/repository:Repository":
+        elif row["type"] not in (
+            "aws:ecr/repository:Repository",
+            "aws:sesv2/emailIdentity:EmailIdentity",
+        ):
             assert "tags" not in row["inputs"]
 
 

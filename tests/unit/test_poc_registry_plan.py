@@ -70,11 +70,40 @@ def states():
                 ),
                 "registryId": plan.ACCOUNT,
             }
+        if kind in (plan.mail.SES, plan.mail.DNS):
+            row["provider"] = f"{plan.PROVIDER_URN}::provider-id"
+            identity_urn = (
+                f"{plan.PREFIX}{plan.SERVICE}${plan.mail.SES}::"
+                f"{plan.mail.IDENTITY_NAME}"
+            )
+            tokens = [letter * 32 for letter in "abc"]
+            if kind == plan.mail.SES:
+                row["inputs"] = plan.mail.identity_inputs(
+                    copy.deepcopy(plan.DEFAULT_TAGS)
+                )
+                row["id"] = plan.mail.DOMAIN
+                row["outputs"] = {
+                    **row["inputs"],
+                    "arn": plan.mail.ARN,
+                    "dkimSigningAttributes": {
+                        "nextSigningKeyLength": "RSA_2048_BIT",
+                        "tokens": tokens,
+                    },
+                }
+            else:
+                index = int(urn.rsplit("-", 1)[-1])
+                row["inputs"] = plan.mail.record_inputs(tokens[index])
+                row["id"] = f"{plan.mail.ZONE}_{row['inputs']['name']}_CNAME"
+                row["outputs"] = {**row["inputs"], "fqdn": row["inputs"]["name"]}
+                row["dependencies"] = [identity_urn]
+                row["propertyDependencies"] = {
+                    key: [identity_urn] for key in ("name", "records")
+                }
         result[urn] = row
     return result
 
 
-def case(prior_kind="baseline"):
+def case(prior_kind="baseline", *, refresh=False):
     """Serialize engine GoalV1 adds/same diffs and its separate JSON preview."""
     complete = states()
     prior = {
@@ -102,11 +131,24 @@ def case(prior_kind="baseline"):
         if old is None:
             row.pop("id", None)
             row["outputs"] = {}
-            if row["type"] == plan.ECR and plan.PROVIDER_URN not in prior:
+            if row["type"] == plan.mail.DNS:
+                row["inputs"] = plan.mail.record_inputs(None)
+            if (
+                row["type"] in (plan.ECR, plan.mail.SES, plan.mail.DNS)
+                and plan.PROVIDER_URN not in prior
+            ):
                 row["provider"] = f"{plan.PROVIDER_URN}::{plan.UNKNOWN}"
         goal = {
             key: copy.deepcopy(row[key])
-            for key in ("type", "custom", "parent", "protect", "provider")
+            for key in (
+                "type",
+                "custom",
+                "parent",
+                "protect",
+                "provider",
+                "dependencies",
+                "propertyDependencies",
+            )
             if key in row
         }
         goal.update(
@@ -132,6 +174,18 @@ def case(prior_kind="baseline"):
             if old:
                 step["oldState"] = copy.deepcopy(old)
             preview["steps"].append(step)
+    if refresh:
+        preview["steps"][:0] = [
+            {
+                "urn": urn,
+                "op": "refresh",
+                "provider": row.get("provider", ""),
+                "oldState": copy.deepcopy(row),
+                "newState": copy.deepcopy(row),
+            }
+            for urn, row in prior.items()
+            if row["type"] != plan.PROVIDER
+        ]
     return {
         "preview": preview,
         "saved_plan": saved,
@@ -157,6 +211,7 @@ def ecr_step(data):
         row
         for row in data["preview"]["steps"]
         if row["urn"].endswith("::user-service-web-repository")
+        and row["op"] != "refresh"
     )
 
 
@@ -448,12 +503,12 @@ def legacy_case(monkeypatch):
     goal["outputDiff"] = _wire_diff(provider["outputs"], desired_outputs)
     record["steps"] = ["update"]
     for saved in data["saved_plan"]["resourcePlans"].values():
-        if saved["goal"].get("type") == plan.ECR:
+        if saved["goal"].get("type") in (plan.ECR, plan.mail.SES, plan.mail.DNS):
             saved["goal"]["provider"] = (
                 f"{plan.PROVIDER_URN}::{plan.LEGACY_PROVIDER_ID}"
             )
     for step in data["preview"]["steps"]:
-        if step["newState"]["type"] == plan.ECR:
+        if step["newState"]["type"] in (plan.ECR, plan.mail.SES, plan.mail.DNS):
             step["provider"] = f"{plan.PROVIDER_URN}::{plan.LEGACY_PROVIDER_ID}"
             step["newState"]["provider"] = step["provider"]
     raw = json.dumps(
@@ -554,7 +609,10 @@ def test_repository_tagging_is_exact_and_not_provider_default_authority():
     with pytest.raises(ValueError):
         validate(data)
     data = case()
-    ecr_goal(data)["inputDiff"]["adds"]["tagsAll"] = plan.DEFAULT_TAGS
+    ecr_goal(data)["inputDiff"]["adds"]["tagsAll"] = {
+        **plan.DEFAULT_TAGS,
+        "Owner": "foreign",
+    }
     with pytest.raises(ValueError):
         validate(data)
 

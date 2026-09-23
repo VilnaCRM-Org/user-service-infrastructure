@@ -282,9 +282,8 @@ def test_ses_rejects_unsafe_transport_and_bindings(field, value):
 @pytest.mark.parametrize(
     ("identity", "sender"),
     [
-        ("poc.example", "sender@poc.example"),
-        ("poc.example", "sender@sub.poc.example"),
-        ("sender@poc.example", "sender@poc.example"),
+        ("user.vilnacrmtest.com", "sender@user.vilnacrmtest.com"),
+        ("user.vilnacrmtest.com", "another@user.vilnacrmtest.com"),
     ],
 )
 def test_ses_identity_matches_sender_independently_of_web_domain(identity, sender):

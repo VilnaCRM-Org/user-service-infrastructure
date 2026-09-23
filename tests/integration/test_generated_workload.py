@@ -213,7 +213,7 @@ def test_native_generated_workload_preserves_registry_and_registers_secret_versi
     (work / "scenario.json").write_text('{"mode":"registry"}')
     stack.preview(on_event=events.append)
     baseline = {row.urn: row for row in resources(events)}
-    assert len(baseline) == 7
+    assert len(baseline) == 11
     events.clear()
     (work / "scenario.json").write_text('{"mode":"workload"}')
     result = stack.preview(on_event=events.append)

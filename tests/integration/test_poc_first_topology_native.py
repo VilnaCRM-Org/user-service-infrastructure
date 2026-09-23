@@ -80,6 +80,14 @@ class LocalProvider(provider_pb2_grpc.ResourceProviderServicer):
                 registryId="891377212104",
             )
             outputs.pop("id", None)
+        if kind == gate.registry.mail.SES:
+            identifier = gate.registry.mail.DOMAIN
+            outputs["arn"] = gate.registry.mail.ARN
+            outputs.pop("id", None)
+        if kind == gate.registry.mail.DNS:
+            identifier = f"{inputs['zoneId']}_{inputs['name']}_CNAME"
+            outputs["fqdn"] = inputs["name"]
+            outputs.pop("id", None)
         return provider_pb2.CreateResponse(
             id=identifier, properties=ParseDict(outputs, Struct())
         )

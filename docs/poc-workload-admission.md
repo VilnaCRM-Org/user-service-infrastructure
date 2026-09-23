@@ -8,7 +8,7 @@ before any Pulumi program executes. PROD and scheduled routing are unchanged.
 The workload branch reuses the original registry completion verifier, including
 its App issuer, successful original workflow/jobs, historical source and immutable
 observation artifacts. It compares that receipt with a fresh native checkpoint
-and the complete seven-resource registry graph and ECR controls. An absent,
+and the complete eleven-resource registry/prerequisite graph and ECR controls. An absent,
 changed, partial or already-expanded checkpoint cannot become a first-workload
 baseline. The original registry contract is recovered by exact Git commit/blob
 identity and verified against the receipt digest; it is not reconstructed from
@@ -22,6 +22,9 @@ content with the reviewed release. The large image-transfer archive is checked
 by native artifact identity/digest and build-job timing; it is not downloaded by
 the service. The trusted publisher remains responsible for its transfer contents.
 The registry receipt/current checkpoint is checked again after release reads.
+The owned SES identity and its Easy DKIM DNS records are included in that
+checkpoint. Workload reads also require current SES verification; see
+[poc-ses-prerequisite.md](poc-ses-prerequisite.md).
 
 After release authentication, native ECR reads now check both exact TEST image
 digests. The observer hashes the original manifest bytes, requires a single Docker

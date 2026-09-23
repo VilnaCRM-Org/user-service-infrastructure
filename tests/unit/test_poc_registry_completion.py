@@ -58,6 +58,7 @@ def evidence(prepared, monkeypatch):
             module._canonical(
                 {
                     "registries": module.runtime.graph.REGISTRIES,
+                    "mail_identity": module.runtime.graph.mail.DECLARATION,
                     "tags": module.runtime.graph.DEFAULT_TAGS,
                 }
             )
@@ -644,3 +645,12 @@ def test_observation_containment_uses_github_second_precision(evidence, next_sec
     else:
         assert verify(evidence).registry_phase_receipt_id == 301
         assert evidence["observation"]["observed_at"] == captured.isoformat()
+
+
+@pytest.fixture(autouse=True)
+def isolated_mail_metadata(monkeypatch):
+    """These driver tests isolate SES/DNS; native bindings have their own suite."""
+    import poc_mail_prerequisite as mail
+
+    monkeypatch.setattr(mail, "inspect_inventory", lambda *_: None)
+    monkeypatch.setattr(mail, "inspect_identity", lambda **_: None)

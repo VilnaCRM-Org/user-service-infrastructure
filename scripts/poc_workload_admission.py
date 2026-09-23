@@ -136,7 +136,10 @@ def inspect_registry(source, contract, authority, command, *, gh=None, download=
     capture = registry._capture(
         source, "up-plan" if command == "up-plan" else "plan", projection
     )
-    require(len(capture.resources) == 7, "workload-completed-registry-required")
+    require(
+        len(capture.resources) == len(registry.graph._graph(projection)),
+        "workload-completed-registry-required",
+    )
     state = capture.summary["state"]
     current = {
         "version": state["VersionId"],
@@ -440,6 +443,7 @@ def inspect_workload(source, contract, authority, command):
     anchor = inspect_registry(source, contract, authority, command)
     inspect_release(contract, authority)
     images.inspect_images(contract)
+    registry.graph.mail.inspect_identity(ready=True)
     require(
         inspect_registry(source, contract, authority, command) == anchor,
         "workload-prior-changed",

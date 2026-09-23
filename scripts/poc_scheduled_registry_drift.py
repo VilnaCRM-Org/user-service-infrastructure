@@ -122,9 +122,10 @@ def _installed_contract(provenance):
 def _capture(digest, projection):
     capture = runtime.backend.capture_scheduled_backend(digest)
     _require(capture.summary["state"]["kind"] == "observed_checkpoint")
-    _require(len(capture.resources) == 7)
+    _require(len(capture.resources) == len(runtime.graph._graph(projection)))
     runtime.graph._prior(capture.resources, runtime.graph._graph(projection))
     runtime._ecr_inventory(capture.resources)
+    runtime.graph.mail.inspect_inventory(capture.resources, runtime.graph.DEFAULT_TAGS)
     return capture
 
 
@@ -141,13 +142,14 @@ def _gate(provenance, digest, projection, initial):
         current = _capture(digest, projection)
         _require(current.summary["state"] == initial.summary["state"])
         runtime._binding(context, current)
-        # All seven resources already exist. The graph gate therefore permits
-        # only same operations and empty input/output diffs, including provider.
+        # All prerequisite resources already exist. The graph gate therefore permits
+        # only same operations, empty output diffs and exact provider recheck defaults.
         runtime.graph.validate(
             preview,
             saved_plan=plan,
             prior_resources=current.resources,
             projection=projection,
+            require_refresh=True,
         )
         _require(
             plan_path.read_bytes() == plan_raw

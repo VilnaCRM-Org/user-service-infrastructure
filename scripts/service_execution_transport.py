@@ -196,6 +196,13 @@ class ServiceTransport:
                 protected_write(target, private_read(Path(command[index])))
                 command[index] = str(target)
 
+    @staticmethod
+    def _collect_saved_plan(saved, argv, raw, check):
+        """Copy protected plan output only after a successful child execution."""
+        if saved is not None and (check or raw.returncode == 0):
+            saved.write_bytes(private_read(Path(argv[argv.index("--save-plan") + 1])))
+            saved.chmod(0o600)
+
     def __call__(self, command, *, env, check=True, capture_output=False, stdout=None):
         """Adapt the existing CommandContext protocol without ambient execution."""
         del capture_output
@@ -226,9 +233,7 @@ class ServiceTransport:
             },
         }
         raw = run(argv, env=environment, cwd=self.work, child=child, check=check)
-        if saved is not None and (check or raw.returncode == 0):
-            saved.write_bytes(private_read(Path(argv[argv.index("--save-plan") + 1])))
-            saved.chmod(0o600)
+        self._collect_saved_plan(saved, argv, raw, check)
         if check:
             result = subprocess.CompletedProcess(command, 0, raw.decode(), "")
         else:

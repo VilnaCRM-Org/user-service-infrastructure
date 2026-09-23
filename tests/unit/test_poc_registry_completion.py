@@ -262,7 +262,7 @@ def test_dispatcher_reauthenticates_actual_proof_artifacts_and_completed_job(
     request, workflow = dispatcher.prepare(gh=gh)
     assert workflow == 401 and request["registry_phase_receipt_id"] == 301
     assert (
-        request["registry_contract_sha256"]
+        request["registry_contract_digest"]
         == evidence["source"]["source"]["contract_sha256"]
     )
     with pytest.raises(ValueError):

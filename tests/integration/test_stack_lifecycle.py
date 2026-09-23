@@ -71,11 +71,26 @@ def test_runtime_descriptor_properties_return_declared_values() -> None:
         "region": "eu-central-1",
         "account_id": "123456789012",
         "workload": {
-            "runtime": {"database_name": "service", "ca_bundle_path": "/certs/ca.pem"}
+            "runtime": {
+                "database_name": "service",
+                "ca_bundle_path": "/certs/ca.pem",
+                "trusted_proxy_cidrs": ["10.42.0.0/24"],
+            }
         },
     }
     assert descriptor.database_name == "service"
     assert descriptor.ca_bundle_path == "/certs/ca.pem"
+    assert descriptor.trusted_proxy_cidrs == ["10.42.0.0/24"]
+
+    with patch.object(descriptor, "validate_context"):
+        with pytest.raises(
+            ValueError, match="^Trusted proxy CIDRs must exactly match the ALB subnets$"
+        ):
+            descriptor.validate_target(
+                SimpleNamespace(
+                    network=SimpleNamespace(public_subnet_cidrs=("10.42.1.0/24",))
+                )
+            )
 
 
 def _copy_workdir(tmp_path: Path, *, name: str) -> Path:

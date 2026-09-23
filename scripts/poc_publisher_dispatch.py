@@ -169,7 +169,7 @@ def prepare(environment=None, *, gh=None):
         "source_sha": sha,
         "platform": "linux/amd64",
         "registry_phase_receipt_id": int(identifier),
-        "registry_contract_sha256": observed["source"]["contract_sha256"],
+        "registry_contract_digest": observed["source"]["contract_sha256"],
         "registry_checkpoint_version": observed["checkpoint"]["version"],
     }
     return request, workflow_id

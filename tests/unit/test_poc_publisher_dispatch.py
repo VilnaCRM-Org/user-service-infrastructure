@@ -127,7 +127,7 @@ def test_prepare_reuses_proof_readback_and_completed_jobs(state):
         "source_sha": SHA,
         "platform": "linux/amd64",
         "registry_phase_receipt_id": 301,
-        "registry_contract_sha256": "c" * 64,
+        "registry_contract_digest": "c" * 64,
         "registry_checkpoint_version": "v1",
     }
     assert state[2][0][1]["completed"] is True

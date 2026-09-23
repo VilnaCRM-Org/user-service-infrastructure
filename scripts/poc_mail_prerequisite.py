@@ -208,32 +208,34 @@ def _dkim(attributes, *, new, preview):
         )
 
 
+def _validate_record(row, inputs, outputs, *, new):
+    check(set(inputs) == set(record_inputs(None)))
+    token = None if inputs["name"] == UNKNOWN else inputs["name"].split(".")[0]
+    check(token is None or re.fullmatch(r"[a-z0-9]{32}", token))
+    check(inputs == record_inputs(token))
+    expected_id = f"{ZONE}_{inputs['name']}_CNAME"
+    expected = {
+        **inputs,
+        **DNS_PROVIDER_OUTPUTS,
+        "fqdn": inputs["name"],
+        "id": expected_id,
+    }
+    check(outputs.keys() <= expected.keys())
+    check(
+        all(
+            value == expected[key] or (new and value == UNKNOWN)
+            for key, value in outputs.items()
+        )
+    )
+    check(row.get("id", "") in ("", UNKNOWN) if new else row.get("id") == expected_id)
+
+
 def validate_row(row, *, new, tags, preview=False):
     """Validate exact SES/DNS wire inputs; graph-level token bindings follow."""
     inputs = checked_inputs(row["type"], row.get("inputs", {}), tags)
     outputs = row.get("outputs", {})
     if row["type"] == DNS:
-        check(set(inputs) == set(record_inputs(None)))
-        token = None if inputs["name"] == UNKNOWN else inputs["name"].split(".")[0]
-        check(token is None or re.fullmatch(r"[a-z0-9]{32}", token))
-        check(inputs == record_inputs(token))
-        expected_id = f"{ZONE}_{inputs['name']}_CNAME"
-        expected = {
-            **inputs,
-            **DNS_PROVIDER_OUTPUTS,
-            "fqdn": inputs["name"],
-            "id": expected_id,
-        }
-        check(outputs.keys() <= expected.keys())
-        check(
-            all(
-                value == expected[key] or (new and value == UNKNOWN)
-                for key, value in outputs.items()
-            )
-        )
-        check(
-            row.get("id", "") in ("", UNKNOWN) if new else row.get("id") == expected_id
-        )
+        _validate_record(row, inputs, outputs, new=new)
         return
     check(inputs == identity_inputs(tags))
     expected = {

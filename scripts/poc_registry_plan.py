@@ -566,6 +566,22 @@ def _preview_old(step, old, graph, *, refreshed=False):
         _require(step.get("oldState") is None)
 
 
+def _preview_new(candidate, old, graph, *, refreshed):
+    _require(type(candidate) is dict and type(candidate.get("outputs", {})) is dict)
+    if refreshed and old:
+        if "id" not in candidate and old.get("custom"):
+            # Native same.newState also omits the existing physical ID. Its exact
+            # identity was established by original state and validated same.oldState.
+            candidate = {**candidate, "id": old["id"]}
+        if not candidate.get("outputs"):
+            # Native final same events omit outputs. Validate the remaining row
+            # with original private outputs in memory; never persist preview state.
+            candidate = {**candidate, "outputs": old.get("outputs", {})}
+        else:
+            _preview_old({"oldState": candidate}, old, graph, refreshed=True)
+    return _state(candidate, graph, new=old is None, preview=True)
+
+
 def _preview_step(step, prior, desired, graph, seen, *, refreshed=False):
     _object(
         step,
@@ -595,19 +611,7 @@ def _preview_step(step, prior, desired, graph, seen, *, refreshed=False):
     )
     _require(step.get("provider", "") == desired[urn].get("provider", ""))
     _preview_old(step, old, graph, refreshed=refreshed)
-    candidate = step["newState"]
-    _require(type(candidate) is dict and type(candidate.get("outputs", {})) is dict)
-    if refreshed and old and "id" not in candidate and old.get("custom"):
-        # Native same.newState also omits the existing physical ID. Its exact
-        # identity was established by original state and validated same.oldState.
-        candidate = {**candidate, "id": old["id"]}
-    if refreshed and old and not candidate.get("outputs"):
-        # Native final same events omit outputs. Validate the remaining row
-        # with original private outputs in memory; never persist preview state.
-        candidate = {**candidate, "outputs": old.get("outputs", {})}
-    elif refreshed and old:
-        _preview_old({"oldState": candidate}, old, graph, refreshed=True)
-    new = _state(candidate, graph, new=old is None, preview=True)
+    new = _preview_new(step["newState"], old, graph, refreshed=refreshed)
     if old is None and new.get("id") == UNKNOWN:
         new = {**new, "id": ""}
     _require(

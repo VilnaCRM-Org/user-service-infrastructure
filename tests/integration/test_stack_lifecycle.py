@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import uuid
 from pathlib import Path
@@ -46,10 +47,14 @@ def test_managed_helpers_cover_log_policy_and_documentdb_descriptor() -> None:
     settings = SimpleNamespace(
         stack_tag="integration-service-test", region="eu-central-1"
     )
-    policy = delivery_policy(
-        "arn:aws:s3:::logs", "integration/alb", "123456789012", settings
+    policy = json.loads(
+        delivery_policy(
+            "arn:aws:s3:::logs", "integration/alb", "123456789012", settings
+        )
     )
-    assert "logdelivery.elasticloadbalancing.amazonaws.com" in policy
+    assert policy["Statement"][0]["Principal"] == {
+        "Service": "logdelivery.elasticloadbalancing.amazonaws.com"
+    }
     descriptor = SimpleNamespace(
         database_name="service db", ca_bundle_path="/certs/ca.pem"
     )

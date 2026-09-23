@@ -92,9 +92,16 @@ class RuntimeSecretsDescriptor:
         """Return a detached copy of the validated worker health command."""
         return list(self._contract["workload"]["runtime"]["worker_health_command"])
 
+    @property
+    def trusted_proxy_cidrs(self) -> list[str]:
+        """Return the exact declared ALB subnet networks, without serialization."""
+        return list(self._contract["workload"]["runtime"]["trusted_proxy_cidrs"])
+
     def validate_target(self, settings: Any) -> None:
         """Bind declarations to protected configuration and workload roles."""
         self.validate_context()
+        if set(self.trusted_proxy_cidrs) != set(settings.network.public_subnet_cidrs):
+            raise ValueError("Trusted proxy CIDRs must exactly match the ALB subnets")
         central = self._contract["workload"]["central"]
         actual = (
             settings.environment,

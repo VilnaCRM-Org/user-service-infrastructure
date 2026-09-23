@@ -107,3 +107,30 @@ verify exact images, generated-secret references, no IAM registration, unchanged
 registry graph/provider metadata and rejection of altered source/image/config
 bindings. Those tests are source evidence only, not native IAM, ECR, secret
 generation or workload acceptance.
+
+### Exact ALB proxy trust
+
+The generated workload contract now requires `workload.runtime.trusted_proxy_cidrs`,
+a nonempty list of canonical CIDR strings. There is no default. Validation rejects
+aliases, bare addresses, catchall networks, duplicates, overlapping networks, and
+host bits. Before registering workload resources, the descriptor requires this
+list to contain exactly the configured `network.public_subnet_cidrs` used by the
+ALB. Missing subnets, extra subnets, and broader VPC/private ranges fail closed.
+The synthetic fixture values are test data, not evidence of live ALB topology.
+
+`ComputePlane` injects this single canonical list only into the web container:
+`TRUSTED_PROXIES` uses commas for Symfony, while `TRUSTED_PROXY_CIDRS` uses spaces
+for Caddy's `trusted_proxies static` arguments. The application image must consume
+these respective variable names. An image using `TRUSTED_PROXIES` directly in
+Caddy is incompatible with a multi-subnet list and must be corrected before
+release. Parser references: [Symfony proxy configuration](https://symfony.com/doc/7.4/deployment/proxies.html)
+and [Caddy global options](https://caddyserver.com/docs/caddyfile/options#trusted-proxies).
+
+These CIDRs are non-secret deployment metadata. Supply them through the existing
+reviewed contract publication/admission path and AWS ECS task-definition environment;
+no local secret, new Secrets Manager entry, SSM lookup, or IAM permission is needed.
+The complete contract digest binds the list. Native deployment still requires
+verified actual ALB subnet CIDRs and agreement with the protected network settings;
+this source validation does not discover live AWS topology or authorize deployment.
+The legacy, non-generated composition receives no inferred proxy trust from this
+PoC change.

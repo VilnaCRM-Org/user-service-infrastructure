@@ -118,6 +118,7 @@ def test_protected_context_and_settings_must_match(contract, monkeypatch, target
     settings = SimpleNamespace(
         environment="test",
         region="eu-central-1",
+        network=SimpleNamespace(public_subnet_cidrs=descriptor.trusted_proxy_cidrs),
         images=SimpleNamespace(
             web_repository_name=contract["registries"]["web"]["name"],
             worker_repository_name=contract["registries"]["worker"]["name"],

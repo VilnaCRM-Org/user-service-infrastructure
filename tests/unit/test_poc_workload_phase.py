@@ -57,6 +57,9 @@ def _mutate(value, registries, mutation):
         "images": {"images": replace(value.images, web_repository_name="foreign")},
         "role": {"runtime": replace(value.runtime, task_role_arn="foreign")},
         "runtime": {"runtime": replace(value.runtime, app_env="dev")},
+        "proxy-subnets": {
+            "network": replace(value.network, public_subnet_cidrs=("10.42.0.0/16",))
+        },
     }
     return replace(value, **changes.get(mutation, {}))
 
@@ -443,6 +446,7 @@ def test_workload_extends_actual_registry_registrations_without_changing_baselin
         "images",
         "role",
         "runtime",
+        "proxy-subnets",
         "descriptor",
         "descriptor-role",
     ],

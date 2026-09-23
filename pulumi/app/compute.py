@@ -63,6 +63,8 @@ class ComputePlane(pulumi.ComponentResource):
             validate_health_check_runtime(settings.runtime, settings.queues)
             if runtime_secrets is None:
                 require_application_secrets(settings)
+            else:
+                runtime_secrets.descriptor.validate_target(settings)
         self._runtime_secrets = runtime_secrets
         super().__init__("user-service-infrastructure:compute:Plane", name, None, opts)
 
@@ -481,7 +483,8 @@ class ComputePlane(pulumi.ComponentResource):
                 settings,
                 messaging,
                 include_worker_name=False,
-            ),
+            )
+            + self._trusted_proxy_environment(),
             secrets=self._common_secrets(data, runtime_secret_arns),
             port_mappings=[
                 {
@@ -491,6 +494,16 @@ class ComputePlane(pulumi.ComponentResource):
                 }
             ],
         )
+
+    def _trusted_proxy_environment(self) -> list[dict[str, pulumi.Input[str]]]:
+        """Format one validated list for Symfony and Caddy's distinct parsers."""
+        if self._runtime_secrets is None:
+            return []
+        cidrs = self._runtime_secrets.descriptor.trusted_proxy_cidrs
+        return [
+            {"name": "TRUSTED_PROXIES", "value": ",".join(cidrs)},
+            {"name": "TRUSTED_PROXY_CIDRS", "value": " ".join(cidrs)},
+        ]
 
     def _access_logs(
         self, settings: StackSettings

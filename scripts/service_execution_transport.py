@@ -198,7 +198,7 @@ class ServiceTransport:
 
     def __call__(self, command, *, env, check=True, capture_output=False, stdout=None):
         """Adapt the existing CommandContext protocol without ambient execution."""
-        del check, capture_output
+        del capture_output
         require(command[0] in {"pulumi", "aws"}, "worker-executable")
         self.sequence += 1
         argv = list(command)
@@ -225,11 +225,16 @@ class ServiceTransport:
                 if key in env
             },
         }
-        raw = run(argv, env=environment, cwd=self.work, child=child)
-        if saved is not None:
+        raw = run(argv, env=environment, cwd=self.work, child=child, check=check)
+        if saved is not None and (check or raw.returncode == 0):
             saved.write_bytes(private_read(Path(argv[argv.index("--save-plan") + 1])))
             saved.chmod(0o600)
-        result = subprocess.CompletedProcess(command, 0, raw.decode(), "")
+        if check:
+            result = subprocess.CompletedProcess(command, 0, raw.decode(), "")
+        else:
+            result = subprocess.CompletedProcess(
+                command, raw.returncode, raw.stdout.decode(), raw.stderr.decode()
+            )
         if stdout is not None:
             stdout.write(result.stdout)
         return result

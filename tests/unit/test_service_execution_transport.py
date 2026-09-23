@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -199,8 +200,9 @@ def test_commands_protect_inputs_and_strip_host_authority(
     if operation == "preview":
         arguments += ["--save-plan", str(saved)]
 
-    def run(argv, *, env, cwd, child):
+    def run(argv, *, env, cwd, child, check):
         calls.append("process")
+        assert check is True
         assert child and cwd == port.work and argv[0] == transport.PULUMI
         assert (
             not {
@@ -247,6 +249,33 @@ def test_commands_protect_inputs_and_strip_host_authority(
         config.read_bytes() == b"synthetic-config"
         and plan.read_bytes() == b"synthetic-plan"
     )
+
+
+def test_unchecked_command_preserves_private_failure_result(installed, monkeypatch):
+    port, _ = installed
+    saved = port.repo / ".artifacts" / "failed.plan"
+
+    def run(argv, *, env, cwd, child, check):
+        assert check is False and child is True and cwd == port.work
+        return subprocess.CompletedProcess(argv, 17, b"", b"private child error\n")
+
+    monkeypatch.setattr(transport, "run", run)
+    result = port(
+        [
+            "pulumi",
+            "-C",
+            str(port.repo / "pulumi"),
+            "preview",
+            "--save-plan",
+            str(saved),
+        ],
+        env={},
+        check=False,
+        capture_output=True,
+    )
+    assert result.returncode == 17
+    assert result.stdout == "" and result.stderr == "private child error\n"
+    assert not saved.exists()
 
 
 def test_native_metadata_dispatch_and_forbidden_tools(installed, monkeypatch):

@@ -69,6 +69,8 @@ def test_uid_scan_handles_exit_and_zombie(monkeypatch):
         def read_text(self):
             if self.value is None:
                 raise FileNotFoundError
+            if self.value == "gone":
+                raise ProcessLookupError
             return self.value
 
     entries = [
@@ -76,9 +78,27 @@ def test_uid_scan_handles_exit_and_zombie(monkeypatch):
         Status(2, "Uid:\t2000 2000 2000 2000\nState:\tS (sleeping)"),
         Status(3, "Uid:\t2000 2000 2000 2000\nState:\tZ (zombie)"),
         Status(4, None),
+        Status(5, "gone"),
     ]
     monkeypatch.setattr(process.Path, "glob", lambda *_: entries)
     assert process._child_pids() == [2]
+
+
+def test_unchecked_process_preserves_bounded_failure_result(tmp_path):
+    result = process.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            "import sys; print('out'); print('err', file=sys.stderr); "
+            "raise SystemExit(7)",
+        ],
+        env={},
+        cwd=tmp_path,
+        check=False,
+    )
+    assert result.returncode == 7
+    assert result.stdout == b"out\n" and result.stderr == b"err\n"
 
 
 def test_cleanup_requires_pid1_and_kills_detached(monkeypatch):
@@ -127,12 +147,20 @@ def test_child_dispatch_cleanup_on_all_returns(monkeypatch, tmp_path):
         return Child()
 
     monkeypatch.setattr(process.subprocess, "Popen", launch)
-    monkeypatch.setattr(process, "_streams", lambda *_: b"safe")
+    monkeypatch.setattr(
+        process,
+        "_streams",
+        lambda process, timeout, **_: subprocess.CompletedProcess(
+            [], 0, b"safe", b""
+        ),
+    )
     monkeypatch.setattr(process, "_stop_children", lambda: calls.append("cleanup"))
     assert process.run(["/trusted/tool"], env={}, cwd=tmp_path, child=True) == b"safe"
     assert calls == ["cleanup"]
     monkeypatch.setattr(
-        process, "_streams", lambda *_: (_ for _ in ()).throw(ValueError())
+        process,
+        "_streams",
+        lambda *_a, **_k: (_ for _ in ()).throw(ValueError()),
     )
     with pytest.raises(ValueError):
         process.run(["/trusted/tool"], env={}, cwd=tmp_path, child=True)

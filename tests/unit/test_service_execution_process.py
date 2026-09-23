@@ -150,9 +150,7 @@ def test_child_dispatch_cleanup_on_all_returns(monkeypatch, tmp_path):
     monkeypatch.setattr(
         process,
         "_streams",
-        lambda process, timeout, **_: subprocess.CompletedProcess(
-            [], 0, b"safe", b""
-        ),
+        lambda process, timeout, **_: subprocess.CompletedProcess([], 0, b"safe", b""),
     )
     monkeypatch.setattr(process, "_stop_children", lambda: calls.append("cleanup"))
     assert process.run(["/trusted/tool"], env={}, cwd=tmp_path, child=True) == b"safe"

@@ -334,7 +334,9 @@ assert_help_target() {
   assert_compose_env_file
   [[ "$output" == *"-e GITHUB_TOKEN"* ]]
   [[ "$output" != *"ghs_test_token"* ]]
-  [[ "$output" == *"pulumi_ci_guardrails.py destructive-gate"* ]]
+  [[ "$output" == *"pulumi_ci_guardrails.py destructive-gate .artifacts/pulumi-preview/*.json"* ]]
+  [[ "$output" != *"--event-path"* ]]
+  [[ "$output" != *"github-event.json"* ]]
 }
 
 @test "make test-iam-validation validates previewed IAM policies" {

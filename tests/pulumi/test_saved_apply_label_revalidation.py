@@ -40,6 +40,7 @@ def _apply_steps(path: Path, environment: str) -> tuple[list[dict], dict]:
 def test_apply_reuses_matching_same_run_preview(path: Path, environment: str) -> None:
     steps, apply = _apply_steps(path, environment)
     trusted_test = path.name == "self-deploy.yml" and environment == "test"
+    isolated_execution = path.name == "self-deploy.yml"
     artifact_root = ".trusted/.artifacts" if trusted_test else ".artifacts"
     downloads = [
         step
@@ -64,16 +65,13 @@ def test_apply_reuses_matching_same_run_preview(path: Path, environment: str) ->
     assert "pull_request_number" in preview["with"]["name"]
     assert set(preview["with"]) == {"name", "path"}  # Default transport is this run.
     assert steps.index(preview) < steps.index(apply)
-    if trusted_test:
+    if isolated_execution:
         run = apply["run"]
         assert f"{artifact_root}/pulumi-preview/*.json" in run
         assert 'test -s "${preview}"' in run
         assert f"rm -f {artifact_root}/pulumi-preview/pull-request-event.json" in run
-        assert ".trusted/scripts/poc_registry_runner.py" in run
-        assert " up-plan" in run
-        assert '--artifact-id "${POC_SOURCE_ARTIFACT_ID}"' in run
-        assert '--archive-sha256 "${POC_SOURCE_ARCHIVE_SHA256}"' in run
-        assert '--source-sha256 "${POC_SOURCE_SHA256}"' in run
+        assert ".trusted/scripts/service_execution_host.py" in run
+        assert run.rstrip().endswith('service_execution_host.py" execute')
         assert "make pulumi-up-plan" not in run
         assert "make test-destructive-diff" not in run
     else:
@@ -134,6 +132,7 @@ def test_rendered_apply_rechecks_current_labels(
 ) -> None:
     _, apply = _apply_steps(path, environment)
     trusted_test = path.name == "self-deploy.yml" and environment == "test"
+    isolated_execution = path.name == "self-deploy.yml"
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     subprocess.run(
         [
@@ -241,24 +240,19 @@ def test_rendered_apply_rechecks_current_labels(
         "assert sys.argv[1] == 'pulumi-up-plan'\n"
         "pathlib.Path('applied').touch()\n"
     )
-    if trusted_test:
-        trusted_runner = tmp_path / ".trusted/scripts/poc_registry_runner.py"
-        trusted_runner.parent.mkdir(parents=True)
-        trusted_runner.write_text(
+    if isolated_execution:
+        trusted_host = tmp_path / ".trusted/scripts/service_execution_host.py"
+        trusted_host.parent.mkdir(parents=True)
+        trusted_host.write_text(
             f"#!{sys.executable}\n"
-            "import os, pathlib, sys\n"
-            f"sys.path.insert(0, {str(ROOT / 'scripts')!r})\n"
-            "import run_pulumi_command as runner\n"
-            "assert sys.argv[1] == 'up-plan'\n"
-            "assert sys.argv[2:] == [\n"
-            "    '--artifact-id', os.environ['POC_SOURCE_ARTIFACT_ID'],\n"
-            "    '--archive-sha256', os.environ['POC_SOURCE_ARCHIVE_SHA256'],\n"
-            "    '--source-sha256', os.environ['POC_SOURCE_SHA256'],\n"
-            "]\n"
-            "preview_dir = pathlib.Path('.trusted/.artifacts/pulumi-preview')\n"
-            "previews = sorted(preview_dir.glob('*.json'))\n"
+            "import json, pathlib, sys\n"
+            "assert sys.argv[1:] == ['execute']\n"
+            "previews = sorted(\n"
+            "    row for root in ('.trusted/.artifacts', '.artifacts')\n"
+            "    for row in pathlib.Path(root, 'pulumi-preview').glob('*.json')\n"
+            ")\n"
             "assert len(previews) == 1\n"
-            "if runner._validate_safe_preview(previews[0]) is not None:\n"
+            "if json.loads(previews[0].read_text())['steps'][0]['op'] != 'same':\n"
             "    sys.exit(1)\n"
             "pathlib.Path('applied').touch()\n"
         )

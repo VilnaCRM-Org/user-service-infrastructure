@@ -27,7 +27,7 @@ def data():
         "protect": True,
         "inputs": {
             "secretString": {
-                gate.WIRE_SIGNATURE_KEY: gate.WIRE_SIGNATURE_VALUE,
+                gate.PULUMI_SECRET_SIGNATURE: gate.PULUMI_SECRET_SENTINEL,
                 "ciphertext": "synthetic",
             },
             "nested": [1, {"enabled": True}],
@@ -228,7 +228,7 @@ def test_rejects_incomplete_or_changed_native_evidence(data, mutation):
 
 def test_wrapped_plaintext_native_state_is_redacted_only_in_preview(data):
     data["prior_resources"][-1]["inputs"]["secretString"] = {
-        gate.WIRE_SIGNATURE_KEY: gate.WIRE_SIGNATURE_VALUE,
+        gate.PULUMI_SECRET_SIGNATURE: gate.PULUMI_SECRET_SENTINEL,
         "value": "synthetic-test-only",
     }
     gate.validate_no_change(**data)
@@ -244,8 +244,8 @@ def test_timestamps_do_not_change_ownership(data):
     [
         "raw-value",
         "[secret]",
-        {gate.WIRE_SIGNATURE_KEY: "wrong"},
-        {gate.WIRE_SIGNATURE_KEY: gate.WIRE_SIGNATURE_VALUE},
+        {gate.PULUMI_SECRET_SIGNATURE: "wrong"},
+        {gate.PULUMI_SECRET_SIGNATURE: gate.PULUMI_SECRET_SENTINEL},
     ],
 )
 def test_hidden_preview_cannot_hide_invalid_secret_checkpoint(data, value):

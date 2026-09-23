@@ -225,10 +225,11 @@ def test_scheduled_drift_uses_only_protected_main_read_roles():
             setup_index = next(
                 i
                 for i, step in enumerate(steps)
-                if step.get("uses") == "./.trusted/.github/actions/setup-poc-runtime"
+                if step.get("uses")
+                == "./.trusted/.github/actions/setup-service-execution"
             )
             assert steps.index(checkouts[0]) < setup_index < guard_index
-            for step, command in ((guard, "verify"), (steps[-1], "check")):
+            for step, command in ((guard, "verify"),):
                 assert shlex.split(step["run"].replace("\\\n", "")) == [
                     "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python",
                     "-I",
@@ -237,13 +238,24 @@ def test_scheduled_drift_uses_only_protected_main_read_roles():
                 ]
                 assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
                 assert "if" not in step and "continue-on-error" not in step
+            assert shlex.split(steps[-1]["run"].replace("\\\n", "")) == [
+                "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python",
+                "-I",
+                "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py",
+                "execute",
+            ]
             assert not any("make " in step.get("run", "") for step in steps)
         else:
             assert 'test "${GITHUB_EVENT_NAME}" = schedule' in guard["run"]
             assert 'test "${GITHUB_REF}" = refs/heads/main' in guard["run"]
             assert 'test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"' in guard["run"]
             assert guard["env"]["EXPECTED_SHA"] == "${{ github.sha }}"
-            assert steps[-1]["run"] == "make test-drift"
+            assert shlex.split(steps[-1]["run"].replace("\\\n", "")) == [
+                "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python",
+                "-I",
+                "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py",
+                "execute",
+            ]
         loader = steps[loader_index]["with"]
         assert loader["environment"] == (
             "prod-preview" if environment == "prod" else "test"
@@ -303,7 +315,7 @@ def test_state_operations_share_cross_workflow_stack_mutex():
         for name, job in workflow["jobs"].items()
         if any(
             operations.intersection(step.get("run", "").splitlines())
-            or "poc_registry_runner.py" in step.get("run", "")
+            or "service_execution_host.py" in step.get("run", "")
             or "poc_scheduled_registry_drift.py" in step.get("run", "")
             for step in job["steps"]
         )

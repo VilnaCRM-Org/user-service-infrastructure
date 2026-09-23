@@ -382,17 +382,9 @@ def _workload_image_matches(
     )
 
 
-def _materialize_workload_config(
-    config: dict[str, Any],
-    workload_config: dict[str, str] | None,
-    target: dict[str, str],
-) -> None:
-    """Add only the closed, public workload projection to the config file."""
-    if workload_config is None:
-        return
+def _validate_workload_shape(workload_config: dict[str, str]) -> None:
     _require(
-        type(workload_config) is dict
-        and set(workload_config) == WORKLOAD_CONFIG_KEYS
+        set(workload_config) == WORKLOAD_CONFIG_KEYS
         and all(type(key) is str for key in workload_config),
         "Workload configuration must contain exactly the generated public settings.",
     )
@@ -407,6 +399,11 @@ def _materialize_workload_config(
         ),
         "Workload configuration values must be bounded public strings.",
     )
+
+
+def _validate_workload_images(
+    workload_config: dict[str, str], target: dict[str, str]
+) -> None:
     account, region = target["accountId"], target["region"]
     web_repository = workload_config["user-service-infrastructure:webRepositoryName"]
     worker_repository = workload_config[
@@ -432,7 +429,21 @@ def _materialize_workload_config(
         ),
         "Workload image configuration differs from the protected target.",
     )
+
+
+def _validate_workload_projection(
+    workload_config: dict[str, str], target: dict[str, str]
+) -> None:
+    account, region = target["accountId"], target["region"]
     api_base_url = workload_config["user-service-infrastructure:apiBaseUrl"]
+    _validate_workload_runtime(workload_config, api_base_url)
+    _validate_workload_roles(workload_config, account, region)
+    _validate_workload_endpoints(workload_config, region)
+
+
+def _validate_workload_runtime(
+    workload_config: dict[str, str], api_base_url: str
+) -> None:
     _require(
         workload_config["user-service-infrastructure:deploymentMode"] == "managed"
         and workload_config["user-service-infrastructure:imageTagMutability"]
@@ -442,8 +453,16 @@ def _materialize_workload_config(
         and workload_config["user-service-infrastructure:apiUrl"] == api_base_url
         and re.fullmatch(r"https://[a-z0-9.-]+", api_base_url)
         and workload_config["user-service-infrastructure:corsAllowOrigin"]
-        == "^" + re.escape(api_base_url) + "$"
-        and all(
+        == "^" + re.escape(api_base_url) + "$",
+        "Workload configuration differs from the generated public projection.",
+    )
+
+
+def _validate_workload_roles(
+    workload_config: dict[str, str], account: str, region: str
+) -> None:
+    _require(
+        all(
             re.fullmatch(rf"arn:aws:iam::{account}:role/[A-Za-z0-9+=,.@_/-]+", role)
             for role in (
                 workload_config["user-service-infrastructure:executionRoleArn"],
@@ -461,8 +480,14 @@ def _materialize_workload_config(
                 r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+",
                 workload_config["user-service-infrastructure:mailSender"],
             )
-        )
-        and bool(
+        ),
+        "Workload configuration differs from the generated public projection.",
+    )
+
+
+def _validate_workload_endpoints(workload_config: dict[str, str], region: str) -> None:
+    _require(
+        bool(
             re.fullmatch(
                 r"/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*",
                 workload_config["user-service-infrastructure:healthCheckPath"],
@@ -475,6 +500,20 @@ def _materialize_workload_config(
         and workload_config["user-service-infrastructure:awsSqsPort"] == "443",
         "Workload configuration differs from the generated public projection.",
     )
+
+
+def _materialize_workload_config(
+    config: dict[str, Any],
+    workload_config: dict[str, str] | None,
+    target: dict[str, str],
+) -> None:
+    """Add only the closed, public workload projection to the config file."""
+    if workload_config is None:
+        return
+    _require(type(workload_config) is dict, "Workload configuration must be a mapping.")
+    _validate_workload_shape(workload_config)
+    _validate_workload_images(workload_config, target)
+    _validate_workload_projection(workload_config, target)
     settings = config.setdefault("config", {})
     _require(isinstance(settings, dict), "Stack config must be a mapping.")
     for key, value in workload_config.items():

@@ -15,8 +15,8 @@ import json
 from poc_registry_plan import GOAL_FIELDS, PREFIX, ROOT, STATE_FIELDS
 from service_execution_process import require
 
-WIRE_SIGNATURE_KEY = "4dabf18193072939515e22adb298388d"
-WIRE_SIGNATURE_VALUE = "1b47061264138c4ac30d75fd1eb44270"
+PULUMI_SECRET_SIGNATURE = "4dabf18193072939515e22adb298388d"
+PULUMI_SECRET_SENTINEL = "1b47061264138c4ac30d75fd1eb44270"
 GOAL_DEFAULTS = {
     "parent": "",
     "provider": "",
@@ -68,10 +68,13 @@ def _object(value, required, allowed):
 def _redacted(value):
     """Project authenticated secret wrappers to the CLI preview representation."""
     if type(value) is dict:
-        if value.get(WIRE_SIGNATURE_KEY) == WIRE_SIGNATURE_VALUE:
+        if value.get(PULUMI_SECRET_SIGNATURE) == PULUMI_SECRET_SENTINEL:
             _check(
                 set(value)
-                in ({WIRE_SIGNATURE_KEY, "value"}, {WIRE_SIGNATURE_KEY, "ciphertext"})
+                in (
+                    {PULUMI_SECRET_SIGNATURE, "value"},
+                    {PULUMI_SECRET_SIGNATURE, "ciphertext"},
+                )
             )
             return "[secret]"
         return {key: _redacted(item) for key, item in value.items()}
@@ -111,7 +114,7 @@ def _secret_inputs(row):
                 value = inputs[key]
                 _check(
                     type(value) is dict
-                    and value.get(WIRE_SIGNATURE_KEY) == WIRE_SIGNATURE_VALUE
+                    and value.get(PULUMI_SECRET_SIGNATURE) == PULUMI_SECRET_SENTINEL
                 )
 
 
@@ -158,6 +161,46 @@ def _goal(urn, plan, prior):
         _check(_same(diff.get("deletes", []), []))
 
 
+def _preview_step(step, inventory, seen):
+    _object(
+        step,
+        {"urn", "op", "oldState", "newState"},
+        {
+            "urn",
+            "op",
+            "provider",
+            "oldState",
+            "newState",
+            "detailedDiff",
+            "diffReasons",
+            "replaceReasons",
+        },
+    )
+    urn = step["urn"]
+    _check(urn in inventory and urn not in seen and step["op"] == "same")
+    seen.add(urn)
+    _check(
+        not any(
+            step.get(key) for key in ("detailedDiff", "diffReasons", "replaceReasons")
+        )
+    )
+    _check(step.get("provider", "") == inventory[urn].get("provider", ""))
+    expected = _redacted(
+        {
+            key: value
+            for key, value in inventory[urn].items()
+            if key not in OBSERVATION_FIELDS
+        }
+    )
+    for field in ("oldState", "newState"):
+        state = step[field]
+        _object(state, {"urn", "type", "custom"}, STATE_FIELDS)
+        actual = {
+            key: value for key, value in state.items() if key not in OBSERVATION_FIELDS
+        }
+        _check(_same(actual, expected))
+
+
 def _preview(preview, inventory):
     _object(
         preview,
@@ -172,46 +215,7 @@ def _preview(preview, inventory):
     _check(type(summary.get("same", 0)) is int and summary.get("same", 0) >= 0)
     seen = set()
     for step in preview["steps"]:
-        _object(
-            step,
-            {"urn", "op", "oldState", "newState"},
-            {
-                "urn",
-                "op",
-                "provider",
-                "oldState",
-                "newState",
-                "detailedDiff",
-                "diffReasons",
-                "replaceReasons",
-            },
-        )
-        urn = step["urn"]
-        _check(urn in inventory and urn not in seen and step["op"] == "same")
-        seen.add(urn)
-        _check(
-            not any(
-                step.get(key)
-                for key in ("detailedDiff", "diffReasons", "replaceReasons")
-            )
-        )
-        _check(step.get("provider", "") == inventory[urn].get("provider", ""))
-        expected = _redacted(
-            {
-                key: value
-                for key, value in inventory[urn].items()
-                if key not in OBSERVATION_FIELDS
-            }
-        )
-        for field in ("oldState", "newState"):
-            state = step[field]
-            _object(state, {"urn", "type", "custom"}, STATE_FIELDS)
-            actual = {
-                key: value
-                for key, value in state.items()
-                if key not in OBSERVATION_FIELDS
-            }
-            _check(_same(actual, expected))
+        _preview_step(step, inventory, seen)
 
 
 def validate_no_change(preview, *, saved_plan, prior_resources):

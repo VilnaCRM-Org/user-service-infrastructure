@@ -6,11 +6,14 @@ import os
 import shutil
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pulumi.automation as auto
 import pytest
+from app.access_logs import delivery_policy
 from app.compute import ComputePlane
+from app.data import _documentdb_url
 from app.environment import (
     NetworkSettings,
     _normalize_choice,
@@ -21,6 +24,7 @@ from app.environment import (
     build_resource_name,
     resolve_deployment_mode,
 )
+from app.runtime_secrets import RuntimeSecretsDescriptor
 from pulumi.automation.errors import RuntimeError as AutomationRuntimeError
 from pulumi.automation.events import EngineEvent
 
@@ -35,6 +39,37 @@ pytestmark = pytest.mark.skipif(
 def _stack_name() -> str:
     """Return a unique stack name for the test run."""
     return f"it-{uuid.uuid4().hex[:8]}"
+
+
+def test_managed_helpers_cover_log_policy_and_documentdb_descriptor() -> None:
+    """Exercise managed-only policy and connection URL construction locally."""
+    settings = SimpleNamespace(
+        stack_tag="integration-service-test", region="eu-central-1"
+    )
+    policy = delivery_policy(
+        "arn:aws:s3:::logs", "integration/alb", "123456789012", settings
+    )
+    assert "logdelivery.elasticloadbalancing.amazonaws.com" in policy
+    descriptor = SimpleNamespace(
+        database_name="service db", ca_bundle_path="/certs/ca.pem"
+    )
+    assert "service%20db" in _documentdb_url(
+        "user", "password", "db.example", 27017, descriptor
+    )
+
+
+def test_runtime_descriptor_properties_return_declared_values() -> None:
+    """Cover managed runtime values without resolving a cloud secret."""
+    descriptor = object.__new__(RuntimeSecretsDescriptor)
+    descriptor._contract = {
+        "region": "eu-central-1",
+        "account_id": "123456789012",
+        "workload": {
+            "runtime": {"database_name": "service", "ca_bundle_path": "/certs/ca.pem"}
+        },
+    }
+    assert descriptor.database_name == "service"
+    assert descriptor.ca_bundle_path == "/certs/ca.pem"
 
 
 def _copy_workdir(tmp_path: Path, *, name: str) -> Path:

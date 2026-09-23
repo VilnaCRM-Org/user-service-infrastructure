@@ -55,7 +55,9 @@ def data(captured):
         inputs = copy.deepcopy(row.get("inputs", {}))
         if "secretString" in inputs:
             inputs["secretString"] = {
-                gate.unchanged.WIRE_SIGNATURE_KEY: gate.unchanged.WIRE_SIGNATURE_VALUE,
+                gate.unchanged.PULUMI_SECRET_SIGNATURE: (
+                    gate.unchanged.PULUMI_SECRET_SENTINEL
+                ),
                 "value": "synthetic",
             }
         package = kind.split(":", 1)[0]

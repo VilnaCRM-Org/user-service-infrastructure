@@ -255,31 +255,33 @@ def _new_goal(urn, plan, graph, provider_id):
     inputs, outputs = registry._goal_values(goal, None)
     state = {key: value for key, value in goal.items() if key in registry.STATE_FIELDS}
     state.update(urn=urn, inputs=inputs, outputs=outputs)
-    package = kind.split(":", 1)[0]
-    expected = ""
-    if package in ("aws", "random", "tls"):
-        provider = (
-            registry.PROVIDER_URN
-            if package == "aws"
-            else next(
-                key
-                for key, row in graph.items()
-                if row[0] == f"pulumi:providers:{package}"
-            )
-        )
-        expected = (
-            provider + "::" + (provider_id if package == "aws" else registry.UNKNOWN)
-        )
-    _check(goal.get("provider", "") == expected)
-    if kind == "aws:secretsmanager/secretVersion:SecretVersion":
-        _check(set(inputs) == {"secretId", "secretString"})
-        _check(goal.get("additionalSecretOutputs") == SECRET_VERSION_OUTPUTS)
-        # Pulumi serializes an unresolved secret as the exact unknown sentinel.
-        # This is only a topology allowance, never approval of its future value.
-        if inputs["secretString"] != registry.UNKNOWN:
-            unchanged._secret_inputs(state)
+    _check(goal.get("provider", "") == _provider_value(kind, graph, provider_id))
+    _secret_version_goal(kind, goal, inputs, state)
     unchanged._redacted(inputs)
     return state
+
+
+def _provider_value(kind, graph, provider_id):
+    package = kind.split(":", 1)[0]
+    if package not in ("aws", "random", "tls"):
+        return ""
+    provider = (
+        registry.PROVIDER_URN
+        if package == "aws"
+        else next(
+            key for key, row in graph.items() if row[0] == f"pulumi:providers:{package}"
+        )
+    )
+    return provider + "::" + (provider_id if package == "aws" else registry.UNKNOWN)
+
+
+def _secret_version_goal(kind, goal, inputs, state):
+    if kind != "aws:secretsmanager/secretVersion:SecretVersion":
+        return
+    _check(set(inputs) == {"secretId", "secretString"})
+    _check(goal.get("additionalSecretOutputs") == SECRET_VERSION_OUTPUTS)
+    if inputs["secretString"] != registry.UNKNOWN:
+        unchanged._secret_inputs(state)
 
 
 def validate_first_workload_topology(
@@ -314,61 +316,65 @@ def validate_first_workload_topology(
     for row in desired.values():
         references = {key: value for key, value in row.items() if key != "provider"}
         unchanged._references(references, desired)
-    seen = set()
-    for step in preview["steps"]:
-        urn = step["urn"]
-        _check(urn in graph and urn not in seen)
-        seen.add(urn)
-        if urn in baseline:
-            continue
-        _check(step["op"] == "create" and step.get("oldState") is None)
-        new = step["newState"]
-        registry._object(new, {"urn", "type", "custom"}, registry.STATE_FIELDS)
-        _check(
-            not any(new.get(key) for key in unchanged.UNSAFE_STATE if key != "aliases")
-        )
-        aliases = new.get("aliases", [])
-        expected_aliases = (
-            [urn.replace(graph[urn][0] + "::", SDK_ALIASES[graph[urn][0]] + "::")]
-            if graph[urn][0] in SDK_ALIASES
-            else []
-        )
-        _check(not aliases or aliases == expected_aliases)
-        _check(new.get("id", "") in ("", registry.UNKNOWN))
-        for field in (
-            "urn",
-            "type",
-            "custom",
-            "parent",
-            "provider",
-            "protect",
-            "dependencies",
-            "propertyDependencies",
-            "additionalSecretOutputs",
-        ):
-            default = unchanged.GOAL_DEFAULTS.get(field, "")
-            _check(
-                unchanged._same(
-                    new.get(field, default), desired[urn].get(field, default)
-                )
-            )
-        _check(
-            unchanged._same(
-                new.get("inputs", {}), unchanged._redacted(desired[urn]["inputs"])
-            )
-        )
-        _check(
-            not any(
-                step.get(key)
-                for key in ("detailedDiff", "diffReasons", "replaceReasons")
-            )
-        )
+    seen = _validate_workload_steps(preview["steps"], baseline, graph, desired)
     required = {
         urn
         for urn in graph.keys() - baseline.keys()
         if not graph[urn][0].startswith("pulumi:providers:")
     }
     _check(required <= seen)
+
+
+def _validate_workload_steps(steps, baseline, graph, desired):
+    seen = set()
+    for step in steps:
+        urn = step["urn"]
+        _check(urn in graph and urn not in seen)
+        seen.add(urn)
+        if urn in baseline:
+            continue
+        _validate_workload_step(step, urn, graph, desired)
+    return seen
+
+
+def _validate_workload_step(step, urn, graph, desired):
+    _check(step["op"] == "create" and step.get("oldState") is None)
+    new = step["newState"]
+    registry._object(new, {"urn", "type", "custom"}, registry.STATE_FIELDS)
+    _check(not any(new.get(key) for key in unchanged.UNSAFE_STATE if key != "aliases"))
+    aliases = new.get("aliases", [])
+    expected_aliases = (
+        [urn.replace(graph[urn][0] + "::", SDK_ALIASES[graph[urn][0]] + "::")]
+        if graph[urn][0] in SDK_ALIASES
+        else []
+    )
+    _check(not aliases or aliases == expected_aliases)
+    _check(new.get("id", "") in ("", registry.UNKNOWN))
+    for field in (
+        "urn",
+        "type",
+        "custom",
+        "parent",
+        "provider",
+        "protect",
+        "dependencies",
+        "propertyDependencies",
+        "additionalSecretOutputs",
+    ):
+        default = unchanged.GOAL_DEFAULTS.get(field, "")
+        _check(
+            unchanged._same(new.get(field, default), desired[urn].get(field, default))
+        )
+    _check(
+        unchanged._same(
+            new.get("inputs", {}), unchanged._redacted(desired[urn]["inputs"])
+        )
+    )
+    _check(
+        not any(
+            step.get(key) for key in ("detailedDiff", "diffReasons", "replaceReasons")
+        )
+    )
 
 
 def _baseline_steps(preview, prior):

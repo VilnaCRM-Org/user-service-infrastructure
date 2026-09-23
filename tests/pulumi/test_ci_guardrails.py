@@ -287,8 +287,8 @@ def test_test_controller_remains_fail_closed(tmp_path):
     assert result.returncode == 1
     assert "no AWS role is assumed" in result.stderr
     disabled = {
-        "poc_prepare_source": "${{ false && always() }}",
-        "test_preview": "${{ false && always() }}",
+        "poc_prepare_source": "${{ false && success() }}",
+        "test_preview": "${{ false && success() }}",
         "test_apply": "${{ false && needs.preflight.outputs.command == 'up' }}",
         "test_post_apply_drift": (
             "${{ false && needs.preflight.outputs.command == 'up' }}"

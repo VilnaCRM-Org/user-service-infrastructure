@@ -320,11 +320,26 @@ def test_source_adapter_main_rechecks_comment_with_installed_collector(
     change: str, monkeypatch, capsys
 ) -> None:
     """The real preflight collector receives a fresh bound comment after fetch."""
+    fetched = []
+    base_transport = live_collect_transport(comment_change=change)
+
+    def gh(endpoint: str, *arguments: str):
+        if "/contents/" in endpoint:
+            fetched.append(endpoint)
+        return base_transport(endpoint, *arguments)
+
+    class FixedClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 9, 9, 0, 1, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(preflight, "datetime", FixedClock)
     monkeypatch.setattr(preflight, "read_request", request)
     monkeypatch.setattr(preflight, "collect_intake_evidence", lambda _: intake())
-    monkeypatch.setattr(preflight, "gh", live_collect_transport(comment_change=change))
+    monkeypatch.setattr(preflight, "gh", gh)
 
     assert adapter.main([]) == 1
+    assert fetched, "failure occurred before the fixed contract fetch"
 
     captured = capsys.readouterr()
     assert captured.out == ""

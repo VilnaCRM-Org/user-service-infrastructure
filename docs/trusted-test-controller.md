@@ -5,6 +5,9 @@ source/TEST jobs have unconditional false guards. Local native graph, saved-plan
 replay, and aggregate coverage gates pass. Independent review and a live TEST
 capability/backend audit remain required before enabling any job.
 
+Source preparation and preview also require successful dependencies, so removing
+their disabled flag alone cannot bypass a failed preflight.
+
 This candidate replaces legacy PR execution with a fixed TEST registry and SES/DNS
 graph. It is extracted from PR #19 commit
 `01fc0af038241bbb78225c1697078902e139fb25` onto stage-one boundary commit

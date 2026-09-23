@@ -34,6 +34,7 @@ def _triggers(workflow: dict) -> dict:
 def test_pyproject_declares_quality_tooling_contracts() -> None:
     """Keep the repo-local analyzer configuration explicit and discoverable."""
     data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    assert "tomli>=2.0,<3; python_version < '3.11'" in data["project"]["dependencies"]
     dev_dependencies = set(data["dependency-groups"]["dev"])
     ruff = data["tool"]["ruff"]["lint"]
     deptry = data["tool"]["deptry"]

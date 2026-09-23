@@ -16,6 +16,7 @@ dependencies = [
     "pulumi-random==4.19.2",
     "pulumi-tls==5.3.1",
     "pyyaml>=6,<7",
+    "tomli>=2.0,<3; python_version < '3.11'",
 ]
 
 [dependency-groups]

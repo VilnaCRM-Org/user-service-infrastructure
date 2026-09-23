@@ -65,7 +65,11 @@ def test_pyproject_declares_quality_tooling_contracts() -> None:
     } <= set(deptry["known_first_party"])
     assert deptry["package_module_name_map"]["pyyaml"] == ["yaml"]
     assert deptry["package_module_name_map"]["pulumi-policy"] == ["pulumi_policy"]
-    assert deptry["per_rule_ignores"]["DEP002"] == ["pulumi-aws"]
+    assert deptry["per_rule_ignores"]["DEP002"] == [
+        "pulumi-aws",
+        "pulumi-random",
+        "pulumi-tls",
+    ]
     assert importlinter["root_packages"] == ["app", "policy"]
     assert importlinter["include_external_packages"] is True
     contracts = {contract["name"]: contract for contract in importlinter["contracts"]}
@@ -89,6 +93,9 @@ def test_pyproject_declares_quality_tooling_contracts() -> None:
     ] == ["app.environment"]
     assert contracts["Pulumi app layering remains one-way"]["containers"] == ["app"]
     assert contracts["Pulumi app layering remains one-way"]["layers"] == [
+        "registry_phase",
+        "registry",
+        "mail_identity",
         "environment",
         "guardrails",
     ]

@@ -1,0 +1,13 @@
+name: Set up isolated service execution
+description: Build installed-main runtime before credentials; never build PR source.
+runs:
+  using: composite
+  steps:
+    - uses: ./.trusted/.github/actions/setup-poc-runtime
+    - name: Check compatible source and build trusted worker
+      shell: bash
+      run: |
+        "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+          "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" prepare
+        "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+          "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" build

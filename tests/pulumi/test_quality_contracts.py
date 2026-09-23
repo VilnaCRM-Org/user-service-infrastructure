@@ -34,6 +34,7 @@ def _triggers(workflow: dict) -> dict:
 def test_pyproject_declares_quality_tooling_contracts() -> None:
     """Keep the repo-local analyzer configuration explicit and discoverable."""
     data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    assert "tomli>=2.0,<3; python_version < '3.11'" in data["project"]["dependencies"]
     dev_dependencies = set(data["dependency-groups"]["dev"])
     ruff = data["tool"]["ruff"]["lint"]
     deptry = data["tool"]["deptry"]
@@ -65,7 +66,11 @@ def test_pyproject_declares_quality_tooling_contracts() -> None:
     } <= set(deptry["known_first_party"])
     assert deptry["package_module_name_map"]["pyyaml"] == ["yaml"]
     assert deptry["package_module_name_map"]["pulumi-policy"] == ["pulumi_policy"]
-    assert deptry["per_rule_ignores"]["DEP002"] == ["pulumi-aws"]
+    assert deptry["per_rule_ignores"]["DEP002"] == [
+        "pulumi-aws",
+        "pulumi-random",
+        "pulumi-tls",
+    ]
     assert importlinter["root_packages"] == ["app", "policy"]
     assert importlinter["include_external_packages"] is True
     contracts = {contract["name"]: contract for contract in importlinter["contracts"]}
@@ -89,6 +94,9 @@ def test_pyproject_declares_quality_tooling_contracts() -> None:
     ] == ["app.environment"]
     assert contracts["Pulumi app layering remains one-way"]["containers"] == ["app"]
     assert contracts["Pulumi app layering remains one-way"]["layers"] == [
+        "registry_phase",
+        "registry",
+        "mail_identity",
         "environment",
         "guardrails",
     ]

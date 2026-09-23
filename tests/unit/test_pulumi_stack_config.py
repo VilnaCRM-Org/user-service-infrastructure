@@ -77,7 +77,7 @@ def setup(monkeypatch, tmp_path):
                 Path(argv[argv.index("--save-plan") + 1]).write_text(
                     "encrypted-plan-fixture"
                 )
-                kwargs["stdout"].write("{}")
+                kwargs["stdout"].write('{"steps": []}')
             return subprocess.CompletedProcess(argv, 0, "", "")
         return subprocess.CompletedProcess(argv, 0, json.dumps(payload), "")
 
@@ -99,8 +99,11 @@ def setup(monkeypatch, tmp_path):
     return module, command, context, values, calls, configurations
 
 
-def test_private_config_uses_existing_key_and_is_removed(setup):
+@pytest.mark.parametrize("poc", [False, True])
+def test_private_config_uses_existing_key_and_is_removed(setup, poc):
     module, command, context, values, calls, _ = setup
+    if poc:
+        context = replace(context, registry_plan_gate=lambda *_: None)
     original = (context.pulumi_dir / "Pulumi.test.yaml").read_bytes()
     with module.prepared_stack_configuration(context, "test") as prepared:
         path = prepared.config_file
@@ -108,6 +111,18 @@ def test_private_config_uses_existing_key_and_is_removed(setup):
         assert path.parent.stat().st_mode & 0o777 == 0o700
         assert context.root_dir not in path.parents
         config = yaml.safe_load(path.read_text())
+        expected = {"example:value": "safe"}
+        if poc:
+            expected.update(
+                {
+                    "aws:region": "eu-central-1",
+                    "aws:allowedAccountIds": ["123456789012"],
+                    "aws:skipCredentialsValidation": False,
+                    "aws:skipRegionValidation": False,
+                    "aws:skipRequestingAccountId": False,
+                }
+            )
+        assert config["config"] == expected
         assert (
             config["encryptedkey"]
             == values["export"]["deployment"]["secrets_providers"]["state"][
@@ -136,6 +151,61 @@ def test_private_config_cleanup_on_operation_failure(setup):
             path = prepared.config_file
             raise RuntimeError("operation failed")
     assert not path.exists()
+
+
+@pytest.mark.parametrize("hardened", [False, True])
+def test_ordinary_drift_preserves_committed_provider_settings(setup, hardened):
+    """Drift neither adds hardening to a legacy stack nor removes committed pins."""
+    _, command, context, values, calls, configurations = setup
+    path = context.pulumi_dir / "Pulumi.test.yaml"
+    document = yaml.safe_load(path.read_text())
+    settings = document["config"]
+    settings["aws:region"] = "eu-central-1"
+    provider_inputs = {
+        "__internal": {},
+        "region": "eu-central-1",
+        "skipCredentialsValidation": "false",
+        "skipRegionValidation": "true",
+        "version": "7.23.0",
+    }
+    if hardened:
+        settings.update(
+            {
+                "aws:allowedAccountIds": ["123456789012"],
+                "aws:skipCredentialsValidation": False,
+                "aws:skipRegionValidation": False,
+                "aws:skipRequestingAccountId": False,
+            }
+        )
+        provider_inputs.update(
+            allowedAccountIds='["123456789012"]',
+            skipRegionValidation="false",
+            skipRequestingAccountId="false",
+        )
+    path.write_text(yaml.safe_dump(document))
+    original = path.read_bytes()
+    values["export"]["deployment"]["resources"].append(
+        {
+            "urn": "urn:pulumi:test::example::pulumi:providers:aws::default_7_23_0",
+            "type": "pulumi:providers:aws",
+            "inputs": provider_inputs,
+        }
+    )
+
+    assert command._run_regular_command("drift", context, ["test"]) == 0
+
+    assert len(configurations) == 1
+    assert configurations[0]["config"] == settings
+    assert path.read_bytes() == original
+    invocation = next(call for call in calls if "--expect-no-changes" in call)
+    assert "--refresh" in invocation and "preview" in invocation
+    assert [call[1] for call in calls if call[0] == "aws"] == [
+        "sts",
+        "s3api",
+        "kms",
+        "s3api",
+    ]
+    assert not any("up" in call or "import" in call for call in calls)
 
 
 def test_file_backend_preserves_local_convenience(setup):
@@ -577,3 +647,215 @@ def test_malformed_uri_uses_guarded_stack_error(setup, field, value):
         with module.prepared_stack_configuration(broken, "test"):
             pytest.fail("Malformed URI reached program execution")
     assert not any("encrypt" in call or "generate-data-key" in call for call in calls)
+
+
+@pytest.mark.parametrize("namespace", ["aws:", "aws:config:"])
+@pytest.mark.parametrize("encoded", [False, True])
+@pytest.mark.parametrize("poc", [False, True])
+def test_safe_provider_aliases_are_canonicalized_only_for_poc(
+    setup, namespace, encoded, poc
+):
+    """PoC canonicalizes validated settings; ordinary commands preserve them."""
+    module, _, context, *_ = setup
+    if poc:
+        context = replace(context, registry_plan_gate=lambda *_: None)
+    path = context.pulumi_dir / "Pulumi.test.yaml"
+    document = yaml.safe_load(path.read_text())
+    document["config"].update(
+        {
+            f"{namespace}region": "eu-central-1",
+            f"{namespace}allowedAccountIds": '["123456789012"]'
+            if encoded
+            else ["123456789012"],
+            **{
+                f"{namespace}{key}": "false" if encoded else False
+                for key in (
+                    "skipCredentialsValidation",
+                    "skipRegionValidation",
+                    "skipRequestingAccountId",
+                )
+            },
+        }
+    )
+    # Equal declarations in both namespaces may coexist, but only canonical keys emit.
+    document["config"]["aws:region"] = "eu-central-1"
+    path.write_text(yaml.safe_dump(document))
+    original = path.read_bytes()
+    with module.prepared_stack_configuration(context, "test") as prepared:
+        settings = yaml.safe_load(prepared.config_file.read_text())["config"]
+        expected = {
+            "example:value": "safe",
+            "aws:region": "eu-central-1",
+            "aws:allowedAccountIds": ["123456789012"],
+            "aws:skipCredentialsValidation": False,
+            "aws:skipRegionValidation": False,
+            "aws:skipRequestingAccountId": False,
+        }
+        assert settings == (expected if poc else document["config"])
+        assert prepared.provider_identity["stackConfigSha256"] == module._digest(
+            yaml.safe_load(prepared.config_file.read_text())
+        )
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("namespace", ["aws:", "aws:config:"])
+@pytest.mark.parametrize("poc", [False, True])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("region", "us-east-1"),
+        ("region", None),
+        ("allowedAccountIds", []),
+        ("allowedAccountIds", ["999999999999"]),
+        ("allowedAccountIds", ["123456789012", "999999999999"]),
+        ("allowedAccountIds", [123456789012]),
+        ("allowedAccountIds", "not-json"),
+        ("allowedAccountIds", {"secure": "opaque"}),
+        ("skipCredentialsValidation", True),
+        ("skipRegionValidation", "true"),
+        ("skipRequestingAccountId", 0),
+        ("skipCredentialsValidation", None),
+        ("profile", "other"),
+        ("endpoints", []),
+        ("assumeRole", {}),
+        ("assumeRoles", []),
+        ("accessKey", "synthetic"),
+        ("secretKey", "synthetic"),
+        ("token", "synthetic"),
+        ("skipMetadataApiCheck", False),
+        ("defaultTags", {}),
+        ("forbiddenAccountIds", []),
+    ],
+)
+def test_unsafe_or_unrecognized_aws_config_never_emits_child(
+    setup, namespace, poc, field, value
+):
+    """Reject explicit redirects and flags instead of silently overwriting them."""
+    module, _, context, _, calls, _ = setup
+    if poc:
+        context = replace(context, registry_plan_gate=lambda *_: None)
+    path = context.pulumi_dir / "Pulumi.test.yaml"
+    document = yaml.safe_load(path.read_text())
+    document["config"].update(
+        {"aws:region": "eu-central-1", f"{namespace}{field}": value}
+    )
+    path.write_text(yaml.safe_dump(document))
+    original = path.read_bytes()
+    with pytest.raises(module.StackConfigError, match="AWS provider"):
+        with module.prepared_stack_configuration(context, "test"):
+            pytest.fail("Unsafe configuration emitted")
+    assert path.read_bytes() == original
+    assert all("--config-file" not in call for call in calls)
+
+
+@pytest.mark.parametrize(
+    "settings", [None, [], "invalid", {12: "value"}, {"aws": {}}, {"aws:config": {}}]
+)
+def test_provider_config_rejects_ambiguous_namespace_shapes(setup, settings):
+    """Nested aliases and malformed config maps cannot conceal provider options."""
+    module, _, context, *_ = setup
+    path = context.pulumi_dir / "Pulumi.test.yaml"
+    document = yaml.safe_load(path.read_text())
+    document["config"] = settings
+    path.write_text(yaml.safe_dump(document))
+    with pytest.raises(module.StackConfigError):
+        with module.prepared_stack_configuration(context, "test"):
+            pytest.fail("Ambiguous configuration emitted")
+
+
+@pytest.mark.parametrize(
+    "yaml_settings",
+    [
+        "  aws:region: us-east-1\n  aws:region: eu-central-1\n",
+        "  aws:skipCredentialsValidation: true\n"
+        "  aws:skipCredentialsValidation: false\n",
+        "  aws:region: eu-central-1\n  aws:config:region: us-east-1\n",
+    ],
+)
+def test_duplicate_or_conflicting_aliases_do_not_hide_unsafe_value(
+    setup, yaml_settings
+):
+    """Both same-key and canonical/legacy-key conflicts fail before emission."""
+    module, _, context, *_ = setup
+    (context.pulumi_dir / "Pulumi.test.yaml").write_text("config:\n" + yaml_settings)
+    with pytest.raises(module.StackConfigError):
+        with module.prepared_stack_configuration(context, "test"):
+            pytest.fail("Conflicting provider settings emitted")
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"AWS_REGION": "", "AWS_DEFAULT_REGION": ""},
+        {"AWS_REGION": "eu-central-1", "AWS_DEFAULT_REGION": "us-east-1"},
+        {"AWS_REGION": "eu-central-1\n"},
+        {"AWS_REGION": "not-a-region"},
+    ],
+)
+def test_provider_region_pin_rejects_missing_malformed_or_conflicting_environment(
+    setup, change
+):
+    """Provider and KMS regions use one unambiguous trusted target."""
+    module, _, context, _, calls, _ = setup
+    with pytest.raises(module.StackConfigError, match="region configuration"):
+        with module.prepared_stack_configuration(
+            replace(context, env={**context.env, **change}), "test"
+        ):
+            pytest.fail("Invalid region reached execution")
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "stack,account,region",
+    [
+        ("test", "891377212104", "eu-central-1"),
+        ("prod", "999999999999", "us-east-1"),
+    ],
+)
+def test_provider_pins_derive_each_trusted_stack_target(setup, stack, account, region):
+    """The shared helper derives TEST and PROD pins without a global PoC override."""
+    module, _, context, values, *_ = setup
+    provider = f"awskms://alias/example?region={region}"
+    values["sts"]["Account"] = account
+    values["kms"]["KeyMetadata"]["Arn"] = f"arn:aws:kms:{region}:{account}:key/existing"
+    deployment = values["export"]["deployment"]
+    deployment["resources"][0]["urn"] = (
+        f"urn:pulumi:{stack}::example::pulumi:pulumi:Stack::example-{stack}"
+    )
+    deployment["secrets_providers"]["state"]["url"] = provider
+    (context.pulumi_dir / f"Pulumi.{stack}.yaml").write_text(
+        "config:\n  example:value: safe\n"
+    )
+    target = replace(
+        context,
+        registry_plan_gate=lambda *_: None,
+        secrets_provider=provider,
+        env={
+            **context.env,
+            "AWS_ACCOUNT_ID": account,
+            "AWS_REGION": region,
+        },
+    )
+    with module.prepared_stack_configuration(target, stack) as prepared:
+        settings = yaml.safe_load(prepared.config_file.read_text())["config"]
+        assert settings["aws:region"] == region
+        assert settings["aws:allowedAccountIds"] == [account]
+        assert all(
+            settings[f"aws:{flag}"] is False
+            for flag in (
+                "skipCredentialsValidation",
+                "skipRegionValidation",
+                "skipRequestingAccountId",
+            )
+        )
+
+
+def test_duplicate_aware_loader_preserves_safe_yaml_constructors(setup):
+    """Custom duplicate checking never enables Python object construction."""
+    module, _, context, *_ = setup
+    (context.pulumi_dir / "Pulumi.test.yaml").write_text(
+        "config: !!python/object/apply:builtins.dict []\n"
+    )
+    with pytest.raises(module.StackConfigError, match="configuration YAML"):
+        with module.prepared_stack_configuration(context, "test"):
+            pytest.fail("Unsafe YAML constructor accepted")

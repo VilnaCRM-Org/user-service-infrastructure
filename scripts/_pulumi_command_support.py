@@ -22,6 +22,9 @@ class CommandContext:
     runner: Callable[..., Any] = run
     config_file: Path | None = None
     provider_identity: dict[str, Any] | None = None
+    registry_plan_gate: Callable[[CommandContext, str, Path, Path], None] | None = None
+    prepare_policy_pack: Callable[[CommandContext], None] | None = None
+    summarize_preview: Callable[[Path, Path], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -173,6 +176,8 @@ def _pulumi_command(context: CommandContext, request: StackCommand) -> list[str]
         "--non-interactive",
         *invocation.static_args,
     ]
+    if request.command == "plan" and context.registry_plan_gate is not None:
+        command.append("--show-sames")
     include_policy_pack = (
         invocation.include_policy_pack
         if request.include_policy_pack is None

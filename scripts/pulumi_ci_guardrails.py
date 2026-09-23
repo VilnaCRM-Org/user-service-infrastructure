@@ -28,7 +28,6 @@ CRITICAL_TYPE_PATTERNS = (
     "aws:route53/",
     "aws:eks/",
 )
-DESTRUCTIVE_OVERRIDE_LABEL = "allow-destructive-infra-change"
 FAIL_FINDING_TYPES = frozenset({"ERROR", "SECURITY_WARNING"})
 COST_IMPACT_OPS = frozenset({"create", "replace"})
 COST_DRIVER_TYPE_PATTERNS = (
@@ -276,25 +275,6 @@ def _inline_policy_inputs(
     return inputs
 
 
-def load_destructive_override(event_path: str | None) -> bool:
-    """Return whether the current GitHub event opts into destructive changes."""
-    if not event_path:
-        return False
-
-    event = json.loads(Path(event_path).read_text(encoding="utf-8"))
-    pull_request = event.get("pull_request")
-    if not isinstance(pull_request, dict):
-        return False
-
-    labels = pull_request.get("labels", [])
-    if not isinstance(labels, list):
-        return False
-    return any(
-        isinstance(label, dict) and label.get("name") == DESTRUCTIVE_OVERRIDE_LABEL
-        for label in labels
-    )
-
-
 def validate_iam_inputs(inputs: Sequence[dict[str, str]]) -> list[str]:
     """Validate IAM policy documents with AWS IAM Access Analyzer."""
     failures: list[str] = []
@@ -495,10 +475,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
     destructive_parser = subparsers.add_parser("destructive-gate")
     destructive_parser.add_argument("preview_files", nargs="+", type=Path)
-    destructive_parser.add_argument(
-        "--event-path",
-        default=os.environ.get("GITHUB_EVENT_PATH"),
-    )
 
     iam_inputs_parser = subparsers.add_parser("iam-inputs")
     iam_inputs_parser.add_argument("preview_files", nargs="+", type=Path)
@@ -526,21 +502,18 @@ def _run_summarize(preview_files: Sequence[Path]) -> int:
     return 0
 
 
-def _run_destructive_gate(
-    preview_files: Sequence[Path], *, event_path: str | None
-) -> int:
-    """Fail unless dangerous preview steps were explicitly approved."""
-    override = load_destructive_override(event_path)
+def _run_destructive_gate(preview_files: Sequence[Path]) -> int:
+    """Reject every dangerous preview step without a label exception."""
     findings: list[str] = []
     for preview_file in preview_input_files(preview_files):
         for step in find_destructive_steps(preview_steps(load_preview(preview_file))):
             findings.append(f"{step.get('op')} {step_resource_type(step)}")
 
-    if findings and not override:
+    if findings:
         for finding in findings:
             print(f"destructive change blocked: {finding}", file=sys.stderr)
         print(
-            f"Apply the `{DESTRUCTIVE_OVERRIDE_LABEL}` label only after manual review.",
+            "Revise the plan to preserve protected resources.",
             file=sys.stderr,
         )
         return 1
@@ -634,7 +607,7 @@ def cli(argv: Sequence[str] | None = None) -> int:
         return _run_summarize(args.preview_files)
 
     if args.command == "destructive-gate":
-        return _run_destructive_gate(args.preview_files, event_path=args.event_path)
+        return _run_destructive_gate(args.preview_files)
 
     if args.command == "iam-inputs":
         write_iam_inputs(args.output, preview_paths=args.preview_files)

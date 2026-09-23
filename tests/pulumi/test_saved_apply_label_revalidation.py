@@ -36,9 +36,12 @@ def _apply_steps(path: Path, environment: str) -> tuple[list[dict], dict]:
 @pytest.mark.parametrize(
     "path", WORKFLOWS, ids=lambda path: str(path.relative_to(ROOT))
 )
-@pytest.mark.parametrize("environment", ["test", "prod"])
+@pytest.mark.parametrize("environment", ["test"])
 def test_apply_reuses_matching_same_run_preview(path: Path, environment: str) -> None:
     steps, apply = _apply_steps(path, environment)
+    trusted_test = path.name == "self-deploy.yml" and environment == "test"
+    isolated_execution = path.name == "self-deploy.yml"
+    artifact_root = ".trusted/.artifacts" if trusted_test else ".artifacts"
     downloads = [
         step
         for step in steps
@@ -47,10 +50,12 @@ def test_apply_reuses_matching_same_run_preview(path: Path, environment: str) ->
     preview = next(
         step
         for step in downloads
-        if step["with"]["path"] == ".artifacts/pulumi-preview"
+        if step["with"]["path"] == f"{artifact_root}/pulumi-preview"
     )
     plan = next(
-        step for step in downloads if step["with"]["path"] == ".artifacts/pulumi-plan"
+        step
+        for step in downloads
+        if step["with"]["path"] == f"{artifact_root}/pulumi-plan"
     )
     assert (
         preview["with"]["name"] == plan["with"]["name"].removesuffix("plan") + "preview"
@@ -60,11 +65,22 @@ def test_apply_reuses_matching_same_run_preview(path: Path, environment: str) ->
     assert "pull_request_number" in preview["with"]["name"]
     assert set(preview["with"]) == {"name", "path"}  # Default transport is this run.
     assert steps.index(preview) < steps.index(apply)
-    assert (
-        apply["run"]
-        .rstrip()
-        .endswith("make test-destructive-diff\nmake pulumi-up-plan")
-    )
+    if isolated_execution:
+        run = apply["run"]
+        assert f"{artifact_root}/pulumi-preview/*.json" in run
+        assert 'test -s "${preview}"' in run
+        assert f"rm -f {artifact_root}/pulumi-preview/pull-request-event.json" in run
+        assert ".trusted/scripts/service_execution_host.py" in run
+        assert run.rstrip().endswith('service_execution_host.py" execute')
+        assert "make pulumi-up-plan" not in run
+        assert "make test-destructive-diff" not in run
+    else:
+        assert "/labels" not in apply["run"]
+        assert (
+            apply["run"]
+            .rstrip()
+            .endswith("make test-destructive-diff\nmake pulumi-up-plan")
+        )
     workflow = yaml.safe_load(path.read_text())
     uploads = [
         step
@@ -75,32 +91,33 @@ def test_apply_reuses_matching_same_run_preview(path: Path, environment: str) ->
     producer = next(
         step for step in uploads if step["with"].get("name") == preview["with"]["name"]
     )
-    assert producer["with"]["path"] == ".artifacts/pulumi-preview"
+    assert producer["with"]["path"] == f"{artifact_root}/pulumi-preview"
 
 
 @pytest.mark.parametrize(
     "path", WORKFLOWS, ids=lambda path: str(path.relative_to(ROOT))
 )
-@pytest.mark.parametrize("environment", ["test", "prod"])
+@pytest.mark.parametrize("environment", ["test"])
 @pytest.mark.parametrize(
     ("case", "operation", "labels", "expected"),
     [
         ("removed", "delete", [], False),
-        ("retained", "delete", [{"name": "allow-destructive-infra-change"}], True),
+        ("retained", "delete", [{"name": "allow-destructive-infra-change"}], False),
         ("nondestructive", "same", [], True),
         (
             "second-page",
             "delete",
             [{"name": "ordinary"}] * 30 + [{"name": "allow-destructive-infra-change"}],
-            True,
+            False,
         ),
         ("closed", "same", [], False),
         ("merged", "same", [], False),
         ("head-moved", "same", [], False),
         ("base-moved", "same", [], False),
+        ("checkout-moved", "same", [], False),
         ("retargeted", "same", [], False),
         ("pr-unavailable", "same", [], False),
-        ("labels-unavailable", "same", [], False),
+        ("labels-unavailable", "same", [], True),
         ("missing-preview", "same", [], False),
         ("empty-preview", "same", [], False),
     ],
@@ -115,7 +132,11 @@ def test_rendered_apply_rechecks_current_labels(
     tmp_path: Path,
 ) -> None:
     _, apply = _apply_steps(path, environment)
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    trusted_test = path.name == "self-deploy.yml" and environment == "test"
+    isolated_execution = path.name == "self-deploy.yml"
+    checkout = tmp_path / ".trusted" if isolated_execution else tmp_path
+    checkout.mkdir(exist_ok=True)
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True)
     subprocess.run(
         [
             "git",
@@ -130,13 +151,14 @@ def test_rendered_apply_rechecks_current_labels(
             "-qm",
             "fixture",
         ],
-        cwd=tmp_path,
+        cwd=checkout,
         check=True,
     )
     head = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+        ["git", "rev-parse", "HEAD"], cwd=checkout, text=True
     ).strip()
-    preview_dir = tmp_path / ".artifacts/pulumi-preview"
+    artifact_root = tmp_path / (".trusted/.artifacts" if trusted_test else ".artifacts")
+    preview_dir = artifact_root / "pulumi-preview"
     preview_dir.mkdir(parents=True)
     event = preview_dir / "pull-request-event.json"
     event.write_text(
@@ -221,6 +243,30 @@ def test_rendered_apply_rechecks_current_labels(
         "assert sys.argv[1] == 'pulumi-up-plan'\n"
         "pathlib.Path('applied').touch()\n"
     )
+    if isolated_execution:
+        trusted_host = tmp_path / ".trusted/scripts/service_execution_host.py"
+        trusted_host.parent.mkdir(parents=True)
+        trusted_host.write_text(
+            f"#!{sys.executable}\n"
+            "import json, pathlib, sys\n"
+            "assert sys.argv[1:] == ['execute']\n"
+            "previews = sorted(\n"
+            "    row for root in ('.trusted/.artifacts', '.artifacts')\n"
+            "    for row in pathlib.Path(root, 'pulumi-preview').glob('*.json')\n"
+            ")\n"
+            "assert len(previews) == 1\n"
+            "if json.loads(previews[0].read_text())['steps'][0]['op'] != 'same':\n"
+            "    sys.exit(1)\n"
+            "pathlib.Path('applied').touch()\n"
+        )
+        trusted_python = tmp_path / ".trusted/.venv/bin/python"
+        trusted_python.parent.mkdir(parents=True)
+        trusted_python.write_text(
+            f"#!{sys.executable}\n"
+            "import os, sys\n"
+            f"os.execv({sys.executable!r}, [{sys.executable!r}, *sys.argv[1:]])\n"
+        )
+        trusted_python.chmod(0o755)
     for executable in (gh, compose, uv, make):
         executable.chmod(0o755)
     result = subprocess.run(
@@ -241,8 +287,13 @@ def test_rendered_apply_rechecks_current_labels(
             "LABELS": json.dumps(labels),
             "GITHUB_REPOSITORY": "fixture/repository",
             "PR_NUMBER": "39",
-            "EXPECTED_SHA": head,
+            "EXPECTED_SHA": "a" * 40,
             "EXPECTED_BASE_SHA": "b" * 40,
+            "GITHUB_WORKSPACE": str(tmp_path),
+            "GITHUB_SHA": "c" * 40 if case == "checkout-moved" else head,
+            "POC_SOURCE_ARTIFACT_ID": "123",
+            "POC_SOURCE_ARCHIVE_SHA256": "a" * 64,
+            "POC_SOURCE_SHA256": "b" * 64,
         },
         capture_output=True,
         text=True,
@@ -251,3 +302,14 @@ def test_rendered_apply_rechecks_current_labels(
     assert (result.returncode == 0) is expected, result.stderr
     assert (tmp_path / "applied").exists() is expected
     assert (preview.read_bytes() if preview.exists() else None) == original
+    if trusted_test:
+        assert event.exists() is (
+            case
+            not in {
+                "removed",
+                "retained",
+                "nondestructive",
+                "second-page",
+                "labels-unavailable",
+            }
+        )

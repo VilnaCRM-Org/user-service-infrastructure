@@ -50,6 +50,10 @@ materializer must install/protect this wrapper, select it as `PULUMI_PYTHON_CMD`
 protect the generated program/config, and bind all resulting bytes to the saved
 plan. No caller, PR config or environment override may select its interpreter.
 These helpers generate source only; no wrapper or project is installed here.
+The separate [protected materializer](poc-workload-materializer.md) now writes
+these inputs when called by the trusted root worker. Its native launcher test
+requires a Python project without `runtime.options.virtualenv`, because that
+option bypasses `PULUMI_PYTHON_CMD` in Pulumi 3.223.0.
 
 The wrapper test verifies the fixed interpreter/flag/argv contract. Separate
 isolated Python subprocesses execute the generated program with Pulumi mocks and
@@ -89,10 +93,11 @@ declaration remains attached to the descriptor.
 - `ComputePlane` now maps the declared `runtime.worker_health_command` to an ECS
   `CMD` health check. The command must exist in the admitted image; actual worker
   health remains a native acceptance check.
-- The exact next integration blocker is protected root materialization: install
-  the fixed isolated interpreter wrapper, merge the generated public settings
-  into admitted config, and protect/hash the generated child program before the
-  first workload preview. The worker currently has no dispatcher for this path.
+- The exact next integration blocker is the trusted root dispatcher: authenticate
+  the complete native prerequisites and baseline, call the protected materializer,
+  select its wrapper without rewriting the project runtime, and bind the generated
+  input digests to the same-run source/checkpoint and saved plan. The worker
+  currently has no dispatcher for this path.
   Full authenticated capability acceptance, native saved-plan graph/replay bindings,
   phase-aware result/drift and actual workload health/release/rollback remain
   unconnected. Do not remove either existing execution stop based on this unit.

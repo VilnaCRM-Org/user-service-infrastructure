@@ -435,7 +435,7 @@ def _recheck_inputs(goal, prior):
     kind = goal["type"]
     if prior is None or kind not in (ECR, mail.SES, mail.DNS):
         return None
-    expected = {"adds": {"__defaults": []}}
+    expected: dict[str, dict[str, Any]] = {"adds": {"__defaults": []}}
     nested = {
         ECR: ("imageScanningConfiguration", {"scanOnPush": True}),
         mail.SES: ("dkimSigningAttributes", {"nextSigningKeyLength": "RSA_2048_BIT"}),

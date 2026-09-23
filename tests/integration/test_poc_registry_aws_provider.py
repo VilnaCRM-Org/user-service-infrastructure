@@ -22,9 +22,10 @@ PROVIDER_HOME = Path(os.environ.get("POC_TEST_PROVIDER_HOME", Path.home() / ".pu
 
 
 class SyntheticAws(BaseHTTPRequestHandler):
-    """Only the fixed fixture's SES, ECR and Route53 operations are available."""
+    """Serve only fixed fixture resources and account-discovery metadata."""
 
     ready = False
+    account_reads = set()
 
     def log_message(self, *_args):
         pass
@@ -71,6 +72,18 @@ class SyntheticAws(BaseHTTPRequestHandler):
             self.dns()
             return
         raw = self.rfile.read(int(self.headers["Content-Length"]))
+        if b"Action=GetUser" in raw:
+            self.account_reads.add("GetUser")
+            self.respond(
+                '<GetUserResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">'
+                "<GetUserResult><User><Path>/</Path><UserName>synthetic</UserName>"
+                "<UserId>synthetic</UserId><Arn>arn:aws:iam::"
+                + plan.ACCOUNT
+                + ":user/synthetic</Arn><CreateDate>2026-01-01T00:00:00Z</CreateDate>"
+                "</User></GetUserResult></GetUserResponse>",
+                "text/xml",
+            )
+            return
         if b"Action=GetCallerIdentity" in raw:
             self.respond(
                 '<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">'
@@ -163,6 +176,7 @@ def test_pinned_provider_checkpoint_metadata(tmp_path, ensure_pulumi_cli):
             "Pinned AWS 7.23.0 provider must be installed; no network acquisition"
         )
     SyntheticAws.ready = False
+    SyntheticAws.account_reads = set()
     server = ThreadingHTTPServer(("127.0.0.1", 0), SyntheticAws)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     provider = subprocess.Popen(
@@ -179,6 +193,7 @@ def test_pinned_provider_checkpoint_metadata(tmp_path, ensure_pulumi_cli):
     try:
         port = int(provider.stdout.readline())
         rows, native = _checkpoint(tmp_path, server.server_port, port)
+        assert "GetUser" in SyntheticAws.account_reads
         for row in rows:
             if row["type"] == plan.ECR:
                 plan._ecr_values(row, row["inputs"], row["outputs"], new=False)
@@ -225,7 +240,7 @@ def _checkpoint(root, endpoint_port, provider_port):
         "aws:skipMetadataApiCheck": True,
         "aws:skipRequestingAccountId": False,
         "aws:endpoints": [
-            {key: endpoint for key in ("sesv2", "ecr", "route53", "sts")}
+            {key: endpoint for key in ("sesv2", "ecr", "route53", "sts", "iam")}
         ],
     }
     config.update(
@@ -254,12 +269,28 @@ def _checkpoint(root, endpoint_port, provider_port):
         "PULUMI_PYTHON_CMD": sys.executable,
     }
 
+    # Opt into the existing trusted coverage bootstrap only for the official gate.
+    # The generated entrypoint stays unmapped; unchanged app source owns its data.
+    if os.environ.get("COVERAGE_RCFILE"):
+        env.update(
+            {
+                key: os.environ[key]
+                for key in (
+                    "COVERAGE_FILE",
+                    "COVERAGE_PROCESS_START",
+                    "COVERAGE_RCFILE",
+                )
+                if key in os.environ
+            }
+        )
+        env["PYTHONPATH"] = str(ROOT / "pulumi")
+
     def cli(*arguments):
         result = subprocess.run(
             ["pulumi", "-C", str(root), *arguments],
             env=env,
             capture_output=True,
-            timeout=180,
+            timeout=90,
             check=False,
         )
         assert result.returncode == 0, "Synthetic native provider fixture failed"
@@ -288,7 +319,7 @@ def _checkpoint(root, endpoint_port, provider_port):
     )
     initial_saved = json.loads((root / "initial.plan").read_text())
     _validate_native((baseline, initial_preview, initial_saved))
-    cli("up", "--yes", "--skip-preview", "--non-interactive")
+    cli("up", "--yes", "--plan", str(root / "initial.plan"), "--non-interactive")
     rows = json.loads(cli("stack", "export"))["deployment"]["resources"]
     SyntheticAws.ready = True
     preview = json.loads(

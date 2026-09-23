@@ -1,8 +1,9 @@
 # Trusted TEST registry controller
 
 **Disabled installation candidate.** Preflight exits before AWS credentials, and
-source/TEST jobs have unconditional false guards. Native registry graph validation
-and the aggregate coverage gate must pass before removing these guards.
+source/TEST jobs have unconditional false guards. Local native graph, saved-plan
+replay, and aggregate coverage gates pass. Independent review and a live TEST
+capability/backend audit remain required before enabling any job.
 
 This candidate replaces legacy PR execution with a fixed TEST registry and SES/DNS
 graph. It is extracted from PR #19 commit
@@ -66,23 +67,57 @@ loopback AWS endpoints; it is not a deployment rehearsal against AWS.
 
 ## Local validation on 2026-09-23
 
-- All unit tests: 1,572 passed, 5 skipped. The explicit worker container smoke was
-  run separately and passed; its preview and saved-plan replay use a local backend.
-- Unit-only coverage: 85% across 5,373 statements; this does not satisfy the required
-  aggregate 100% gate. `make test-coverage` could not start its Compose container:
-  Docker reported that all predefined address pools had been fully subnetted.
-- Pinned native AWS-provider integration: failed on initial registry preview after
-  90 seconds and again after 180 seconds. The Pulumi Python child remained CPU-bound
-  inside a `--network none` container. The synthetic baseline update completed,
-  but native registry/SES/DNS preview semantics remain unverified for this candidate.
+- Official unit gate: 1,576 passed, 5 skipped; 100% required coverage.
+- Official policy gate: 249 passed; 100% required coverage.
+- Official integration gate: 24 passed; 100% required coverage. The pinned native
+  AWS provider validates the fixed registry/SES/DNS graph, replays its saved plan,
+  checks readiness changes, and completes a no-change refresh using synthetic
+  credentials and loopback endpoints.
+- Official aggregate gate: 5,406 statements and 1,604 branches, none missing or
+  partial; 100% coverage.
+- The explicit worker container smoke passed separately, including real Pulumi
+  preview and saved-plan replay with a local backend, UID 2000 isolation, root-only
+  authority, protected files, and descendant cleanup.
 - Ruff check/format, Actionlint, YAML lint, Hadolint, Bandit, dependency hygiene, and
   all ten import contracts passed. Bandit emitted existing suppression warnings.
 - The base and worker images built successfully from the candidate lockfile and
-  verified provider archives. `make start` hit the same exhausted Docker network
-  pool; no existing containers or networks were removed.
+  verified provider archives. No existing containers or networks were removed.
 
-Do not remove the workflow guards until the native graph failure is understood,
-positive/negative native plan and replay checks pass, and the repository aggregate
-coverage gate passes. Live TEST capability enrollment, protected-environment and
-OIDC configuration, backend state, and exact legacy checkpoint compatibility require
-separate verification. No AWS acceptance is claimed, and no AWS state was changed.
+The original native preview timeout came from provider account discovery calling
+IAM `GetUser`, which the synthetic fixture had not mapped to loopback. Adding that
+fixed synthetic response resolves the timeout without changing production provider
+settings or increasing the 90-second fixture timeout. The test asserts that account
+discovery occurred and uses saved-plan replay for the registry update.
+
+Docker's default address pools are exhausted on the validation host. The official
+gates pass using a local, ignored Compose override that disables networking and
+selects the locally built worker image with its verified provider archives:
+
+```yaml
+services:
+  pulumi:
+    network_mode: none
+    image: trusted-test-controller-20260923-worker
+    environment:
+      UV_NO_SYNC: "1"
+      POC_TEST_PROVIDER_HOME: /opt/service-plugins
+```
+
+Save that override as `.artifacts/controller-validation/compose-offline.yml`, then
+run each of `test-unit`, `test-policy`, `test-integration`, and `test-coverage` with:
+
+```sh
+make COMPOSE_ENV_FILE=.env.empty \
+  DOCKER_COMPOSE='docker compose -f docker-compose.yml -f .artifacts/controller-validation/compose-offline.yml' \
+  test-coverage
+```
+
+Per-suite coverage files remain separate until the aggregate gate combines them.
+Generated native-test entrypoints preserve source attribution through the existing
+trusted coverage bootstrap only when the official gate explicitly requests it.
+Retained local logs are in `.artifacts/controller-validation/` (ignored by Git).
+
+Keep the workflow guards until independent review and separate verification of live
+TEST capability enrollment, protected environments, OIDC configuration, backend
+state, and exact legacy checkpoint compatibility are complete. No AWS acceptance
+is claimed, and no AWS state was changed.

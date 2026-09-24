@@ -1,6 +1,7 @@
 """Native Automation test program; no deployment or admission entrypoint."""
 
 import json
+import os
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -9,10 +10,18 @@ from types import SimpleNamespace
 source_root = Path((Path(__file__).parent / "source-root.txt").read_text())
 sys.path[:0] = [str(source_root / "pulumi"), str(source_root / "scripts")]
 
+# This test-only program adds the source tree after interpreter startup, so its
+# sitecustomize module cannot start configured subprocess coverage on its own.
+if os.environ.get("COVERAGE_PROCESS_START"):
+    import coverage
+
+    coverage.process_startup()
+
 from app.compute import ComputePlane  # noqa: E402
 from app.environment import resolve_stack_settings  # noqa: E402
 from app.registry_phase import RegistryPhaseStack  # noqa: E402
 from app.runtime_secrets import RuntimeSecrets, RuntimeSecretsDescriptor  # noqa: E402
+from app.stack import UserServiceStack  # noqa: E402
 from app.workload_phase import WorkloadPhaseStack  # noqa: E402
 
 import pulumi  # noqa: E402
@@ -33,6 +42,10 @@ metadata = SimpleNamespace(
 mode = scenario["mode"]
 if mode == "registry":
     RegistryPhaseStack(registries=registries)
+elif mode == "legacy-workload":
+    # The installed entrypoint stays metadata-only. Exercise the legacy managed
+    # topology through this explicit integration-only program instead.
+    UserServiceStack("user-service")
 else:
     settings = resolve_stack_settings(
         metadata, generated_secrets="true" if mode == "invalid-flag" else True

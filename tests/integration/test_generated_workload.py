@@ -148,6 +148,7 @@ def native_stack(tmp_path, verified_plugins, local_sts):
             "HTTP_PROXY": local_sts[0],
             "HTTPS_PROXY": local_sts[0],
             "NO_PROXY": "127.0.0.1",
+            "AWS_ENDPOINT_URL_STS": local_sts[0],
             "AWS_EC2_METADATA_DISABLED": "true",
             "AWS_ACCESS_KEY_ID": "synthetic-integration",
             "AWS_SECRET_ACCESS_KEY": "synthetic-integration",
@@ -231,6 +232,49 @@ def test_native_generated_workload_preserves_registry_and_registers_secret_versi
     assert types.count("aws:ecs/taskDefinition:TaskDefinition") == 2
     assert not any(kind.startswith("aws:iam/") for kind in types)
     assert local_sts[1] == ["GetUser", "GetCallerIdentity"] * 2
+
+
+def test_native_legacy_workload_program_registers_managed_planes(native_stack):
+    """Cover the legacy managed topology without widening the installed entrypoint."""
+    stack, work = native_stack
+    (work / "scenario.json").write_text('{"mode":"legacy-workload"}')
+    events = []
+    result = stack.preview(on_event=events.append)
+
+    assert result.change_summary
+    types = [row.type for row in resources(events)]
+    assert "user-service-infrastructure:stack:UserService" in types
+    assert "user-service-infrastructure:network:Plane" in types
+    assert "user-service-infrastructure:data:Plane" in types
+    assert "user-service-infrastructure:messaging:Plane" in types
+    assert "user-service-infrastructure:compute:Plane" in types
+    assert types.count("aws:ec2/vpc:Vpc") == 1
+    assert types.count("aws:sqs/queue:Queue") == 6
+    assert types.count("aws:ecs/service:Service") == 2
+    assert not any(kind.startswith("aws:iam/") for kind in types)
+
+
+def test_native_legacy_workload_program_uses_preview_placeholders(native_stack):
+    """Exercise legacy preview placeholders without registering AWS resources."""
+    stack, work = native_stack
+    stack.set_config("deploymentMode", auto.ConfigValue(value="preview"))
+    stack.remove_config("accessLogsBucketName")
+    (work / "scenario.json").write_text('{"mode":"legacy-workload"}')
+    events = []
+    result = stack.preview(on_event=events.append)
+
+    assert result.change_summary
+    types = [row.type for row in resources(events)]
+    assert set(types) == {
+        "pulumi:pulumi:Stack",
+        "user-service-infrastructure:stack:UserService",
+        "user-service-infrastructure:core:EnvironmentSettings",
+        "user-service-infrastructure:network:Plane",
+        "user-service-infrastructure:data:Plane",
+        "user-service-infrastructure:messaging:Plane",
+        "user-service-infrastructure:compute:Plane",
+    }
+    assert not any(kind.startswith("aws:") for kind in types)
 
 
 @pytest.mark.parametrize(

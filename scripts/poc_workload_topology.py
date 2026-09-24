@@ -10,6 +10,7 @@ import base64
 import poc_registry_plan as registry
 import poc_workload_reconciliation as unchanged
 from poc_registry_phase_entrypoint import RegistryPhaseProjection
+from poc_workload_aliases import state_aliases, structured_aliases
 from poc_workload_phase_entrypoint import _checked
 from service_execution_process import require
 
@@ -19,43 +20,10 @@ SECRET_VERSION_OUTPUTS = [
     "secretString",
     "secretStringWo",
 ]
-SDK_ALIASES = {
-    f"aws:lb/{kind}": f"aws:elasticloadbalancingv2/{kind}"
-    for kind in (
-        "listener:Listener",
-        "loadBalancer:LoadBalancer",
-        "targetGroup:TargetGroup",
-    )
-}
-SDK_ALIASES.update(
-    {
-        token: token
-        for token in (
-            f"aws:s3/{kind[0].lower() + kind[1:]}:{kind}"
-            for kind in (
-                "BucketLifecycleConfigurationV2",
-                "BucketServerSideEncryptionConfigurationV2",
-                "BucketVersioningV2",
-            )
-        )
-    }
-)
 
 
 def _sdk_aliases(kind):
-    if kind not in SDK_ALIASES:
-        return []
-    return [
-        {
-            "URN": "",
-            "Name": "",
-            "Type": SDK_ALIASES[kind],
-            "Project": "",
-            "Stack": "",
-            "Parent": "",
-            "NoParent": False,
-        }
-    ]
+    return structured_aliases(kind)
 
 
 def _check(condition):
@@ -343,11 +311,7 @@ def _validate_workload_step(step, urn, graph, desired):
     registry._object(new, {"urn", "type", "custom"}, registry.STATE_FIELDS)
     _check(not any(new.get(key) for key in unchanged.UNSAFE_STATE if key != "aliases"))
     aliases = new.get("aliases", [])
-    expected_aliases = (
-        [urn.replace(graph[urn][0] + "::", SDK_ALIASES[graph[urn][0]] + "::")]
-        if graph[urn][0] in SDK_ALIASES
-        else []
-    )
+    expected_aliases = state_aliases(urn, graph[urn][0])
     _check(not aliases or aliases == expected_aliases)
     _check(new.get("id", "") in ("", registry.UNKNOWN))
     for field in (

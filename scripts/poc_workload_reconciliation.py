@@ -13,6 +13,7 @@ import hashlib
 import json
 
 from poc_registry_plan import GOAL_FIELDS, PREFIX, ROOT, STATE_FIELDS
+from poc_workload_aliases import state_aliases, structured_aliases
 from service_execution_process import require
 
 PULUMI_MARKER_SIGNATURE = f"{103243336764898375729571978626580625549:032x}"
@@ -25,7 +26,6 @@ GOAL_DEFAULTS = {
     "protect": False,
     "ignoreChanges": [],
     "additionalSecretOutputs": [],
-    "aliases": [],
     "customTimeouts": {},
 }
 UNSAFE_STATE = (
@@ -92,7 +92,8 @@ def _inventory(resources):
         _check(type(urn) is str and urn.startswith(PREFIX) and urn not in result)
         _check(type(row["custom"]) is bool and type(row["type"]) is str)
         _check(not row["type"].startswith("aws:iam/"))
-        _check(not any(row.get(key) for key in UNSAFE_STATE))
+        _check(not any(row.get(key) for key in UNSAFE_STATE if key != "aliases"))
+        _check(_same(row.get("aliases", []), state_aliases(urn, row["type"])))
         _check(type(row.get("inputs", {})) is dict)
         _check(type(row.get("outputs", {})) is dict)
         _secret_inputs(row)
@@ -150,8 +151,10 @@ def _goal(urn, plan, prior):
     _check(
         _same(goal["type"], prior["type"]) and _same(goal["custom"], prior["custom"])
     )
-    for field in ("id", "structuredAliases", "deleteBeforeReplace"):
+    for field in ("id", "deleteBeforeReplace"):
         _check(not goal.get(field))
+    _check(_same(goal.get("aliases", []), []))
+    _check(_same(goal.get("structuredAliases", []), structured_aliases(prior["type"])))
     for field, default in GOAL_DEFAULTS.items():
         _check(_same(goal.get(field, default), prior.get(field, default)))
     for field in ("inputDiff", "outputDiff"):

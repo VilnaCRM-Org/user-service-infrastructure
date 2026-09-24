@@ -82,6 +82,42 @@ def test_accepts_hidden_unchanged_preview_and_advisory_plan_state(data):
     gate.validate_no_change(**data)
 
 
+def test_accepts_only_exact_sdk_alias_projections(data):
+    resource_type = "aws:lb/loadBalancer:LoadBalancer"
+    prior = data["prior_resources"][-1]
+    old_urn = prior["urn"]
+    urn = gate.PREFIX + resource_type + "::runtime"
+    prior.update(urn=urn, type=resource_type)
+    plan = data["saved_plan"]["resourcePlans"].pop(old_urn)
+    plan["goal"]["type"] = resource_type
+    plan["goal"]["structuredAliases"] = gate.structured_aliases(resource_type)
+    data["saved_plan"]["resourcePlans"][urn] = plan
+    step = data["preview"]["steps"][-1]
+    step["urn"] = urn
+    for field in ("oldState", "newState"):
+        step[field]["urn"] = urn
+        step[field]["type"] = resource_type
+    prior["aliases"] = gate.state_aliases(urn, resource_type)
+    for field in ("oldState", "newState"):
+        step[field]["aliases"] = gate.state_aliases(urn, resource_type)
+    gate.validate_no_change(**data)
+
+    plan["goal"]["structuredAliases"] = []
+    with pytest.raises(ValueError):
+        gate.validate_no_change(**data)
+    plan["goal"]["structuredAliases"] = [{}]
+    with pytest.raises(ValueError):
+        gate.validate_no_change(**data)
+    plan["goal"]["structuredAliases"] = gate.structured_aliases(resource_type)
+
+    prior["aliases"] = []
+    with pytest.raises(ValueError):
+        gate.validate_no_change(**data)
+    prior["aliases"] = ["foreign"]
+    with pytest.raises(ValueError):
+        gate.validate_no_change(**data)
+
+
 @pytest.mark.parametrize(
     "operation", ["create", "update", "delete", "replace", "read", "refresh", "discard"]
 )

@@ -18,6 +18,8 @@ permissions:
   contents: read
 
 jobs:
+  # Both automatic PRs and main pushes use a local backend without AWS authority.
+  # Reviewed cloud previews run through trusted main Service Self Deploy.
   preview:
     name: Preview
     runs-on: ubuntu-latest

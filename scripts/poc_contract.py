@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import re
 import sys
@@ -128,9 +129,29 @@ def _registry_semantics(registries: dict[str, Any]) -> None:
             raise ValueError("web and worker registry identities must differ")
 
 
+def _trusted_proxy_semantics(cidrs: list[str]) -> None:
+    """Require canonical, explicit, non-overlapping networks without catchalls."""
+    networks = []
+    for cidr in cidrs:
+        if "%" in cidr:
+            raise ValueError("trusted proxy CIDRs must not contain scope IDs")
+        try:
+            network = ipaddress.ip_network(cidr, strict=True)
+        except ValueError:
+            raise ValueError("trusted proxy CIDRs must be canonical networks") from None
+        if str(network) != cidr or network.prefixlen == 0:
+            raise ValueError(
+                "trusted proxy CIDRs must be explicit non-default networks"
+            )
+        if any(network.overlaps(previous) for previous in networks):
+            raise ValueError("trusted proxy CIDRs must not overlap")
+        networks.append(network)
+
+
 def _workload_semantics(workload: dict[str, Any], registries: dict[str, Any]) -> None:
     """Bind workload mail, roles, releases and secrets to fixed declarations."""
     _mail_semantics(workload["external"]["mail"])
+    _trusted_proxy_semantics(workload["runtime"]["trusted_proxy_cidrs"])
     central = workload["central"]
     roles = [
         central[key]

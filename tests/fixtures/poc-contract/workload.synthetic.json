@@ -217,6 +217,7 @@
       "documentdb_tls": true,
       "retry_writes": false,
       "worker_mode": "production-only",
+      "trusted_proxy_cidrs": ["10.42.0.0/24", "10.42.1.0/24"],
       "optional_social_providers": {
         "environment_variable": "SOCIAL_OAUTH_ENABLED",
         "value": "false"

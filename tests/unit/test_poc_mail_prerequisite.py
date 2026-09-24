@@ -297,12 +297,21 @@ def test_graph_owns_only_provider_derived_dkim_cnames(tmp_path):
         assert result["parents"][row["name"]] == result["urns"]["user-service"]
 
 
-def test_pending_ses_readiness_is_not_registry_execution_authority(monkeypatch):
+def test_pending_ses_blocks_real_workload_admission_before_final_gate(monkeypatch):
+    import poc_workload_admission as admission
+
+    monkeypatch.setattr(admission, "inspect_registry", lambda *_: "anchor")
+    monkeypatch.setattr(admission, "inspect_release", lambda *_: None)
+    monkeypatch.setattr(admission.images, "inspect_images", lambda *_: None)
+    monkeypatch.setattr(admission.capabilities, "inspect_capabilities", lambda *_: None)
     observed = native_identity()
     observed["DkimAttributes"]["Status"] = "PENDING"
     monkeypatch.setattr(mail, "read", lambda *_: observed)
     with pytest.raises(ValueError, match="workload-ses-identity-not-verified"):
-        mail.inspect_identity(ready=True)
+        admission.inspect_workload({}, {}, None, "plan")
+    observed["DkimAttributes"]["Status"] = "SUCCESS"
+    with pytest.raises(ValueError, match="native-image-capability-and-plan"):
+        admission.inspect_workload({}, {}, None, "plan")
 
 
 @pytest.mark.parametrize(

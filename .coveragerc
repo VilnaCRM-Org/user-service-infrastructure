@@ -8,6 +8,9 @@ pulumi =
     /workspace/pulumi
     */pulumi
     */pulumi-program
+    */pulumi-managed-preview
+    */pulumi-invalid-environment
+    */pulumi-invalid-serviceName
 policy =
     policy
     /workspace/policy

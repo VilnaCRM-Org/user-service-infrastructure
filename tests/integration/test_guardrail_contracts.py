@@ -165,12 +165,23 @@ def test_shared_entrypoint_integrates_config_provider_and_exports(
             )
             exported = next(row for row in exports if "repoSlug" in row)
             assert exported["environment"] == environment
+            assert exported["serviceName"] == "user-service-infrastructure"
+            assert exported["stackTag"] == f"user-service-infrastructure-{environment}"
             assert exported["repoSlug"] == "user-service-infrastructure"
             assert exported["pulumiBackendUrl"] == backend
             assert exported["pulumiSecretsProvider"] == provider
             assert observed.resources == [
                 "user-service-infrastructure:core:EnvironmentSettings"
             ]
+            assert set(exported) == {
+                "environment",
+                "serviceName",
+                "stackTag",
+                "defaultTags",
+                "repoSlug",
+                "pulumiBackendUrl",
+                "pulumiSecretsProvider",
+            }
         else:
             message = (
                 "AWS caller account differs"

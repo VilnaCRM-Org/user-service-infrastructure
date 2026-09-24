@@ -329,7 +329,11 @@ def test_initializer_shares_stack_lock_with_deployment_and_scheduled_drift(envir
     peers = [
         workflows["self-deploy"]["jobs"][f"{environment}_{operation}"]
         for operation in ("preview", "apply", "post_apply_drift")
+        if environment == "test"
     ]
+    assert not any(
+        name.startswith("prod_") for name in workflows["self-deploy"]["jobs"]
+    )
     peers.append(workflows["scheduled-drift"]["jobs"][f"scheduled_{environment}_drift"])
     for peer in peers:
         assert peer["concurrency"] == {"group": group, "cancel-in-progress": False}

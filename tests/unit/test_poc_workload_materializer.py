@@ -88,7 +88,15 @@ def test_materializes_only_fixed_files_and_binds_their_exact_private_bytes(prote
     assert (
         config["config"].items() >= module.bridge.workload_configuration(value).items()
     )
-    assert config["config"]["aws:skipCredentialsValidation"] is False
+    assert {
+        key: value for key, value in config["config"].items() if key.startswith("aws:")
+    } == {
+        "aws:region": "eu-central-1",
+        "aws:allowedAccountIds": ["891377212104"],
+        "aws:skipCredentialsValidation": False,
+        "aws:skipRegionValidation": False,
+        "aws:skipRequestingAccountId": False,
+    }
     assert config["config"]["user-service-infrastructure:owner"] == "team-user-service"
     project = json.loads((result.directory / "Pulumi.yaml").read_bytes())
     assert project == {

@@ -214,25 +214,11 @@ def test_every_cloud_or_promotion_job_requires_successful_source_ancestry():
         "test_preview",
         "test_apply",
         "test_post_apply_drift",
-        "prod_preview",
-        "prod_apply",
-        "prod_post_apply_drift",
-        "platform_promotion",
     ):
         assert "poc_prepare_source" in ancestors(name)
         condition = graph[name].get("if", "")
-        if "always(" in condition:
-            # PROD preview intentionally handles a skipped post-apply drift on
-            # plan commands, but still requires the source-gated TEST preview.
-            assert name == "prod_preview"
-            assert condition == (
-                "always() && needs.preflight.result == 'success' && "
-                "needs.preflight.outputs.target_environment == 'prod' && "
-                "needs.test_preview.result == 'success' && "
-                "(needs.preflight.outputs.command == 'plan' || "
-                "needs.test_post_apply_drift.result == 'success')"
-            )
-            assert "test_preview" in graph[name]["needs"]
+        assert "false &&" in condition
+        assert "always(" not in condition
         assert "continue-on-error" not in graph[name]
     feedback = graph["comment_result"]
     assert "poc_prepare_source" in feedback["needs"]

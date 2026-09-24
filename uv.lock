@@ -1496,6 +1496,7 @@ dependencies = [
     { name = "pulumi-random" },
     { name = "pulumi-tls" },
     { name = "pyyaml" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
 
 [package.dev-dependencies]
@@ -1529,6 +1530,7 @@ requires-dist = [
     { name = "pulumi-random", specifier = "==4.19.2" },
     { name = "pulumi-tls", specifier = "==5.3.1" },
     { name = "pyyaml", specifier = ">=6,<7" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0,<3" },
 ]
 
 [package.metadata.requires-dev]

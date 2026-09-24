@@ -17,68 +17,21 @@ import contextlib  # noqa: E402
 import tempfile  # noqa: E402
 
 import poc_registry_runner as registry  # noqa: E402
-import poc_scheduled_registry_drift as scheduled  # noqa: E402
-import poc_workload_admission as workload  # noqa: E402
-from service_execution_process import require, run  # noqa: E402
+from service_execution_process import require  # noqa: E402
 from service_execution_transport import ServiceTransport, copy_tree  # noqa: E402
 
 JOBS = {
     "test_preview": ("test", "plan"),
     "test_apply": ("test", "up-plan"),
     "test_post_apply_drift": ("test", "drift"),
-    "prod_preview": ("prod", "plan"),
-    "prod_apply": ("prod", "up-plan"),
-    "prod_post_apply_drift": ("prod", "drift"),
-    "scheduled_test_drift": ("test", "drift"),
-    "scheduled_prod_drift": ("prod", "drift"),
 }
-ACCOUNTS = {"test": "891377212104", "prod": "933245420672"}
+ACCOUNTS = {"test": "891377212104"}
 SESSION_KEYS = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")
-
-
-def source_head(expected):
-    require(bool(os.statvfs("/source").f_flag & os.ST_RDONLY), "source-readonly")
-    command = ["/usr/bin/git", "-c", "safe.directory=/source", "-C", "/source"]
-    environment = {"PATH": "/usr/bin:/bin", "HOME": "/nonexistent"}
-    actual = run([*command, "rev-parse", "HEAD"], env=environment, cwd=Path("/trusted"))
-    require(actual.decode().strip() == expected, "source-head")
-    run(
-        [
-            *command,
-            "diff",
-            "--quiet",
-            "--no-ext-diff",
-            "HEAD",
-            "--",
-            "pulumi",
-            "policy",
-        ],
-        env=environment,
-        cwd=Path("/trusted"),
-    )
-    require(
-        not run(
-            [
-                *command,
-                "ls-files",
-                "--others",
-                "--exclude-standard",
-                "--",
-                "pulumi",
-                "policy",
-            ],
-            env=environment,
-            cwd=Path("/trusted"),
-        ),
-        "source-untracked",
-    )
 
 
 def admit(job):
     """Reuse original native requester/reviewer or scheduled-main authority."""
-    if job.startswith("scheduled_"):
-        provenance = scheduled.verify_provenance()
-        return provenance.sha
+    require(job in JOBS, "worker-job")
     run_id, sha = registry.artifact._context(os.environ)
     registry.artifact._producer(registry.preflight.gh, run_id, sha)
     registry._verify_checkout(sha)
@@ -116,27 +69,12 @@ def _coordinates(account):
 
 
 def _replay_inputs(port, account):
-    source = Path("/trusted" if account == "test" else "/source") / ".artifacts"
+    require(account == "test", "worker-account")
+    source = Path("/trusted") / ".artifacts"
     destination = port.repo / ".artifacts"
     destination.mkdir(mode=0o700, exist_ok=True)
     for name in ("pulumi-plan", "pulumi-preview"):
         copy_tree(source / name, destination / name)
-
-
-def _prod(port, command, head):
-    source_head(head)
-    project = port.project(Path("/source/pulumi"))
-    context = registry.runner.CommandContext(
-        root_dir=port.repo,
-        env={"PULUMI_COMMIT_SHA": head},
-        pulumi_dir=project,
-        policy_pack_dir=Path("/source/policy"),
-        plan_dir=port.repo / ".artifacts/pulumi-plan",
-        preview_artifact_dir=port.repo / ".artifacts/pulumi-preview",
-        backend_url=os.environ["PULUMI_BACKEND_URL"],
-        secrets_provider=os.environ["PULUMI_SECRETS_PROVIDER"],
-    )
-    return registry.runner._dispatch_command(command, port.bind(context), ["prod"])
 
 
 def _test(port, command, head):
@@ -154,9 +92,6 @@ def _test(port, command, head):
     )
     registry._review(source)
     if contract["phase"] == "workload":
-        workload.inspect_workload(
-            source, contract, workload.authority_from_environment(os.environ), command
-        )
         raise ValueError("workload-execution-not-enabled")
     return registry.execute(command, **references, transport=port)
 
@@ -177,12 +112,7 @@ def execute(job, area):
     )
     if command == "up-plan":
         _replay_inputs(port, account)
-    if job == "scheduled_test_drift":
-        result = scheduled.execute(transport=port)
-    elif account == "test":
-        result = _test(port, command, head)
-    else:
-        result = _prod(port, command, head)
+    result = _test(port, command, head)
     require(result == 0, "worker-execution")
     require(admit(job) == head, "worker-final-admission")
     if command == "plan":

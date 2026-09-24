@@ -86,8 +86,15 @@ workload phase or change registry resource ownership.
 
 ## TEST registry completion proof
 
-After successful TEST registry apply and drift jobs, `test_registry_observation`
-starts on a fresh trusted-main checkout. It authenticates source, current review
+The completion helpers remain candidate code. The installed controller has no
+`test_registry_observation`, `test_registry_proof` or `test_registry_dispatch`
+jobs; it cannot publish completion receipts or dispatch image publishing. The
+following describes the proposed integration, which requires separate validation
+before installation.
+
+After successful TEST registry apply and drift jobs, the proposed
+`test_registry_observation` starts on a fresh trusted-main checkout. It
+authenticates source, current review
 and requester before each credential transition. With the existing Preview
 identity it performs version-bound backend reads, validates the exact eleven-resource
 graph, and checks both repositories' native immutability, scanning and tags plus
@@ -121,15 +128,20 @@ or replace the execution-isolation boundary below.
 
 ## Isolated service execution
 
-Credentialed TEST registry, PROD and scheduled-drift commands use the installed
-main service_execution_host.py launcher. It builds the existing pinned tooling
+The installed TEST controller remains closed: preflight fails and all execution
+jobs have explicit false guards pending complete controller validation. Its
+TEST registry jobs use the installed-main `service_execution_host.py` launcher.
+PROD and registry-completion routes are absent. Scheduled drift retains the
+existing main-only `make start` / `make test-drift` path; it does not call the
+TEST-only launcher. The launcher builds the existing pinned tooling
 and locked dependencies before configuration credentials or execution OIDC.
 Credentialed jobs no longer execute PR Makefiles, Dockerfiles or dependency setup.
 Runtime/dependency upgrades must first be reviewed and installed on trusted main;
 unsupported project runtimes and discovery overrides fail before credentials.
 
 The ephemeral worker runs trusted Python as root PID 1 with read-only root,
-trusted-source and reviewed-source mounts. Pulumi, including login, stack selection,
+trusted-source and public-result mounts. Reviewed PR source is not mounted.
+Pulumi, including login, stack selection,
 export and policy execution, runs as UID 2000 without supplementary groups.
 The child receives only its selected AWS session and fixed runtime configuration;
 GitHub tokens, OIDC request tokens and Actions command files stay outside its
@@ -143,7 +155,7 @@ The trusted parent retains the existing requester/review, provider/checkpoint,
 saved-plan hash/age, destructive-change and TEST registry graph checks. Admission
 is refreshed immediately before each preview or apply program and after execution.
 Only the existing plan, preview and manifest artifacts leave the private worker.
-The separate registry completion observer/publisher remains independent.
+The registry completion observer/publisher helpers remain unconnected.
 
 The TEST-only source prerequisite still blocks PROD promotion, and no workload
 phase is admitted by this change. Network-disabled Docker tests prove the local

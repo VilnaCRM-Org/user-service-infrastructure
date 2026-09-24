@@ -56,7 +56,10 @@ def test_each_worker_installs_trusted_runtime_before_credentials(name):
             "uses", ""
         ).startswith("aws-actions/"):
             assert steps.index(install) < steps.index(step)
-            assert "Verify reviewed source" in steps[steps.index(step) - 1]["name"]
+            assert (
+                'service_execution_host.py" recheck'
+                in steps[steps.index(step) - 1]["run"]
+            )
         assert "make " not in step.get("run", "")
         assert "continue-on-error" not in step
     assert "if" not in install and "env" not in install
@@ -112,11 +115,9 @@ def test_artifacts_round_trip_under_driver_root_and_replay_rechecks_after_downlo
     assert all(s["with"]["if-no-files-found"] == "error" for s in uploads)
     steps = jobs["test_apply"]["steps"]
     replay = steps.index(step_for("test_apply"))
-    assert (
-        steps[replay - 1]["name"] == "Verify reviewed source before saved-plan replay"
-    )
+    assert 'service_execution_host.py" recheck' in steps[replay - 1]["run"]
     assert all(steps.index(s) < replay - 1 for s in downloads)
-    assert "git rev-parse HEAD" in steps[replay]["run"]
+    assert "git -C .trusted rev-parse HEAD" in steps[replay]["run"]
     assert "EXPECTED_BASE_SHA" in steps[replay]["run"]
 
 
@@ -124,7 +125,7 @@ def test_post_apply_drift_uses_closed_driver_with_preview_identity():
     """Drift requires successful apply and retains native observer authority."""
     job = workflow()["test_post_apply_drift"]
     assert "test_apply" in job["needs"]
-    assert job["if"] == "needs.preflight.outputs.command == 'up'"
+    assert job["if"] == "${{ false && needs.preflight.outputs.command == 'up' }}"
     assert job["environment"] == "test-preview"
     config = next(s for s in job["steps"] if s.get("id") == "ci_config")
     assert "AWS_PREVIEW_ROLE_ARN" in config["with"]["required-keys"]
@@ -190,7 +191,7 @@ def test_actual_driver_wrapper_preserves_arguments_and_exit_status(
     )
     for filename, contents in {
         "gh": f"#!{sys.executable}\nprint({pr!r})\n",
-        "git": f"#!/bin/sh\nprintf '%s\\n' '{head}'\n",
+        "git": f"#!/bin/sh\nprintf '%s\\n' '{base}'\n",
     }.items():
         path = binaries / filename
         path.write_text(contents)
@@ -204,6 +205,7 @@ def test_actual_driver_wrapper_preserves_arguments_and_exit_status(
         "PATH": f"{binaries}:{os.environ['PATH']}",
         "GITHUB_WORKSPACE": str(tmp_path),
         "GITHUB_REPOSITORY": "VilnaCRM-Org/user-service-infrastructure",
+        "GITHUB_SHA": base,
         "PR_NUMBER": "219",
         "EXPECTED_SHA": head,
         "EXPECTED_BASE_SHA": base,

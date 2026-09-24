@@ -515,7 +515,7 @@ def test_combined_path_stops_before_any_workload_program(monkeypatch):
         module.inspect_workload({}, {}, AUTHORITY, "plan")
 
 
-def test_worker_reaches_real_receipt_release_and_native_graph_checks(
+def test_candidate_helper_reaches_real_receipt_release_and_native_graph_checks(
     publisher, registry_evidence, monkeypatch
 ):
     import service_execution_worker as worker
@@ -568,7 +568,7 @@ def test_worker_reaches_real_receipt_release_and_native_graph_checks(
     with pytest.raises(
         ValueError, match="native-image-capability-and-plan-gates-required"
     ):
-        worker._test(None, "plan", source["source"]["head_sha"])
+        module.inspect_workload(source, publisher["contract"], AUTHORITY, "plan")
     assert any("/deployments/301" in value for value in calls)
     assert any("/attempts/1/jobs" in value for value in calls)
     assert any(module.APP_API + "/actions/artifacts/" in value for value in calls)
@@ -609,7 +609,7 @@ def test_native_capability_failure_stops_before_state_recheck(monkeypatch):
     assert calls == ["registry", "release", "images", "capabilities"]
 
 
-def test_authority_inputs_are_root_only_and_workflow_protected(installed):
+def test_unconnected_authority_inputs_are_not_forwarded_by_controller(installed):
     import service_execution_host as host
     import yaml
 
@@ -627,8 +627,8 @@ def test_authority_inputs_are_root_only_and_workflow_protected(installed):
             step for step in steps if "POC_SOURCE_SHA256" in step.get("env", {})
         ]
         assert len(launcher) == 1
-        assert all(launcher[0]["env"][key] == "${{ vars." + key + " }}" for key in keys)
-    assert all(key in host.FIELDS for key in keys)
+        assert all(key not in launcher[0]["env"] for key in keys)
+    assert all(key not in host.FIELDS for key in keys)
     port, _ = installed
     assert all(key not in port.environment for key in keys)
 

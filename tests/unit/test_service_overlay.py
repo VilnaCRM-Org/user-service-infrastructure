@@ -36,27 +36,7 @@ def test_program_preserves_existing_component_and_requires_shared_config(
 
     def component(name):
         created.append(name)
-        return SimpleNamespace(
-            environment_settings=settings,
-            settings=SimpleNamespace(deployment_mode="managed", region="eu-central-1"),
-            compute=SimpleNamespace(
-                outputs=SimpleNamespace(
-                    service_url="https://service.invalid",
-                    load_balancer_dns_name="alb.invalid",
-                    cluster_name="test-cluster",
-                    web_service_name="test-web",
-                    worker_service_name="test-worker",
-                    web_repository_url="test-web-repository",
-                    worker_repository_url="test-worker-repository",
-                )
-            ),
-            messaging=SimpleNamespace(outputs=SimpleNamespace(queue_urls={})),
-            data=SimpleNamespace(
-                outputs=SimpleNamespace(
-                    documentdb_endpoint="db.invalid", redis_endpoint="redis.invalid"
-                )
-            ),
-        )
+        return settings
 
     class Config:
         def get(self, name):
@@ -65,7 +45,9 @@ def test_program_preserves_existing_component_and_requires_shared_config(
         def require(self, name):
             return values[name]
 
-    monkeypatch.setitem(sys.modules, "app", SimpleNamespace(UserServiceStack=component))
+    monkeypatch.setitem(
+        sys.modules, "app", SimpleNamespace(EnvironmentSettings=component)
+    )
     monkeypatch.setitem(
         sys.modules,
         "pulumi",
@@ -84,12 +66,10 @@ def test_program_preserves_existing_component_and_requires_shared_config(
         sys.modules, "pulumi_aws", SimpleNamespace(get_caller_identity=caller)
     )
     runpy.run_path(str(ROOT / "pulumi/__main__.py"))
-    assert created == ["user-service"]
+    assert created == ["environment-settings"]
     assert {"environment", "serviceName", "stackTag", "defaultTags"} <= exports.keys()
     if environment == "dev":
-        assert len(exports) == 16
-        assert "repoSlug" not in exports
-        assert exports["serviceUrl"] == "https://service.invalid"
+        assert len(exports) == 4
     else:
         assert {
             key: exports[key]
@@ -123,7 +103,7 @@ def test_shared_program_rejects_wrong_caller_before_component_or_exports(
         sys.modules,
         "app",
         SimpleNamespace(
-            UserServiceStack=lambda _name: pytest.fail(
+            EnvironmentSettings=lambda _name: pytest.fail(
                 "Wrong account created component"
             )
         ),
@@ -168,7 +148,9 @@ def test_selected_shared_stack_cannot_skip_guard_via_environment(
     def rejected(*_args):
         pytest.fail("Mismatched stack/environment reached runtime or AWS")
 
-    monkeypatch.setitem(sys.modules, "app", SimpleNamespace(UserServiceStack=rejected))
+    monkeypatch.setitem(
+        sys.modules, "app", SimpleNamespace(EnvironmentSettings=rejected)
+    )
     monkeypatch.setitem(
         sys.modules,
         "pulumi",

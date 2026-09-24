@@ -37,9 +37,10 @@ uses the fixed registry implementation and authenticated contract data.
 
 The initial migration preserves the existing stack exports, EnvironmentSettings
 component and provider identity. Only the recorded three-resource TEST checkpoint
-can use the legacy provider-hardening transition. The resulting seven-resource
-graph contains two ECR repositories and their component records, with no workload
-or service-owned IAM resources. Unknown prior state or inaccessible repositories
+can use the legacy provider-hardening transition. The resulting eleven-resource
+graph contains the original seven registry resources plus the SES identity and
+three Easy DKIM DNS records, with no workload or service-owned IAM resources.
+Unknown prior state or inaccessible repositories
 fail admission.
 
 Apply rechecks requester authorization, reviewed source, backend version and the
@@ -48,12 +49,12 @@ complete graph. Post-apply drift uses the preview identity and requires every
 resource operation to be unchanged. These source controls still require trusted
 installation and live acceptance; this document does not claim either is complete.
 
-The scheduled TEST job uses a separate diagnostic entrypoint. It verifies the
-native GitHub schedule run and current main revision before AWS configuration,
-then uses the central Drift identity to check the complete seven-resource graph.
-Missing or partial state fails before preview. A successful no-change result is
-diagnostic only: it cannot authorize initialization, a workload transition or
-promotion. The scheduled PROD route remains outside this TEST registry change.
+The scheduled TEST and PROD jobs retain the installed main-only `make test-drift`
+route. The candidate `poc_scheduled_registry_drift.py` diagnostic helper is not
+connected to that workflow. Integrating it requires separate validation against
+the installed controller; the TEST-only launcher does not accept scheduled jobs.
+Diagnostic results cannot authorize initialization, a workload transition or
+promotion.
 
 Managed workload settings require explicit `executionRoleArn` and `taskRoleArn`
 matching the protected account, project and environment. Compute consumes those
@@ -104,7 +105,7 @@ publish a distinct receipt and must never set full `Governance Promotion` succes
 The concrete remaining producer/consumer work is:
 
 1. Extend the trusted registry runner/result observer to retain bounded metadata
-   for the exact final seven-resource checkpoint and native ECR identities after
+   for the exact final eleven-resource checkpoint and native ECR identities after
    saved apply and clean drift. Bind source/contract, plan, current checkpoint
    version/hash and original run/attempt; keep checkpoint bodies private.
 2. Add a TEST-only result preparation/publication path beside

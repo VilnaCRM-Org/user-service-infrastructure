@@ -484,6 +484,7 @@ def test_makefile_keeps_pulumi_guardrails_secret_safe() -> None:
     assert "GITHUB_TOKEN='$(GITHUB_TOKEN)'" not in text
     for command in ("preview", "up", "refresh", "destroy", "plan", "up-plan", "drift"):
         assert f"uv run --frozen python scripts/run_pulumi_command.py {command}" in text
+    assert "destructive-gate .artifacts/pulumi-preview/*.json" in text
     assert "--event-path" not in text
 
 

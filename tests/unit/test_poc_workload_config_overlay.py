@@ -22,7 +22,7 @@ def stack(tmp_path):
     (pulumi_dir / "Pulumi.test.yaml").write_text(
         yaml.safe_dump({"config": {"example:value": "safe"}})
     )
-    return SimpleNamespace(pulumi_dir=pulumi_dir)
+    return SimpleNamespace(pulumi_dir=pulumi_dir, registry_plan_gate=lambda *_: None)
 
 
 @pytest.fixture

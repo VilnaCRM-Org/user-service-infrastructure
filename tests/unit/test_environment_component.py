@@ -936,8 +936,7 @@ def test_main_exports_expected_outputs() -> None:
         finally:
             sys.path.pop(0)
 
-        stack_component = module_globals["stack"]
-        env_settings = stack_component.environment_settings
+        env_settings = module_globals["settings"]
         _assert_output_value(env_settings.environment, "dev")
         _assert_output_value(env_settings.service_name, "user-service")
         _assert_output_value(env_settings.stack_tag, "user-service-dev")
@@ -952,13 +951,6 @@ def test_main_exports_expected_outputs() -> None:
                 "Criticality": "high",
                 "RetentionClass": "standard",
             },
-        )
-        _assert_output_value(
-            stack_component.compute.outputs.service_url, "https://user.dev.internal"
-        )
-        _assert_output_value(
-            stack_component.compute.outputs.web_repository_url,
-            "123456789012.dkr.ecr.eu-central-1.amazonaws.com/user-service",
         )
 
     with mocked_pulumi_context(

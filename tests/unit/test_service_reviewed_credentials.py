@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -18,9 +19,6 @@ CLOUD_JOBS = (
     "test_preview",
     "test_apply",
     "test_post_apply_drift",
-    "prod_preview",
-    "prod_apply",
-    "prod_post_apply_drift",
 )
 
 
@@ -29,9 +27,20 @@ def workflow():
 
 
 def review_step(steps, purpose):
-    return next(
-        s for s in steps if s.get("name") == f"Verify reviewed source before {purpose}"
+    marker = {
+        "config credentials": "load-aws-ci-env",
+        "execution credentials": "aws-actions/configure-aws-credentials@",
+        "saved-plan replay": 'service_execution_host.py" execute',
+        "PR execution": 'service_execution_host.py" execute',
+    }[purpose]
+    index = next(
+        i
+        for i, step in enumerate(steps)
+        if marker in step.get("uses", "") or marker in step.get("run", "")
     )
+    review = steps[index - 1]
+    assert 'service_execution_host.py" recheck' in review["run"]
+    return review
 
 
 @pytest.mark.parametrize("job_name", CLOUD_JOBS)
@@ -70,28 +79,21 @@ def test_each_protected_worker_rechecks_before_credentials_and_pr_execution(job_
         assert steps.index(trusted) < steps.index(review) < steps.index(boundary)
         assert steps[steps.index(boundary) - 1] == review
         assert "if" not in review and "continue-on-error" not in review
-        assert review["env"] == {
-            "GH_TOKEN": "${{ github.token }}",
-            "REVIEW_REPOSITORY": "${{ github.repository }}",
-            "PR_NUMBER": "${{ needs.preflight.outputs.pull_request_number }}",
-            "EXPECTED_SHA": "${{ needs.preflight.outputs.head_sha }}",
-            "EXPECTED_BASE_SHA": "${{ needs.preflight.outputs.base_sha }}",
-        }
-        assert (
-            'python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/'
-            'reviewed_source_admission.py"' in review["run"]
-        )
-        for flag, variable in (
-            ("repository", "REVIEW_REPOSITORY"),
-            ("pr-number", "PR_NUMBER"),
-            ("expected-head-sha", "EXPECTED_SHA"),
-            ("expected-base-sha", "EXPECTED_BASE_SHA"),
+        assert "env" not in review
+        assert job["env"]["GH_TOKEN"] == "${{ github.token }}"
+        assert '"${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I' in review["run"]
+        for variable, output in (
+            ("REQUEST_PULL_REQUEST_NUMBER", "pull_request_number"),
+            ("REQUEST_HEAD_SHA", "head_sha"),
+            ("EXPECTED_BASE_SHA", "base_sha"),
         ):
-            assert f'--{flag} "${{{variable}}}"' in review["run"]
+            assert (
+                job["env"][variable] == "${{ needs.preflight.outputs." + output + " }}"
+            )
         assert "${{" not in review["run"]
 
 
-@pytest.mark.parametrize("environment", ["test", "prod"])
+@pytest.mark.parametrize("environment", ["test"])
 def test_saved_plan_replay_rechecks_after_all_artifact_downloads(environment):
     steps = workflow()["jobs"][environment + "_apply"]["steps"]
     review = review_step(steps, "saved-plan replay")
@@ -101,7 +103,8 @@ def test_saved_plan_replay_rechecks_after_all_artifact_downloads(environment):
         if s.get("uses", "").startswith("actions/download-artifact@")
     ]
     apply = next(s for s in steps if s.get("name", "").startswith("Apply saved "))
-    assert downloads and max(downloads) < steps.index(review)
+    apply_index = steps.index(apply)
+    assert downloads and max(downloads) < apply_index - 1
     assert steps[steps.index(apply) - 1] == review
     assert "if" not in review and "continue-on-error" not in review
     assert 'service_execution_host.py" execute' in apply["run"]
@@ -201,7 +204,10 @@ def test_real_preflight_cannot_return_execution_facts_without_review(
 def test_actual_review_shell_step_isolated_from_hostile_pr_imports(tmp_path):
     workspace = tmp_path / "pr"
     workspace.mkdir()
-    (workspace / ".trusted").symlink_to(ROOT, target_is_directory=True)
+    trusted = workspace / ".trusted"
+    trusted.mkdir()
+    (trusted / ".venv").symlink_to(sys.prefix, target_is_directory=True)
+    (trusted / "scripts").symlink_to(ROOT / "scripts", target_is_directory=True)
     marker = tmp_path / "imported-untrusted"
     for module in ("json", "re", "sitecustomize"):
         (workspace / f"{module}.py").write_text(
@@ -229,7 +235,7 @@ def test_actual_review_shell_step_isolated_from_hostile_pr_imports(tmp_path):
         "CREDENTIAL_CANARY": str(issued),
     }
     control = subprocess.run(
-        ["bash", "-e", "-c", script.replace("python3 -I", "python3")],
+        ["bash", "-e", "-c", script.replace(" -I", "")],
         cwd=workspace,
         env=environment,
         capture_output=True,
@@ -248,5 +254,5 @@ def test_actual_review_shell_step_isolated_from_hostile_pr_imports(tmp_path):
     )
     assert result.returncode == 1
     assert result.stdout == ""
-    assert result.stderr == "Reviewed-source admission failed.\n"
+    assert result.stderr == "Service worker host failed its trusted prerequisites.\n"
     assert not marker.exists() and not issued.exists()

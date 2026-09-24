@@ -343,8 +343,10 @@ def _provider_pin_value(field: str, value: Any) -> Any:
     return value
 
 
-def _materialize_provider_pins(config: dict[str, Any], target: dict[str, str]) -> None:
-    """Reject explicit redirects before emitting the exact desired AWS namespace."""
+def _materialize_provider_pins(
+    config: dict[str, Any], target: dict[str, str], *, materialize: bool
+) -> None:
+    """Validate all callers; add provider settings only for admitted PoC execution."""
     pins = {
         "region": target["region"],
         "allowedAccountIds": [target["accountId"]],
@@ -366,8 +368,10 @@ def _materialize_provider_pins(config: dict[str, Any], target: dict[str, str]) -
             type(actual) is type(expected) and actual == expected,
             "AWS provider configuration differs from the pinned target.",
         )
-        del settings[key]
-    settings.update({f"aws:{field}": value for field, value in pins.items()})
+        if materialize:
+            del settings[key]
+    if materialize:
+        settings.update({f"aws:{field}": value for field, value in pins.items()})
 
 
 def _workload_image_matches(
@@ -541,7 +545,11 @@ def _configuration(
     )
     config.pop("encryptionsalt", None)
     config.update(secretsprovider=state["url"], encryptedkey=state["encryptedkey"])
-    _materialize_provider_pins(config, target)
+    # Ordinary shared commands retain their committed desired provider config.
+    # Only the admitted PoC path owns the reviewed provider hardening transition.
+    _materialize_provider_pins(
+        config, target, materialize=context.registry_plan_gate is not None
+    )
     _materialize_workload_config(config, workload_config, target)
     return config
 

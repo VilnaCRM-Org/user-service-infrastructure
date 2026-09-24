@@ -10,11 +10,6 @@ CASES = (
     ("self-deploy", "test_preview"),
     ("self-deploy", "test_apply"),
     ("self-deploy", "test_post_apply_drift"),
-    ("self-deploy", "prod_preview"),
-    ("self-deploy", "prod_apply"),
-    ("self-deploy", "prod_post_apply_drift"),
-    ("scheduled-drift", "scheduled_test_drift"),
-    ("scheduled-drift", "scheduled_prod_drift"),
 )
 
 
@@ -53,19 +48,15 @@ def test_all_credentialed_jobs_build_before_credentials(filename, name):
     assert "environment" in job
 
 
-def test_test_only_dag_and_protected_proof_stay_distinct():
+def test_test_only_dag_keeps_unvalidated_completion_and_prod_routes_absent():
     jobs = yaml.safe_load((ROOT / ".github/workflows/self-deploy.yml").read_text())[
         "jobs"
     ]
     assert "PROD promotion is unavailable" in str(jobs["poc_prepare_source"])
     assert "poc_prepare_source" in jobs["test_preview"]["needs"]
     assert "test_apply" in jobs["test_post_apply_drift"]["needs"]
-    assert "test_post_apply_drift" in jobs["prod_preview"]["needs"]
-    for job in ("test_registry_observation", "test_registry_proof"):
-        assert "setup-service-execution" not in str(jobs[job])
-        assert "service_execution_host" not in str(jobs[job])
-    assert jobs["test_registry_proof"]["environment"] == "governance-evidence"
-    assert jobs["test_registry_observation"]["environment"] == "test-preview"
+    assert not any(name.startswith("prod_") for name in jobs)
+    assert not any(name.startswith("test_registry_") for name in jobs)
 
 
 def test_composite_uses_installed_tools_and_exact_build_recipe():
@@ -83,7 +74,8 @@ def test_composite_uses_installed_tools_and_exact_build_recipe():
         value in run for value in ("AWS_", "GH_TOKEN", "GITHUB_TOKEN", "make ")
     )
     recipe = (ROOT / "Dockerfile.service-execution").read_text()
-    assert "FROM service-execution-base" in recipe.splitlines()
+    assert "ARG SERVICE_EXECUTION_BASE=service-execution-base" in recipe.splitlines()
+    assert "FROM ${SERVICE_EXECUTION_BASE}" in recipe.splitlines()
     assert "USER root" in recipe.splitlines()
     assert "poc_provider_runtime.py install" in recipe
     assert "COPY scripts/poc_provider_runtime.py" in recipe

@@ -93,7 +93,7 @@ def test_runtime_descriptor_properties_return_declared_values() -> None:
             )
 
 
-def _copy_workdir(tmp_path: Path, *, name: str) -> Path:
+def _copy_workdir(tmp_path: Path, *, name: str, workload: bool = False) -> Path:
     """Copy the Pulumi program into an isolated temporary work directory."""
     work_dir = tmp_path / name
     shutil.copytree(
@@ -101,6 +101,12 @@ def _copy_workdir(tmp_path: Path, *, name: str) -> Path:
         work_dir,
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", ".pytest_cache"),
     )
+    if workload:
+        # Workload components are exercised only by an explicit test program.
+        # The installed ordinary entrypoint must remain metadata-only.
+        (work_dir / "__main__.py").write_text(
+            'from app.stack import UserServiceStack\nUserServiceStack("user-service")\n'
+        )
     return work_dir
 
 
@@ -197,11 +203,15 @@ def test_pulumi_stack_preview_and_up_cycle(tmp_path: Path) -> None:
 
         up_result = stack.up()
 
-        assert up_result.outputs["deploymentMode"].value == "preview"
+        assert set(up_result.outputs) == {
+            "stackTag",
+            "serviceName",
+            "environment",
+            "defaultTags",
+        }
         assert up_result.outputs["stackTag"].value == "integration-test-integration"
         assert up_result.outputs["serviceName"].value == "integration-test"
         assert up_result.outputs["environment"].value == "integration"
-        assert up_result.outputs["region"].value == "eu-central-1"
         assert up_result.outputs["defaultTags"].value == {
             "Project": "integration-test",
             "Environment": "integration",
@@ -211,20 +221,6 @@ def test_pulumi_stack_preview_and_up_cycle(tmp_path: Path) -> None:
             "Criticality": "high",
             "RetentionClass": "standard",
         }
-        assert (
-            up_result.outputs["serviceUrl"].value
-            == "https://integration-test.integration.internal"
-        )
-        assert (
-            up_result.outputs["loadBalancerDnsName"].value
-            == "integration-test-integration-alb.elb.amazonaws.com"
-        )
-        assert (
-            up_result.outputs["clusterName"].value == "integration-test-integration-ecs"
-        )
-        assert up_result.outputs["queueUrls"].value["healthCheck"] == (
-            "https://sqs.eu-central-1.amazonaws.com/preview/health-check-queue"
-        )
     finally:
         try:
             stack.destroy(on_output=None)
@@ -240,7 +236,7 @@ def test_pulumi_stack_managed_preview_cycle_without_host_credentials(
     tmp_path: Path,
 ) -> None:
     """Preview the managed stack even when the workspace has no real AWS creds."""
-    work_dir = _copy_workdir(tmp_path, name="pulumi-managed-preview")
+    work_dir = _copy_workdir(tmp_path, name="pulumi-managed-preview", workload=True)
 
     stack = auto.create_or_select_stack(
         stack_name=_stack_name(),
@@ -264,7 +260,7 @@ def test_pulumi_stack_rejects_zero_documentdb_instances_in_managed_mode(
     tmp_path: Path,
 ) -> None:
     """Fail the managed preview when DocumentDB would publish no instances."""
-    work_dir = _copy_workdir(tmp_path, name="pulumi-managed-preview")
+    work_dir = _copy_workdir(tmp_path, name="pulumi-managed-preview", workload=True)
 
     stack = auto.create_or_select_stack(
         stack_name=_stack_name(),
@@ -525,7 +521,7 @@ def test_managed_identity_and_health_validation_precedes_aws_registration(
     tmp_path: Path, key: str, value: str | None, message: str
 ) -> None:
     """Real preview rejects invalid role/health inputs before any AWS resource event."""
-    work_dir = _copy_workdir(tmp_path, name="pulumi-managed-preview")
+    work_dir = _copy_workdir(tmp_path, name="pulumi-managed-preview", workload=True)
     stack = auto.create_or_select_stack(
         stack_name=_stack_name(),
         work_dir=str(work_dir),

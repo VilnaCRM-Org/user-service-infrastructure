@@ -110,7 +110,7 @@ def _documents(projection, baseline):
         "accountId": projection.contract["account_id"],
         "region": projection.contract["region"],
     }
-    stack_config._materialize_provider_pins(config, target)
+    stack_config._materialize_provider_pins(config, target, materialize=True)
     stack_config._materialize_workload_config(
         config, bridge.workload_configuration(projection), target
     )

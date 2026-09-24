@@ -1,6 +1,7 @@
 # Built locally from the installed-main Dockerfile immediately before this layer.
 # hadolint ignore=DL3006
-FROM service-execution-base
+ARG SERVICE_EXECUTION_BASE=service-execution-base
+FROM ${SERVICE_EXECUTION_BASE}
 # The verifier is root PID 1; every Pulumi process drops to UID 2000.
 # hadolint ignore=DL3002
 USER root

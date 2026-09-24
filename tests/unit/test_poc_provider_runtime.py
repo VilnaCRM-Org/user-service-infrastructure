@@ -4,6 +4,7 @@ import hashlib
 import importlib
 import io
 import os
+import runpy
 import subprocess
 import sys
 import tarfile
@@ -15,6 +16,13 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 module = importlib.import_module("poc_provider_runtime")
 OFFICIAL_PINS = module.PINS
+
+
+def test_tomli_fallback_parses_provider_lock_without_tomllib(monkeypatch):
+    monkeypatch.setitem(sys.modules, "tomllib", None)
+    runtime = runpy.run_path(module.__file__)
+    lock = runtime["tomllib"].loads('[[package]]\nname = "pulumi"\nversion = "3.223.0"')
+    assert lock == {"package": [{"name": "pulumi", "version": "3.223.0"}]}
 
 
 @pytest.fixture

@@ -18,7 +18,10 @@ import tarfile
 from dataclasses import dataclass
 from pathlib import Path
 
-import tomllib  # ty: ignore[unresolved-import]  # Trusted action pins Python 3.11.
+try:
+    import tomllib  # ty: ignore[unresolved-import]
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 

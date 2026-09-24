@@ -208,7 +208,7 @@ test-destructive-diff: ## Fail when Pulumi previews delete or replace critical r
 		if ! compgen -G ".artifacts/pulumi-preview/*.json" >/dev/null; then \
 			uv run --frozen python ./scripts/run_pulumi_preview.py >/dev/null; \
 		fi; \
-	uv run python ./scripts/pulumi_ci_guardrails.py destructive-gate .artifacts/pulumi-preview/*.json'
+		uv run python ./scripts/pulumi_ci_guardrails.py destructive-gate .artifacts/pulumi-preview/*.json'
 
 test-iam-validation: ## Validate previewed IAM policies with AWS IAM Access Analyzer.
 	$(COMPOSE) run --rm $(COMPOSE_GITHUB_TOKEN) $(COMPOSE_SERVICE) bash -lc '\

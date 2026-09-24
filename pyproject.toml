@@ -16,6 +16,7 @@ dependencies = [
     "pulumi-random==4.19.2",
     "pulumi-tls==5.3.1",
     "pyyaml>=6,<7",
+    "tomli>=2.0,<3; python_version < '3.11'",
 ]
 
 [dependency-groups]
@@ -77,6 +78,7 @@ known_first_party = [
     "poc_registry_runner",
     "poc_workload_reconciliation",
     "poc_registry_completion",
+    "service_boundary_worker",
     "service_execution_process",
     "service_execution_transport",
     "service_execution_worker",
@@ -152,7 +154,7 @@ allowed_importers = ["app.environment"]
 name = "Pulumi app layering remains one-way"
 type = "layers"
 containers = ["app"]
-layers = ["stack", "compute", "data", "messaging", "network", "environment", "guardrails"]
+layers = ["stack", "compute", "data", "messaging", "network", "registry_phase", "registry", "mail_identity", "environment", "guardrails"]
 
 [[tool.importlinter.contracts]]
 name = "Policy pack stays behind the policy entrypoint"

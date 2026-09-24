@@ -36,7 +36,7 @@ def _apply_steps(path: Path, environment: str) -> tuple[list[dict], dict]:
 @pytest.mark.parametrize(
     "path", WORKFLOWS, ids=lambda path: str(path.relative_to(ROOT))
 )
-@pytest.mark.parametrize("environment", ["test", "prod"])
+@pytest.mark.parametrize("environment", ["test"])
 def test_apply_reuses_matching_same_run_preview(path: Path, environment: str) -> None:
     steps, apply = _apply_steps(path, environment)
     trusted_test = path.name == "self-deploy.yml" and environment == "test"
@@ -97,7 +97,7 @@ def test_apply_reuses_matching_same_run_preview(path: Path, environment: str) ->
 @pytest.mark.parametrize(
     "path", WORKFLOWS, ids=lambda path: str(path.relative_to(ROOT))
 )
-@pytest.mark.parametrize("environment", ["test", "prod"])
+@pytest.mark.parametrize("environment", ["test"])
 @pytest.mark.parametrize(
     ("case", "operation", "labels", "expected"),
     [
@@ -114,6 +114,7 @@ def test_apply_reuses_matching_same_run_preview(path: Path, environment: str) ->
         ("merged", "same", [], False),
         ("head-moved", "same", [], False),
         ("base-moved", "same", [], False),
+        ("checkout-moved", "same", [], False),
         ("retargeted", "same", [], False),
         ("pr-unavailable", "same", [], False),
         ("labels-unavailable", "same", [], True),
@@ -133,7 +134,9 @@ def test_rendered_apply_rechecks_current_labels(
     _, apply = _apply_steps(path, environment)
     trusted_test = path.name == "self-deploy.yml" and environment == "test"
     isolated_execution = path.name == "self-deploy.yml"
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    checkout = tmp_path / ".trusted" if isolated_execution else tmp_path
+    checkout.mkdir(exist_ok=True)
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True)
     subprocess.run(
         [
             "git",
@@ -148,11 +151,11 @@ def test_rendered_apply_rechecks_current_labels(
             "-qm",
             "fixture",
         ],
-        cwd=tmp_path,
+        cwd=checkout,
         check=True,
     )
     head = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+        ["git", "rev-parse", "HEAD"], cwd=checkout, text=True
     ).strip()
     artifact_root = tmp_path / (".trusted/.artifacts" if trusted_test else ".artifacts")
     preview_dir = artifact_root / "pulumi-preview"
@@ -284,9 +287,10 @@ def test_rendered_apply_rechecks_current_labels(
             "LABELS": json.dumps(labels),
             "GITHUB_REPOSITORY": "fixture/repository",
             "PR_NUMBER": "39",
-            "EXPECTED_SHA": head,
+            "EXPECTED_SHA": "a" * 40,
             "EXPECTED_BASE_SHA": "b" * 40,
             "GITHUB_WORKSPACE": str(tmp_path),
+            "GITHUB_SHA": "c" * 40 if case == "checkout-moved" else head,
             "POC_SOURCE_ARTIFACT_ID": "123",
             "POC_SOURCE_ARCHIVE_SHA256": "a" * 64,
             "POC_SOURCE_SHA256": "b" * 64,

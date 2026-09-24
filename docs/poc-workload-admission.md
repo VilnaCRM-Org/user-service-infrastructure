@@ -1,11 +1,13 @@
-# Connected workload prerequisite checks
+# Candidate workload prerequisite checks
 
-The trusted service worker now distinguishes the phase in the authenticated
-fixed PoC source contract. Registry requests retain the existing exact graph and
-saved-plan runner. Workload requests perform authenticated read checks and stop
-before any Pulumi program executes. PROD and scheduled routing are unchanged.
+The installed controller remains closed pending complete validation. Its trusted
+service worker distinguishes the phase in the authenticated fixed PoC source
+contract and rejects workload requests with `workload-execution-not-enabled`
+before any workload checks or Pulumi program. The prerequisite helpers below
+remain candidate code for a future separately validated integration. PROD and
+completion jobs are absent; scheduled drift retains the installed-main path.
 
-The workload branch reuses the original registry completion verifier, including
+The unconnected workload helper reuses the original registry completion verifier, including
 its App issuer, successful original workflow/jobs, historical source and immutable
 observation artifacts. It compares that receipt with a fresh native checkpoint
 and the complete eleven-resource registry/prerequisite graph and ECR controls. An absent,
@@ -40,7 +42,8 @@ declared byte size and SHA-256, then its native `os` and `architecture` are comp
 with the reviewed `linux/amd64` or `linux/arm64` release platform. Only platform,
 config digest and size join the image projection. Image environment, labels,
 history and other configuration never enter the projection or diagnostic errors.
-The bounded role/input prerequisite reader below now runs before the worker stop.
+The bounded role/input prerequisite reader below runs only when the candidate
+helper is invoked directly. The installed worker stops before invoking it.
 Full installed runtime capability admission remains required before constructing
 workload settings.
 The observer supports at most 100 layers and deliberately accepts only compressed
@@ -78,14 +81,15 @@ evidence can pass; these source checks do not establish that it is installed.
 
 ## Trusted inputs
 
-The three TEST execution jobs pass the existing protected
+Future integration would need the three TEST execution jobs to pass protected
 `GOVERNANCE_PROMOTION_APP_ID` and `GOVERNANCE_PROMOTION_APP_SLUG` variables, plus
 explicit `POC_REGISTRY_WORKFLOW_SHA` and `POC_PUBLISHER_WORKFLOW_SHA` revision pins.
 The latter pins must be set to reviewed installed workflow revisions. No value
 is inferred from a receipt, PR, dispatch input or current application branch.
-Missing values reject workload observation; registry and PROD do not require them.
-The host allowlist passes these non-secret inputs only to the root verifier.
-The UID 2000 program environment does not receive them or GitHub credentials.
+Missing values reject the candidate helper's workload observation. The installed
+TEST jobs do not forward these inputs, and the host allowlist omits all four.
+Neither the root worker nor the UID 2000 program currently receives them; GitHub
+credentials remain outside the program environment.
 
 The read adapter uses fixed `/usr/bin/gh`, `api.github.com`, a root-private HOME,
 a closed GitHub environment and the existing bounded process runner. Native
@@ -94,7 +98,8 @@ permission denial fails closed and is not evidence of an empty registry.
 
 ## Remaining enabling work
 
-The trusted worker also calls `poc_workload_capabilities.inspect_capabilities`.
+The unconnected helper calls `poc_workload_capabilities.inspect_capabilities`;
+the installed worker rejects workloads before reaching this helper.
 It requires the fixed central TEST execution/task role ARNs, native names, root
 paths, IAM role IDs, and exact independently enrolled `issue219/test/boundary/`
 policy ARNs. Execution trust must match the existing central ECS task service
@@ -120,7 +125,7 @@ and endpoints, with bounded output, no ambient profiles, credentials files or
 endpoint overrides. Access denial fails closed. Offline tests use synthetic native
 responses; no AWS validation or successful workload receipt is claimed.
 
-Successful reads currently end with
+Successful direct helper reads currently end with
 `workload-native-image-capability-and-plan-gates-required`. No plan artifact is
 published and no workload is registered or applied. This is an intentional
 execution boundary, not an acceptance result.
@@ -135,6 +140,9 @@ The current registry completion proof and full TEST+PROD promotion retain their
 existing meanings. Workload-to-registry downgrade remains forbidden.
 
 ## Automatic publisher dispatch
+
+The dispatcher helper is not connected to the installed workflow. The proposed
+integration below is unavailable until separately validated and installed.
 
 After successful registry proof publication, a separate `test_registry_dispatch`
 job checks out only the installed service workflow revision. It reauthenticates

@@ -18,22 +18,17 @@ import shutil  # noqa: E402
 import subprocess  # noqa: E402  # nosec B404
 import tempfile  # noqa: E402
 
-from service_execution_transport import project_document  # noqa: E402
+import poc_backend_observer as backend  # noqa: E402
+import pulumi_command_preflight as preflight  # noqa: E402
+from reviewed_source_admission import verify_reviewed_source  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 PATH = "/opt/pulumi:/usr/local/bin:/usr/bin:/bin"
-JOBS = frozenset(
-    {
-        "test_preview",
-        "test_apply",
-        "test_post_apply_drift",
-        "prod_preview",
-        "prod_apply",
-        "prod_post_apply_drift",
-        "scheduled_test_drift",
-        "scheduled_prod_drift",
-    }
-)
+JOBS = {
+    "test_preview": "plan",
+    "test_apply": "up-plan",
+    "test_post_apply_drift": "plan",
+}
 FIELDS = (
     "GH_TOKEN",
     "AWS_ACCESS_KEY_ID",
@@ -66,10 +61,6 @@ FIELDS = (
     "POC_SOURCE_ARTIFACT_ID",
     "POC_SOURCE_ARCHIVE_SHA256",
     "POC_SOURCE_SHA256",
-    "GOVERNANCE_PROMOTION_APP_ID",
-    "GOVERNANCE_PROMOTION_APP_SLUG",
-    "POC_REGISTRY_WORKFLOW_SHA",
-    "POC_PUBLISHER_WORKFLOW_SHA",
 )
 
 
@@ -137,9 +128,23 @@ def prepare():
     _trusted()
     job = os.environ.get("GITHUB_JOB", "")
     require(job in JOBS)
-    if "prod" in job:
-        source = Path(os.environ["GITHUB_WORKSPACE"])
-        project_document((source / "pulumi/Pulumi.yaml").read_bytes())
+
+
+def recheck():
+    """Revalidate the exact request and independent review before credentials."""
+    _trusted()
+    require(os.environ.get("GITHUB_JOB") in JOBS)
+    request = preflight.read_request()
+    require(request["target_environment"] == "test")
+    require(os.environ.get("EXPECTED_BASE_SHA") == os.environ["GITHUB_SHA"])
+    preflight.revalidate_requester(request)
+    verify_reviewed_source(
+        os.environ["GITHUB_REPOSITORY"],
+        request["pull_request_number"],
+        request["head_sha"],
+        os.environ["EXPECTED_BASE_SHA"],
+        gh=preflight.gh,
+    )
 
 
 def execute():
@@ -149,7 +154,11 @@ def execute():
     require(all(os.environ.get(key) for key in FIELDS[:4]))
     workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
     require(ROOT == workspace / ".trusted")
-    source = ROOT if job == "scheduled_test_drift" else workspace
+    recheck()
+    # Validate installed coordinates before forwarding only this job's role metadata.
+    # The worker repeats this check and verifies the actual native STS caller.
+    backend._target_coordinates(JOBS[job])
+    role_key = backend._operation_identity(JOBS[job])[0]
     public = Path(
         tempfile.mkdtemp(prefix="service-worker-public-", dir=os.environ["RUNNER_TEMP"])
     )
@@ -181,15 +190,13 @@ def execute():
         "--mount",
         f"type=bind,src={ROOT},dst=/trusted,readonly",
         "--mount",
-        f"type=bind,src={source},dst=/source,readonly",
-        "--mount",
         f"type=bind,src={public},dst=/public",
     ]
     environment = {key: os.environ[key] for key in FIELDS if key in os.environ}
+    environment[role_key] = os.environ[role_key]
     environment["PATH"] = PATH
-    for key in (*FIELDS, "PATH"):
-        if key in environment:
-            command.extend(["-e", key])
+    for key in environment:
+        command.extend(["-e", key])
     command.extend(
         [
             "service-execution-worker",
@@ -201,7 +208,7 @@ def execute():
     )
     _run(command, environment=environment)
     if job.endswith("_preview"):
-        destination = ROOT if job == "test_preview" else workspace
+        destination = ROOT
         for name in ("pulumi-plan", "pulumi-preview"):
             target = destination / ".artifacts" / name
             require(not target.exists())
@@ -210,10 +217,12 @@ def execute():
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("build", "prepare", "execute"))
+    parser.add_argument("command", choices=("build", "prepare", "recheck", "execute"))
     args = parser.parse_args(argv)
     try:
-        {"build": build, "prepare": prepare, "execute": execute}[args.command]()
+        {"build": build, "prepare": prepare, "recheck": recheck, "execute": execute}[
+            args.command
+        ]()
         return 0
     except Exception:
         print("Service worker host failed its trusted prerequisites.", file=sys.stderr)

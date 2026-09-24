@@ -58,7 +58,14 @@ jobs:
         id: resolve
         run: python3 scripts/pulumi_command_preflight.py --service
 
+      - name: Keep deployment closed pending complete controller validation
+        run: |
+          echo "TEST controller validation is incomplete; no AWS role is assumed." >&2
+          exit 1
+
   poc_prepare_source:
+    # Keep disabled until native graph and aggregate coverage gates pass.
+    if: ${{ false && success() }}
     name: Prepare TEST PoC Source Facts
     needs:
       - preflight
@@ -135,6 +142,7 @@ jobs:
           retention-days: 7
 
   test_preview:
+    if: ${{ false && success() }}
     name: Test Preview
     environment: test-preview
     runs-on: ubuntu-latest
@@ -161,11 +169,6 @@ jobs:
       group: pulumi-state-${{ github.repository }}-test-test
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ needs.preflight.outputs.head_sha }}
-          persist-credentials: false
-
       - name: Check out trusted credential helper
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -176,34 +179,10 @@ jobs:
       - name: Install trusted registry runtime before credentials
         uses: ./.trusted/.github/actions/setup-service-execution
 
-      - name: Recheck current PR head before credentials
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+      - name: Recheck exact source, requester and review
         run: |
-          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
-          test "$(jq -r '.state' <<< "${pr_json}")" = open
-          test "$(jq -r '.merged' <<< "${pr_json}")" = false
-          test "$(jq -r '.head.sha' <<< "${pr_json}")" = "${EXPECTED_SHA}"
-          test "$(jq -r '.base.ref' <<< "${pr_json}")" = main
-          test "$(jq -r '.base.sha' <<< "${pr_json}")" = "${EXPECTED_BASE_SHA}"
-          test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
-
-      - name: Verify reviewed source before config credentials
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REVIEW_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-        run: |
-          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
-            --repository "${REVIEW_REPOSITORY}" \
-            --pr-number "${PR_NUMBER}" \
-            --expected-head-sha "${EXPECTED_SHA}" \
-            --expected-base-sha "${EXPECTED_BASE_SHA}"
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" recheck
 
       - name: Load test AWS CI configuration
         id: ci_config
@@ -248,19 +227,10 @@ jobs:
             exit 1
           fi
 
-      - name: Verify reviewed source before execution credentials
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REVIEW_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+      - name: Recheck exact source, requester and review
         run: |
-          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
-            --repository "${REVIEW_REPOSITORY}" \
-            --pr-number "${PR_NUMBER}" \
-            --expected-head-sha "${EXPECTED_SHA}" \
-            --expected-base-sha "${EXPECTED_BASE_SHA}"
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" recheck
 
       - name: Configure AWS preview credentials via OIDC
         uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
@@ -280,19 +250,10 @@ jobs:
           echo "Role purpose: preview"
           echo "PR command: ${{ needs.preflight.outputs.display_command }}"
 
-      - name: Verify reviewed source before PR execution
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REVIEW_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+      - name: Recheck exact source, requester and review
         run: |
-          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
-            --repository "${REVIEW_REPOSITORY}" \
-            --pr-number "${PR_NUMBER}" \
-            --expected-head-sha "${EXPECTED_SHA}" \
-            --expected-base-sha "${EXPECTED_BASE_SHA}"
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" recheck
 
       - name: Save test update plan and preview artifact
         env:
@@ -300,10 +261,6 @@ jobs:
           POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
           POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
           POC_SOURCE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
-          GOVERNANCE_PROMOTION_APP_ID: ${{ vars.GOVERNANCE_PROMOTION_APP_ID }}
-          GOVERNANCE_PROMOTION_APP_SLUG: ${{ vars.GOVERNANCE_PROMOTION_APP_SLUG }}
-          POC_REGISTRY_WORKFLOW_SHA: ${{ vars.POC_REGISTRY_WORKFLOW_SHA }}
-          POC_PUBLISHER_WORKFLOW_SHA: ${{ vars.POC_PUBLISHER_WORKFLOW_SHA }}
         run: |
           "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
             "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" execute
@@ -362,8 +319,7 @@ jobs:
 
   test_apply:
     name: Test Apply
-    if: >-
-      needs.preflight.outputs.command == 'up'
+    if: ${{ false && needs.preflight.outputs.command == 'up' }}
     environment: test
     runs-on: ubuntu-latest
     needs:
@@ -391,11 +347,6 @@ jobs:
       group: pulumi-state-${{ github.repository }}-test-test
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ needs.preflight.outputs.head_sha }}
-          persist-credentials: false
-
       - name: Check out trusted credential helper
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -406,34 +357,10 @@ jobs:
       - name: Install trusted registry runtime before credentials
         uses: ./.trusted/.github/actions/setup-service-execution
 
-      - name: Recheck current PR head before credentials
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+      - name: Recheck exact source, requester and review
         run: |
-          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
-          test "$(jq -r '.state' <<< "${pr_json}")" = open
-          test "$(jq -r '.merged' <<< "${pr_json}")" = false
-          test "$(jq -r '.head.sha' <<< "${pr_json}")" = "${EXPECTED_SHA}"
-          test "$(jq -r '.base.ref' <<< "${pr_json}")" = main
-          test "$(jq -r '.base.sha' <<< "${pr_json}")" = "${EXPECTED_BASE_SHA}"
-          test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
-
-      - name: Verify reviewed source before config credentials
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REVIEW_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-        run: |
-          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
-            --repository "${REVIEW_REPOSITORY}" \
-            --pr-number "${PR_NUMBER}" \
-            --expected-head-sha "${EXPECTED_SHA}" \
-            --expected-base-sha "${EXPECTED_BASE_SHA}"
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" recheck
 
       - name: Load test AWS CI configuration
         id: ci_config
@@ -448,19 +375,10 @@ jobs:
             AWS_ACCOUNT_ID,AWS_REGION,AWS_APPLY_ROLE_ARN,
             PULUMI_BACKEND_URL,PULUMI_SECRETS_PROVIDER,PULUMI_PREVIEW_STACKS
 
-      - name: Verify reviewed source before execution credentials
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REVIEW_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+      - name: Recheck exact source, requester and review
         run: |
-          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
-            --repository "${REVIEW_REPOSITORY}" \
-            --pr-number "${PR_NUMBER}" \
-            --expected-head-sha "${EXPECTED_SHA}" \
-            --expected-base-sha "${EXPECTED_BASE_SHA}"
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" recheck
 
       - name: Configure AWS apply credentials via OIDC
         uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
@@ -480,19 +398,10 @@ jobs:
           echo "Role purpose: apply"
           echo "PR command: ${{ needs.preflight.outputs.display_command }}"
 
-      - name: Verify reviewed source before PR execution
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REVIEW_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+      - name: Recheck exact source, requester and review
         run: |
-          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
-            --repository "${REVIEW_REPOSITORY}" \
-            --pr-number "${PR_NUMBER}" \
-            --expected-head-sha "${EXPECTED_SHA}" \
-            --expected-base-sha "${EXPECTED_BASE_SHA}"
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" recheck
 
       - name: Download test plan artifact
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
@@ -510,19 +419,10 @@ jobs:
             needs.preflight.outputs.head_sha }}-test-preview
           path: .trusted/.artifacts/pulumi-preview
 
-      - name: Verify reviewed source before saved-plan replay
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REVIEW_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+      - name: Recheck exact source, requester and review
         run: |
-          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
-            --repository "${REVIEW_REPOSITORY}" \
-            --pr-number "${PR_NUMBER}" \
-            --expected-head-sha "${EXPECTED_SHA}" \
-            --expected-base-sha "${EXPECTED_BASE_SHA}"
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" recheck
 
       - name: Apply saved test plan
         env:
@@ -530,10 +430,6 @@ jobs:
           POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
           POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
           POC_SOURCE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
-          GOVERNANCE_PROMOTION_APP_ID: ${{ vars.GOVERNANCE_PROMOTION_APP_ID }}
-          GOVERNANCE_PROMOTION_APP_SLUG: ${{ vars.GOVERNANCE_PROMOTION_APP_SLUG }}
-          POC_REGISTRY_WORKFLOW_SHA: ${{ vars.POC_REGISTRY_WORKFLOW_SHA }}
-          POC_PUBLISHER_WORKFLOW_SHA: ${{ vars.POC_PUBLISHER_WORKFLOW_SHA }}
           PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
           EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
           EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
@@ -555,7 +451,7 @@ jobs:
           test "$(jq -r '.head.sha' <<< "${pr_json}")" = "${EXPECTED_SHA}"
           test "$(jq -r '.base.ref' <<< "${pr_json}")" = main
           test "$(jq -r '.base.sha' <<< "${pr_json}")" = "${EXPECTED_BASE_SHA}"
-          test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
+          test "$(git -C .trusted rev-parse HEAD)" = "${GITHUB_SHA}"
           # Remove only obsolete event metadata; preserve the original diff files.
           rm -f .trusted/.artifacts/pulumi-preview/pull-request-event.json
           "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
@@ -563,8 +459,7 @@ jobs:
 
   test_post_apply_drift:
     name: Test Post-Apply Drift
-    if: >-
-      needs.preflight.outputs.command == 'up'
+    if: ${{ false && needs.preflight.outputs.command == 'up' }}
     environment: test-preview
     runs-on: ubuntu-latest
     needs:
@@ -591,11 +486,6 @@ jobs:
       group: pulumi-state-${{ github.repository }}-test-test
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ needs.preflight.outputs.head_sha }}
-          persist-credentials: false
-
       - name: Check out trusted credential helper
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -606,34 +496,10 @@ jobs:
       - name: Install trusted registry runtime before credentials
         uses: ./.trusted/.github/actions/setup-service-execution
 
-      - name: Recheck current PR head before credentials
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+      - name: Recheck exact source, requester and review
         run: |
-          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
-          test "$(jq -r '.state' <<< "${pr_json}")" = open
-          test "$(jq -r '.merged' <<< "${pr_json}")" = false
-          test "$(jq -r '.head.sha' <<< "${pr_json}")" = "${EXPECTED_SHA}"
-          test "$(jq -r '.base.ref' <<< "${pr_json}")" = main
-          test "$(jq -r '.base.sha' <<< "${pr_json}")" = "${EXPECTED_BASE_SHA}"
-          test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
-
-      - name: Verify reviewed source before config credentials
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REVIEW_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-        run: |
-          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
-            --repository "${REVIEW_REPOSITORY}" \
-            --pr-number "${PR_NUMBER}" \
-            --expected-head-sha "${EXPECTED_SHA}" \
-            --expected-base-sha "${EXPECTED_BASE_SHA}"
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" recheck
 
       - name: Load test AWS CI configuration
         id: ci_config
@@ -648,19 +514,10 @@ jobs:
             AWS_ACCOUNT_ID,AWS_REGION,AWS_PREVIEW_ROLE_ARN,
             PULUMI_BACKEND_URL,PULUMI_SECRETS_PROVIDER,PULUMI_PREVIEW_STACKS
 
-      - name: Verify reviewed source before execution credentials
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REVIEW_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+      - name: Recheck exact source, requester and review
         run: |
-          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
-            --repository "${REVIEW_REPOSITORY}" \
-            --pr-number "${PR_NUMBER}" \
-            --expected-head-sha "${EXPECTED_SHA}" \
-            --expected-base-sha "${EXPECTED_BASE_SHA}"
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" recheck
 
       - name: Configure AWS drift credentials via OIDC
         uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
@@ -670,19 +527,10 @@ jobs:
           aws-region: ${{ steps.ci_config.outputs.aws-region }}
           allowed-account-ids: ${{ vars.AWS_TEST_ACCOUNT_ID }}
 
-      - name: Verify reviewed source before PR execution
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REVIEW_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+      - name: Recheck exact source, requester and review
         run: |
-          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
-            --repository "${REVIEW_REPOSITORY}" \
-            --pr-number "${PR_NUMBER}" \
-            --expected-head-sha "${EXPECTED_SHA}" \
-            --expected-base-sha "${EXPECTED_BASE_SHA}"
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" recheck
 
       - name: Run test post-apply drift detection
         env:
@@ -690,844 +538,9 @@ jobs:
           POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
           POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
           POC_SOURCE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
-          GOVERNANCE_PROMOTION_APP_ID: ${{ vars.GOVERNANCE_PROMOTION_APP_ID }}
-          GOVERNANCE_PROMOTION_APP_SLUG: ${{ vars.GOVERNANCE_PROMOTION_APP_SLUG }}
-          POC_REGISTRY_WORKFLOW_SHA: ${{ vars.POC_REGISTRY_WORKFLOW_SHA }}
-          POC_PUBLISHER_WORKFLOW_SHA: ${{ vars.POC_PUBLISHER_WORKFLOW_SHA }}
         run: |
           "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
             "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" execute
-
-  test_registry_observation:
-    name: Observe TEST Registry Completion
-    if: >-
-      needs.preflight.outputs.command == 'up' &&
-      needs.preflight.outputs.target_environment == 'test'
-    needs: [preflight, poc_prepare_source, test_apply, test_post_apply_drift]
-    environment: test-preview
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      actions: read
-      issues: read
-      pull-requests: read
-      id-token: write
-    concurrency:
-      group: pulumi-state-${{ github.repository }}-test-test
-      cancel-in-progress: false
-    outputs:
-      artifact_id: ${{ steps.observation_artifact.outputs.artifact-id }}
-      archive_sha256: ${{ steps.observation_artifact.outputs.artifact-digest }}
-      file_sha256: ${{ steps.observe.outputs.file_sha256 }}
-    env:
-      GH_TOKEN: ${{ github.token }}
-      POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
-      POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
-      POC_SOURCE_FILE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.sha }}
-          path: .trusted
-          persist-credentials: false
-      - name: Install trusted observation runtime before credentials
-        uses: ./.trusted/.github/actions/setup-poc-runtime
-      - name: Admit complete source and requester before config credentials
-        run: |
-          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
-            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_completion.py" admit
-      - name: Load test read-only observation configuration
-        id: ci_config
-        uses: ./.trusted/.github/actions/load-aws-ci-env
-        with:
-          environment: test
-          config-role-arn: ${{ vars.AWS_TEST_CI_CONFIG_ROLE_ARN }}
-          expected-account-id: ${{ vars.AWS_TEST_ACCOUNT_ID }}
-          aws-region: ${{ vars.AWS_TEST_REGION }}
-          purpose: PR test registry observation
-          required-keys: >-
-            AWS_ACCOUNT_ID,AWS_REGION,AWS_PREVIEW_ROLE_ARN,
-            PULUMI_BACKEND_URL,PULUMI_SECRETS_PROVIDER,PULUMI_PREVIEW_STACKS
-      - name: Re-admit complete source and requester before observation credentials
-        run: |
-          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
-            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_completion.py" admit
-      - name: Configure read-only observation credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
-        with:
-          role-to-assume: ${{ steps.ci_config.outputs.aws-preview-role-arn }}
-          role-session-name: gha-pr-test-preview-${{ github.run_id }}
-          aws-region: ${{ steps.ci_config.outputs.aws-region }}
-          allowed-account-ids: ${{ vars.AWS_TEST_ACCOUNT_ID }}
-      - name: Observe exact TEST registry without running a Pulumi child
-        id: observe
-        working-directory: .trusted
-        run: |
-          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
-            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_completion.py" observe >> "${GITHUB_OUTPUT}"
-      - name: Upload immutable fresh registry observation
-        id: observation_artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: poc-registry-observation-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .trusted/.artifacts/poc-registry-observation/observation.json
-          if-no-files-found: error
-          overwrite: false
-          retention-days: 90
-
-  test_registry_proof:
-    name: Publish TEST Registry Completion Proof
-    if: >-
-      github.event_name == 'repository_dispatch' &&
-      github.ref == 'refs/heads/main' &&
-      github.repository == 'VilnaCRM-Org/user-service-infrastructure' &&
-      needs.preflight.outputs.command == 'up' &&
-      needs.preflight.outputs.target_environment == 'test'
-    needs: [preflight, poc_prepare_source, test_apply, test_post_apply_drift, test_registry_observation]
-    environment: governance-evidence
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    outputs:
-      receipt_id: ${{ steps.receipt.outputs.registry_phase_receipt_id }}
-    permissions:
-      contents: read
-      actions: read
-      issues: read
-      pull-requests: read
-      deployments: read
-    env:
-      GH_TOKEN: ${{ github.token }}
-      POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
-      POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
-      POC_SOURCE_FILE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
-      POC_OBSERVATION_ARTIFACT_ID: ${{ needs.test_registry_observation.outputs.artifact_id }}
-      POC_OBSERVATION_ARCHIVE_SHA256: ${{ needs.test_registry_observation.outputs.archive_sha256 }}
-      POC_OBSERVATION_FILE_SHA256: ${{ needs.test_registry_observation.outputs.file_sha256 }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.sha }}
-          path: .trusted
-          persist-credentials: false
-      - name: Install trusted proof verifier before App credentials
-        uses: ./.trusted/.github/actions/setup-poc-runtime
-      - name: Authenticate completion and the main-only App boundary
-        working-directory: .trusted
-        run: |
-          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
-            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_completion.py" prepare
-      - name: Create existing promotion App token for deployment records only
-        id: registry_app
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
-        with:
-          app-id: ${{ vars.GOVERNANCE_PROMOTION_APP_ID }}
-          private-key: ${{ secrets.GOVERNANCE_PROMOTION_APP_PRIVATE_KEY }}
-          permission-deployments: write
-      - name: Publish and read back distinct TEST registry proof
-        id: receipt
-        working-directory: .trusted
-        env:
-          REGISTRY_PROOF_APP_TOKEN: ${{ steps.registry_app.outputs.token }}
-          REGISTRY_PROOF_APP_ID: ${{ vars.GOVERNANCE_PROMOTION_APP_ID }}
-          REGISTRY_PROOF_APP_SLUG: ${{ vars.GOVERNANCE_PROMOTION_APP_SLUG }}
-        run: |
-          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
-            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_completion.py" publish >> "${GITHUB_OUTPUT}"
-
-  test_registry_dispatch:
-    name: Dispatch TEST Application Publisher
-    if: >-
-      github.event_name == 'repository_dispatch' &&
-      github.ref == 'refs/heads/main' &&
-      github.repository == 'VilnaCRM-Org/user-service-infrastructure' &&
-      needs.preflight.outputs.command == 'up' &&
-      needs.preflight.outputs.target_environment == 'test'
-    needs: [preflight, poc_prepare_source, test_registry_observation, test_registry_proof]
-    environment: governance-evidence
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      actions: read
-      issues: read
-      pull-requests: read
-      deployments: read
-    env:
-      GH_TOKEN: ${{ github.token }}
-      POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
-      POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
-      POC_SOURCE_FILE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
-      POC_OBSERVATION_ARTIFACT_ID: ${{ needs.test_registry_observation.outputs.artifact_id }}
-      POC_OBSERVATION_ARCHIVE_SHA256: ${{ needs.test_registry_observation.outputs.archive_sha256 }}
-      POC_OBSERVATION_FILE_SHA256: ${{ needs.test_registry_observation.outputs.file_sha256 }}
-      POC_REGISTRY_RECEIPT_ID: ${{ needs.test_registry_proof.outputs.receipt_id }}
-      POC_PUBLISHER_WORKFLOW_SHA: ${{ vars.POC_PUBLISHER_WORKFLOW_SHA }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.sha }}
-          path: .trusted
-          persist-credentials: false
-      - name: Install trusted dispatcher before App credentials
-        uses: ./.trusted/.github/actions/setup-poc-runtime
-      - name: Verify same-run proof and installed publisher prerequisites
-        working-directory: .trusted
-        run: |
-          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
-            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_publisher_dispatch.py" prepare
-      - name: Create application-only dispatcher App token
-        id: publisher_app
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
-        with:
-          app-id: ${{ vars.GOVERNANCE_PROMOTION_APP_ID }}
-          private-key: ${{ secrets.GOVERNANCE_PROMOTION_APP_PRIVATE_KEY }}
-          owner: VilnaCRM-Org
-          repositories: user-service
-          permission-actions: write
-      - name: Revalidate and dispatch the exact TEST publisher
-        working-directory: .trusted
-        env:
-          PUBLISHER_DISPATCH_APP_TOKEN: ${{ steps.publisher_app.outputs.token }}
-        run: |
-          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
-            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_publisher_dispatch.py" dispatch
-
-  prod_preview:
-    name: Prod Preview
-    if: >-
-      always() && needs.preflight.result == 'success' &&
-      needs.preflight.outputs.target_environment == 'prod' &&
-      needs.test_preview.result == 'success' &&
-      (needs.preflight.outputs.command == 'plan' ||
-      needs.test_post_apply_drift.result == 'success')
-    environment: prod-preview
-    runs-on: ubuntu-latest
-    needs:
-      - preflight
-      - test_preview
-      - test_post_apply_drift
-    timeout-minutes: 25
-    permissions:
-      contents: read
-      actions: read
-      id-token: write
-      pull-requests: read
-    env:
-      PULUMI_SKIP_UPDATE_CHECK: "true"
-      GH_TOKEN: ${{ github.token }}
-      REQUEST_PULL_REQUEST_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-      REQUEST_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
-      REQUEST_COMMENT_ID: ${{ needs.preflight.outputs.comment_id }}
-      REQUEST_SOURCE_RUN_ID: ${{ needs.preflight.outputs.source_run_id }}
-      REQUEST_COMMAND: ${{ needs.preflight.outputs.command }}
-      REQUEST_TARGET_ENVIRONMENT: ${{ needs.preflight.outputs.target_environment }}
-      EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-    concurrency:
-      group: pulumi-state-${{ github.repository }}-prod-prod
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ needs.preflight.outputs.head_sha }}
-          persist-credentials: false
-
-      - name: Check out trusted credential helper
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.sha }}
-          path: .trusted
-          persist-credentials: false
-
-      - name: Build trusted isolated runtime before credentials
-        uses: ./.trusted/.github/actions/setup-service-execution
-
-      - name: Recheck current PR head before credentials
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-        run: |
-          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
-          test "$(jq -r '.state' <<< "${pr_json}")" = open
-          test "$(jq -r '.merged' <<< "${pr_json}")" = false
-          test "$(jq -r '.head.sha' <<< "${pr_json}")" = "${EXPECTED_SHA}"
-          test "$(jq -r '.base.ref' <<< "${pr_json}")" = main
-          test "$(jq -r '.base.sha' <<< "${pr_json}")" = "${EXPECTED_BASE_SHA}"
-          test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
-
-      - name: Verify reviewed source before config credentials
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REVIEW_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-        run: |
-          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
-            --repository "${REVIEW_REPOSITORY}" \
-            --pr-number "${PR_NUMBER}" \
-            --expected-head-sha "${EXPECTED_SHA}" \
-            --expected-base-sha "${EXPECTED_BASE_SHA}"
-
-      - name: Load prod preview AWS CI configuration
-        id: ci_config
-        uses: ./.trusted/.github/actions/load-aws-ci-env
-        with:
-          environment: prod-preview
-          config-role-arn: ${{ vars.AWS_PROD_PREVIEW_CI_CONFIG_ROLE_ARN }}
-          expected-account-id: ${{ vars.AWS_PROD_ACCOUNT_ID }}
-          aws-region: ${{ vars.AWS_PROD_REGION }}
-          purpose: PR prod preview
-          required-keys: >-
-            AWS_ACCOUNT_ID,AWS_REGION,AWS_PREVIEW_ROLE_ARN,AWS_DRIFT_ROLE_ARN,
-            PULUMI_BACKEND_URL,PULUMI_SECRETS_PROVIDER,
-            PULUMI_PREVIEW_STACKS,PULUMI_DRIFT_STACKS
-
-      - name: Validate production preview prerequisites
-        run: |
-          missing=()
-          for name in \
-            AWS_ACCOUNT_ID \
-            AWS_PREVIEW_ROLE_ARN \
-            AWS_DRIFT_ROLE_ARN \
-            PULUMI_BACKEND_URL \
-            PULUMI_SECRETS_PROVIDER \
-            PULUMI_PREVIEW_STACKS \
-            PULUMI_DRIFT_STACKS; do
-            if [[ -z "${!name}" ]]; then
-              missing+=("${name}")
-            fi
-          done
-          if [[ "${#missing[@]}" -gt 0 ]]; then
-            printf 'error: PR production preview is missing %s\n' "${missing[*]}" >&2
-            exit 1
-          fi
-          if [[ ! "${AWS_ACCOUNT_ID}" =~ ^[0-9]{12}$ ]]; then
-            echo "error: AWS_ACCOUNT_ID must be a 12-digit AWS account ID." >&2
-            exit 1
-          fi
-          if [[ "${PULUMI_BACKEND_URL}" != s3://* ]]; then
-            echo "error: PULUMI_BACKEND_URL must use an s3:// backend." >&2
-            exit 1
-          fi
-          if [[ "${PULUMI_SECRETS_PROVIDER}" != awskms://* ]]; then
-            echo "error: PULUMI_SECRETS_PROVIDER must use an awskms:// URI." >&2
-            exit 1
-          fi
-
-      - name: Verify reviewed source before execution credentials
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REVIEW_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-        run: |
-          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
-            --repository "${REVIEW_REPOSITORY}" \
-            --pr-number "${PR_NUMBER}" \
-            --expected-head-sha "${EXPECTED_SHA}" \
-            --expected-base-sha "${EXPECTED_BASE_SHA}"
-
-      - name: Configure AWS preview credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
-        with:
-          role-to-assume: ${{ steps.ci_config.outputs.aws-preview-role-arn }}
-          role-session-name: gha-pr-prod-preview-${{ github.run_id }}
-          aws-region: ${{ steps.ci_config.outputs.aws-region }}
-          allowed-account-ids: ${{ vars.AWS_PROD_ACCOUNT_ID }}
-
-      - name: Emit production preview evidence
-        run: |
-          account_id="$(aws sts get-caller-identity --query Account --output text)"
-          echo "CI config secret: ${CI_CONFIG_SECRET_ID}"
-          echo "Backend type: s3"
-          echo "Commit SHA: ${{ needs.preflight.outputs.head_sha }}"
-          echo "Current AWS account ID: ${account_id}"
-          echo "Role purpose: preview"
-          echo "PR command: ${{ needs.preflight.outputs.display_command }}"
-
-      - name: Verify reviewed source before PR execution
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REVIEW_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-        run: |
-          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
-            --repository "${REVIEW_REPOSITORY}" \
-            --pr-number "${PR_NUMBER}" \
-            --expected-head-sha "${EXPECTED_SHA}" \
-            --expected-base-sha "${EXPECTED_BASE_SHA}"
-
-      - name: Save production update plan and preview artifact
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          PULUMI_COMMIT_SHA: ${{ needs.preflight.outputs.head_sha }}
-        run: |
-          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
-            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" execute
-
-      - name: Upload production preview artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: >-
-            pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
-            needs.preflight.outputs.head_sha }}-prod-preview
-          path: .artifacts/pulumi-preview
-          retention-days: 7
-
-      - name: Upload production plan artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: >-
-            pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
-            needs.preflight.outputs.head_sha }}-prod-plan
-          path: .artifacts/pulumi-plan
-          retention-days: 7
-
-  prod_destructive_diff:
-    name: Prod Destructive Diff Gate
-    if: >-
-      github.event_name == 'repository_dispatch' &&
-      needs.preflight.outputs.target_environment == 'prod'
-    runs-on: ubuntu-latest
-    needs:
-      - preflight
-      - prod_preview
-    timeout-minutes: 10
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ needs.preflight.outputs.head_sha }}
-          persist-credentials: false
-
-      - name: Start development environment
-        run: make start
-
-      - name: Download production preview artifact
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
-        with:
-          name: >-
-            pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
-            needs.preflight.outputs.head_sha }}-prod-preview
-          path: .artifacts/pulumi-preview
-
-      - name: Enforce destructive diff gate
-        run: make test-destructive-diff
-
-  prod_apply:
-    name: Prod Apply
-    if: >-
-      needs.preflight.outputs.target_environment == 'prod' &&
-      needs.preflight.outputs.command == 'up'
-    runs-on: ubuntu-latest
-    needs:
-      - preflight
-      - test_apply
-      - test_post_apply_drift
-      - prod_preview
-      - prod_destructive_diff
-    timeout-minutes: 30
-    environment: prod
-    permissions:
-      contents: read
-      actions: read
-      id-token: write
-      pull-requests: read
-    env:
-      PULUMI_SKIP_UPDATE_CHECK: "true"
-      GH_TOKEN: ${{ github.token }}
-      REQUEST_PULL_REQUEST_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-      REQUEST_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
-      REQUEST_COMMENT_ID: ${{ needs.preflight.outputs.comment_id }}
-      REQUEST_SOURCE_RUN_ID: ${{ needs.preflight.outputs.source_run_id }}
-      REQUEST_COMMAND: ${{ needs.preflight.outputs.command }}
-      REQUEST_TARGET_ENVIRONMENT: ${{ needs.preflight.outputs.target_environment }}
-      EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-    concurrency:
-      group: pulumi-state-${{ github.repository }}-prod-prod
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ needs.preflight.outputs.head_sha }}
-          persist-credentials: false
-
-      - name: Verify approved commit SHA
-        run: |
-          checked_out_sha="$(git rev-parse HEAD)"
-          if [[ "${checked_out_sha}" != "${{ needs.preflight.outputs.head_sha }}" ]]; then
-            echo "error: approved workflow SHA does not match checked-out production SHA" >&2
-            exit 1
-          fi
-          echo "Approved production SHA: ${checked_out_sha}"
-
-      - name: Check out trusted credential helper
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.sha }}
-          path: .trusted
-          persist-credentials: false
-
-      - name: Build trusted isolated runtime before credentials
-        uses: ./.trusted/.github/actions/setup-service-execution
-
-      - name: Recheck current PR head before credentials
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-        run: |
-          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
-          test "$(jq -r '.state' <<< "${pr_json}")" = open
-          test "$(jq -r '.merged' <<< "${pr_json}")" = false
-          test "$(jq -r '.head.sha' <<< "${pr_json}")" = "${EXPECTED_SHA}"
-          test "$(jq -r '.base.ref' <<< "${pr_json}")" = main
-          test "$(jq -r '.base.sha' <<< "${pr_json}")" = "${EXPECTED_BASE_SHA}"
-          test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
-
-      - name: Verify reviewed source before config credentials
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REVIEW_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-        run: |
-          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
-            --repository "${REVIEW_REPOSITORY}" \
-            --pr-number "${PR_NUMBER}" \
-            --expected-head-sha "${EXPECTED_SHA}" \
-            --expected-base-sha "${EXPECTED_BASE_SHA}"
-
-      - name: Load prod AWS CI configuration
-        id: ci_config
-        uses: ./.trusted/.github/actions/load-aws-ci-env
-        with:
-          environment: prod
-          config-role-arn: ${{ vars.AWS_PROD_CI_CONFIG_ROLE_ARN }}
-          expected-account-id: ${{ vars.AWS_PROD_ACCOUNT_ID }}
-          aws-region: ${{ vars.AWS_PROD_REGION }}
-          purpose: PR prod apply
-          required-keys: >-
-            AWS_ACCOUNT_ID,AWS_REGION,AWS_APPLY_ROLE_ARN,
-            PULUMI_BACKEND_URL,PULUMI_SECRETS_PROVIDER,PULUMI_PREVIEW_STACKS
-
-      - name: Verify reviewed source before execution credentials
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REVIEW_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-        run: |
-          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
-            --repository "${REVIEW_REPOSITORY}" \
-            --pr-number "${PR_NUMBER}" \
-            --expected-head-sha "${EXPECTED_SHA}" \
-            --expected-base-sha "${EXPECTED_BASE_SHA}"
-
-      - name: Configure AWS apply credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
-        with:
-          role-to-assume: ${{ steps.ci_config.outputs.aws-apply-role-arn }}
-          role-session-name: gha-pr-prod-apply-${{ github.run_id }}
-          aws-region: ${{ steps.ci_config.outputs.aws-region }}
-          allowed-account-ids: ${{ vars.AWS_PROD_ACCOUNT_ID }}
-
-      - name: Emit production apply evidence
-        run: |
-          account_id="$(aws sts get-caller-identity --query Account --output text)"
-          echo "GitHub environment: prod"
-          echo "CI config secret: ${CI_CONFIG_SECRET_ID}"
-          echo "Backend type: s3"
-          echo "Commit SHA: ${{ needs.preflight.outputs.head_sha }}"
-          echo "Current AWS account ID: ${account_id}"
-          echo "Role purpose: apply"
-          echo "PR command: ${{ needs.preflight.outputs.display_command }}"
-
-      - name: Verify reviewed source before PR execution
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REVIEW_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-        run: |
-          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
-            --repository "${REVIEW_REPOSITORY}" \
-            --pr-number "${PR_NUMBER}" \
-            --expected-head-sha "${EXPECTED_SHA}" \
-            --expected-base-sha "${EXPECTED_BASE_SHA}"
-
-      - name: Download production plan artifact
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
-        with:
-          name: >-
-            pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
-            needs.preflight.outputs.head_sha }}-prod-plan
-          path: .artifacts/pulumi-plan
-
-      - name: Download production preview for apply revalidation
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
-        with:
-          name: >-
-            pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
-            needs.preflight.outputs.head_sha }}-prod-preview
-          path: .artifacts/pulumi-preview
-
-      - name: Verify reviewed source before saved-plan replay
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REVIEW_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-        run: |
-          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
-            --repository "${REVIEW_REPOSITORY}" \
-            --pr-number "${PR_NUMBER}" \
-            --expected-head-sha "${EXPECTED_SHA}" \
-            --expected-base-sha "${EXPECTED_BASE_SHA}"
-
-      - name: Apply saved production plan
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          GITHUB_TOKEN: ${{ github.token }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-          PULUMI_EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-        run: |
-          # The immutable same-run preview is the diff for this saved plan.
-          shopt -s nullglob
-          previews=(.artifacts/pulumi-preview/*.json)
-          found_preview=false
-          for preview in "${previews[@]}"; do
-            if [[ "${preview}" != */pull-request-event.json ]]; then
-              test -s "${preview}"
-              found_preview=true
-            fi
-          done
-          test "${found_preview}" = true
-          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
-          test "$(jq -r '.state' <<< "${pr_json}")" = open
-          test "$(jq -r '.merged' <<< "${pr_json}")" = false
-          test "$(jq -r '.head.sha' <<< "${pr_json}")" = "${EXPECTED_SHA}"
-          test "$(jq -r '.base.ref' <<< "${pr_json}")" = main
-          test "$(jq -r '.base.sha' <<< "${pr_json}")" = "${EXPECTED_BASE_SHA}"
-          test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
-          # Remove only obsolete event metadata; preserve the original diff files.
-          rm -f .artifacts/pulumi-preview/pull-request-event.json
-          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
-            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" execute
-
-  prod_post_apply_drift:
-    name: Prod Post-Apply Drift
-    if: >-
-      needs.preflight.outputs.target_environment == 'prod' &&
-      needs.preflight.outputs.command == 'up'
-    environment: prod-preview
-    runs-on: ubuntu-latest
-    needs:
-      - preflight
-      - prod_apply
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      actions: read
-      id-token: write
-      pull-requests: read
-    env:
-      PULUMI_SKIP_UPDATE_CHECK: "true"
-      GH_TOKEN: ${{ github.token }}
-      REQUEST_PULL_REQUEST_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-      REQUEST_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
-      REQUEST_COMMENT_ID: ${{ needs.preflight.outputs.comment_id }}
-      REQUEST_SOURCE_RUN_ID: ${{ needs.preflight.outputs.source_run_id }}
-      REQUEST_COMMAND: ${{ needs.preflight.outputs.command }}
-      REQUEST_TARGET_ENVIRONMENT: ${{ needs.preflight.outputs.target_environment }}
-      EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-    concurrency:
-      group: pulumi-state-${{ github.repository }}-prod-prod
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ needs.preflight.outputs.head_sha }}
-          persist-credentials: false
-
-      - name: Check out trusted credential helper
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.sha }}
-          path: .trusted
-          persist-credentials: false
-
-      - name: Build trusted isolated runtime before credentials
-        uses: ./.trusted/.github/actions/setup-service-execution
-
-      - name: Recheck current PR head before credentials
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-        run: |
-          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
-          test "$(jq -r '.state' <<< "${pr_json}")" = open
-          test "$(jq -r '.merged' <<< "${pr_json}")" = false
-          test "$(jq -r '.head.sha' <<< "${pr_json}")" = "${EXPECTED_SHA}"
-          test "$(jq -r '.base.ref' <<< "${pr_json}")" = main
-          test "$(jq -r '.base.sha' <<< "${pr_json}")" = "${EXPECTED_BASE_SHA}"
-          test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
-
-      - name: Verify reviewed source before config credentials
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REVIEW_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-        run: |
-          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
-            --repository "${REVIEW_REPOSITORY}" \
-            --pr-number "${PR_NUMBER}" \
-            --expected-head-sha "${EXPECTED_SHA}" \
-            --expected-base-sha "${EXPECTED_BASE_SHA}"
-
-      - name: Load prod preview AWS CI configuration
-        id: ci_config
-        uses: ./.trusted/.github/actions/load-aws-ci-env
-        with:
-          environment: prod-preview
-          config-role-arn: ${{ vars.AWS_PROD_PREVIEW_CI_CONFIG_ROLE_ARN }}
-          expected-account-id: ${{ vars.AWS_PROD_ACCOUNT_ID }}
-          aws-region: ${{ vars.AWS_PROD_REGION }}
-          purpose: PR prod drift
-          required-keys: >-
-            AWS_ACCOUNT_ID,AWS_REGION,AWS_DRIFT_ROLE_ARN,
-            PULUMI_BACKEND_URL,PULUMI_SECRETS_PROVIDER,PULUMI_DRIFT_STACKS
-
-      - name: Verify reviewed source before execution credentials
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REVIEW_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-        run: |
-          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
-            --repository "${REVIEW_REPOSITORY}" \
-            --pr-number "${PR_NUMBER}" \
-            --expected-head-sha "${EXPECTED_SHA}" \
-            --expected-base-sha "${EXPECTED_BASE_SHA}"
-
-      - name: Configure AWS drift credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
-        with:
-          role-to-assume: ${{ steps.ci_config.outputs.aws-drift-role-arn }}
-          role-session-name: gha-pr-prod-drift-${{ github.run_id }}
-          aws-region: ${{ steps.ci_config.outputs.aws-region }}
-          allowed-account-ids: ${{ vars.AWS_PROD_ACCOUNT_ID }}
-
-      - name: Verify reviewed source before PR execution
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REVIEW_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
-          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-        run: |
-          python3 -I "${GITHUB_WORKSPACE}/.trusted/scripts/reviewed_source_admission.py" \
-            --repository "${REVIEW_REPOSITORY}" \
-            --pr-number "${PR_NUMBER}" \
-            --expected-head-sha "${EXPECTED_SHA}" \
-            --expected-base-sha "${EXPECTED_BASE_SHA}"
-
-      - name: Run production post-apply drift detection
-        run: |
-          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
-            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" execute
-
-  platform_promotion:
-    concurrency:
-      group: promotion-status-${{ needs.preflight.outputs.pull_request_number }}
-      cancel-in-progress: false
-    name: Publish Service Promotion Proof
-    needs:
-      - preflight
-      - test_apply
-      - test_post_apply_drift
-      - prod_apply
-      - prod_post_apply_drift
-    if: >-
-      needs.preflight.outputs.command == 'up' &&
-      needs.preflight.outputs.target_environment == 'prod'
-    environment: governance-evidence
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      pull-requests: read
-    env:
-      GH_TOKEN: ${{ github.token }}
-      PROMOTION_KIND: service
-      PROMOTION_NEEDS: ${{ toJSON(needs) }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Download same-run test saved-plan proof
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
-        with:
-          name: >-
-            pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{ needs.preflight.outputs.head_sha }}-test-plan
-          path: .artifacts/promotion-inputs/test
-      - name: Download same-run prod saved-plan proof
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
-        with:
-          name: >-
-            pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{ needs.preflight.outputs.head_sha }}-prod-plan
-          path: .artifacts/promotion-inputs/prod
-      - name: Prepare verified promotion proof
-        run: python3 scripts/governance_promotion.py prepare
-      - name: Upload immutable promotion proof
-        id: proof
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: governance-promotion
-          path: .artifacts/governance-promotion/proof.json
-          if-no-files-found: error
-          retention-days: 90
-      - name: Verify main-only App key boundary
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/governance_promotion.py verify-environment
-      - name: Create dedicated promotion App token
-        id: promotion_app
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
-        with:
-          app-id: ${{ vars.GOVERNANCE_PROMOTION_APP_ID }}
-          private-key: ${{ secrets.GOVERNANCE_PROMOTION_APP_PRIVATE_KEY }}
-          permission-statuses: write
-          permission-deployments: write
-          permission-actions: read
-          permission-contents: read
-          permission-pull-requests: read
-      - name: Publish verified promotion and account deployment records
-        env:
-          GH_TOKEN: ${{ steps.promotion_app.outputs.token }}
-          PROMOTION_ARTIFACT_ID: ${{ steps.proof.outputs.artifact-id }}
-        run: python3 scripts/governance_promotion.py publish
 
   comment_result:
     name: Comment Result
@@ -1536,18 +549,10 @@ jobs:
     needs:
       - preflight
       - poc_prepare_source
-      - platform_promotion
       - test_preview
       - test_destructive_diff
       - test_apply
       - test_post_apply_drift
-      - test_registry_observation
-      - test_registry_proof
-      - test_registry_dispatch
-      - prod_preview
-      - prod_destructive_diff
-      - prod_apply
-      - prod_post_apply_drift
     timeout-minutes: 10
     permissions:
       issues: write
@@ -1576,16 +581,8 @@ jobs:
             echo "| Test destructive diff | \`${{ needs.test_destructive_diff.result }}\` |"
             echo "| Test apply | \`${{ needs.test_apply.result }}\` |"
             echo "| Test post-apply drift | \`${{ needs.test_post_apply_drift.result }}\` |"
-            echo "| TEST registry observation | \`${{ needs.test_registry_observation.result }}\` |"
-            echo "| TEST publisher dispatch | \`${{ needs.test_registry_dispatch.result }}\` |"
-            echo "| TEST registry completion proof | \`${{ needs.test_registry_proof.result }}\` |"
-            echo "| Production preview | \`${{ needs.prod_preview.result }}\` |"
-            echo "| Production destructive diff | \`${{ needs.prod_destructive_diff.result }}\` |"
-            echo "| Production apply | \`${{ needs.prod_apply.result }}\` |"
-            echo "| Production post-apply drift | \`${{ needs.prod_post_apply_drift.result }}\` |"
             echo
-            echo "PoC source preparation supports TEST only; PROD requests are rejected before cloud execution."
-            echo "Production stages are gated behind a successful test apply and test post-apply drift check for the same PR head SHA."
+            echo "TEST controller validation is incomplete; all PR deployment remains disabled."
           } > "${body_file}"
 
           pr_number="${{ needs.preflight.outputs.pull_request_number }}"

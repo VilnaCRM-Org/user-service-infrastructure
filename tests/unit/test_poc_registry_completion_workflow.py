@@ -1,4 +1,4 @@
-"""Trusted-only observation and distinct deployment issuance workflow boundaries."""
+"""Completion helpers must not restore routes closed by the installed controller."""
 
 from pathlib import Path
 
@@ -14,145 +14,24 @@ def jobs():
     ]
 
 
-@pytest.mark.parametrize("name", ["test_registry_observation", "test_registry_proof"])
-def test_fresh_jobs_execute_only_trusted_main(name):
-    job = jobs()[name]
-    steps = job["steps"]
-    assert {
-        "preflight",
-        "poc_prepare_source",
-        "test_apply",
-        "test_post_apply_drift",
-    } <= set(job["needs"])
-    assert "needs.preflight.outputs.command == 'up'" in job["if"]
-    assert "needs.preflight.outputs.target_environment == 'test'" in job["if"]
-    checkouts = [
-        step for step in steps if step.get("uses", "").startswith("actions/checkout@")
-    ]
-    assert len(checkouts) == 1
-    assert checkouts[0]["with"] == {
-        "ref": "${{ github.sha }}",
-        "path": ".trusted",
-        "persist-credentials": False,
-    }
-    for step in steps:
-        script = step.get("run", "")
-        assert "make " not in script and "poc_registry_runner.py" not in script
-        assert "continue-on-error" not in step
-        if script:
-            assert '"${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I' in script
-            assert "${{" not in script
+@pytest.mark.parametrize(
+    "name",
+    ["test_registry_observation", "test_registry_proof", "test_registry_dispatch"],
+)
+def test_unvalidated_completion_route_is_not_installed(name):
+    graph = jobs()
+    assert name not in graph
+    assert all(name not in job.get("needs", []) for job in graph.values())
+    assert name not in str(graph["comment_result"])
 
 
-def test_observer_admits_before_both_credential_transitions():
-    job = jobs()["test_registry_observation"]
-    assert job["environment"] == "test-preview"
-    assert job["concurrency"]["cancel-in-progress"] is False
-    assert job["permissions"]["id-token"] == "write"
-    steps = job["steps"]
-    for index, step in enumerate(steps):
-        if "load-aws-ci-env" in step.get("uses", "") or step.get("uses", "").startswith(
-            "aws-actions/"
-        ):
-            assert steps[index - 1]["run"].rstrip().endswith(" admit")
-    credentials = next(
-        step for step in steps if step.get("uses", "").startswith("aws-actions/")
-    )
-    assert (
-        credentials["with"]["role-to-assume"]
-        == "${{ steps.ci_config.outputs.aws-preview-role-arn }}"
-    )
-    assert (
-        credentials["with"]["role-session-name"]
-        == "gha-pr-test-preview-${{ github.run_id }}"
-    )
-    upload = next(step for step in steps if step.get("id") == "observation_artifact")
-    assert (
-        upload["with"]["path"]
-        == ".trusted/.artifacts/poc-registry-observation/observation.json"
-    )
-    assert (
-        upload["with"]["overwrite"] is False
-        and upload["with"]["if-no-files-found"] == "error"
-    )
-    assert "pulumi-plan" not in str(job) and "pulumi-preview/" not in str(job)
-
-
-def test_proof_has_no_aws_or_full_promotion_authority():
-    job = jobs()["test_registry_proof"]
-    assert job["environment"] == "governance-evidence"
-    assert "test_registry_observation" in job["needs"]
-    assert "github.ref == 'refs/heads/main'" in job["if"]
-    assert "github.event_name == 'repository_dispatch'" in job["if"]
-    assert (
-        "github.repository == 'VilnaCRM-Org/user-service-infrastructure'" in job["if"]
-    )
-    assert "id-token" not in job["permissions"] and "statuses" not in job["permissions"]
-    steps = job["steps"]
-    token = next(step for step in steps if step.get("id") == "registry_app")
-    assert set(token["with"]) == {"app-id", "private-key", "permission-deployments"}
-    assert token["with"]["permission-deployments"] == "write"
-    assert token["with"]["app-id"] == "${{ vars.GOVERNANCE_PROMOTION_APP_ID }}"
-    assert steps[steps.index(token) - 1]["run"].rstrip().endswith(" prepare")
-    assert (
-        steps[-1]["env"]["REGISTRY_PROOF_APP_TOKEN"]
-        == "${{ steps.registry_app.outputs.token }}"
-    )
-    assert job["env"]["GH_TOKEN"] == "${{ github.token }}"
-    assert not any(step.get("uses", "").startswith("aws-actions/") for step in steps)
-    assert "governance_promotion.py" not in str(job)
-    for field in ("ARTIFACT_ID", "ARCHIVE_SHA256", "FILE_SHA256"):
-        assert (
-            "needs.test_registry_observation.outputs."
-            in job["env"][f"POC_OBSERVATION_{field}"]
-        )
-
-
-def test_completion_failure_remains_visible_in_result():
-    job = jobs()["comment_result"]
-    assert {"test_registry_observation", "test_registry_proof"} <= set(job["needs"])
-    script = job["steps"][0]["run"]
-    assert "needs.test_registry_observation.result" in script
-    assert "needs.test_registry_proof.result" in script
-    assert "test_registry_dispatch" in job["needs"]
-    assert "needs.test_registry_dispatch.result" in script
-
-
-def test_dispatch_is_a_separate_trusted_job_with_application_only_actions_token():
-    job = jobs()["test_registry_dispatch"]
-    assert "test_registry_proof" in job["needs"]
-    assert job["environment"] == "governance-evidence"
-    assert all(value == "read" for value in job["permissions"].values())
-    assert "github.ref == 'refs/heads/main'" in job["if"]
-    assert "github.event_name == 'repository_dispatch'" in job["if"]
-    assert "needs.preflight.outputs.target_environment == 'test'" in job["if"]
-    steps = job["steps"]
-    assert steps[0]["with"] == {
-        "ref": "${{ github.sha }}",
-        "path": ".trusted",
-        "persist-credentials": False,
-    }
-    token = next(step for step in steps if step.get("id") == "publisher_app")
-    assert token["with"] == {
-        "app-id": "${{ vars.GOVERNANCE_PROMOTION_APP_ID }}",
-        "private-key": "${{ secrets.GOVERNANCE_PROMOTION_APP_PRIVATE_KEY }}",
-        "owner": "VilnaCRM-Org",
-        "repositories": "user-service",
-        "permission-actions": "write",
-    }
-    assert steps[steps.index(token) - 1]["run"].rstrip().endswith(" prepare")
-    assert steps[-1]["run"].rstrip().endswith(" dispatch")
-    assert set(steps[-1]["env"]) == {"PUBLISHER_DISPATCH_APP_TOKEN"}
-    assert "REGISTRY_PROOF_APP_TOKEN" not in str(job)
-    assert "POC_PUBLISHER_WORKFLOW_SHA" in job["env"]
-    assert (
-        job["env"]["POC_REGISTRY_RECEIPT_ID"]
-        == "${{ needs.test_registry_proof.outputs.receipt_id }}"
-    )
-    proof = jobs()["test_registry_proof"]
-    assert (
-        proof["outputs"]["receipt_id"]
-        == "${{ steps.receipt.outputs.registry_phase_receipt_id }}"
-    )
-    assert '>> "${GITHUB_OUTPUT}"' in proof["steps"][-1]["run"]
-    assert not any("continue-on-error" in step or "if" in step for step in steps)
+def test_completion_helpers_cannot_issue_credentials_from_workflow():
+    graph = jobs()
+    assert "exit 1" in graph["preflight"]["steps"][-1]["run"]
+    for job in graph.values():
+        assert job.get("environment") != "governance-evidence"
+        assert "deployments" not in job.get("permissions", {})
+        for step in job["steps"]:
+            assert "actions/create-github-app-token@" not in step.get("uses", "")
+            assert "poc_registry_completion.py" not in step.get("run", "")
+            assert "poc_publisher_dispatch.py" not in step.get("run", "")

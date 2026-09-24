@@ -219,8 +219,12 @@ def test_cli_reads_fixed_endpoints_without_credentials_or_pagination_conflict(
             "start-record-name": "a" * 32 + "._domainkey." + mail.DOMAIN,
         },
     )
-    assert "https://email.eu-central-1.amazonaws.com" in calls[0]
-    assert "https://route53.amazonaws.com" in calls[1]
+    assert calls[0][calls[0].index("--endpoint-url") + 1] == (
+        "https://email.eu-central-1.amazonaws.com"
+    )
+    assert calls[1][calls[1].index("--endpoint-url") + 1] == (
+        "https://route53.amazonaws.com"
+    )
     assert "--max-items" not in calls[1]
     request = json.loads(calls[1][calls[1].index("--cli-input-json") + 1])
     assert request["MaxItems"] == "1"

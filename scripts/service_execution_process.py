@@ -54,10 +54,10 @@ def private_read(path):
     return raw
 
 
-def _streams(process, timeout):
+def _streams(process, timeout, *, check=True):
     """Drain bounded stdout/stderr concurrently to prevent pipe deadlocks."""
     result = bytearray()
-    errors = 0
+    errors = bytearray()
     deadline = time.monotonic() + timeout
     with selectors.DefaultSelector() as selector:
         selector.register(cast(BinaryIO, process.stdout), selectors.EVENT_READ, True)
@@ -75,13 +75,16 @@ def _streams(process, timeout):
                     )
                     result.extend(chunk)
                 else:
-                    errors += len(chunk)
-                    require(errors <= 1024 * 1024, "private-error-bound")
-        require(
-            process.wait(timeout=max(0.01, deadline - time.monotonic())) == 0,
-            "private-process-failed",
-        )
-    return bytes(result)
+                    require(
+                        len(errors) + len(chunk) <= 1024 * 1024,
+                        "private-error-bound",
+                    )
+                    errors.extend(chunk)
+        returncode = process.wait(timeout=max(0.01, deadline - time.monotonic()))
+        require(not check or returncode == 0, "private-process-failed")
+    return subprocess.CompletedProcess(
+        process.args, returncode, bytes(result), bytes(errors)
+    )
 
 
 def _child_pids():
@@ -90,7 +93,7 @@ def _child_pids():
     for path in Path("/proc").glob("[0-9]*/status"):
         try:
             fields = dict(row.split(":", 1) for row in path.read_text().splitlines())
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             continue
         if fields["Uid"].split()[0] == "2000" and "Z" not in fields["State"]:
             found.append(int(path.parent.name))
@@ -111,7 +114,7 @@ def _stop_children():
         time.sleep(0.01)
 
 
-def run(command, *, env, cwd, child=False, timeout=1200):
+def run(command, *, env, cwd, child=False, timeout=1200, check=True):
     """Execute trusted absolute binaries without a shell or unbounded output."""
     require(Path(command[0]).is_absolute(), "absolute-executable-required")
     try:
@@ -129,7 +132,8 @@ def run(command, *, env, cwd, child=False, timeout=1200):
             extra_groups=() if child else None,
         ) as process:
             try:
-                return _streams(process, timeout)
+                result = _streams(process, timeout, check=check)
+                return result.stdout if check else result
             finally:
                 if process.poll() is None:
                     process.kill()

@@ -265,3 +265,12 @@ the protected controller and its exact account-local stack list, backend and KMS
 provider. The general guarded command helper preserves explicit selected-stack
 or multi-stack configuration; the local fixture helper does not silently request
 shared TEST/PROD credentials.
+
+## Controller installation verification
+
+The first post-install verification uses an open documentation-only pull request
+and one frozen head for the protected TEST/PROD comment deployment sequence.
+Its saved plans, drift results and promotion record provide the execution proof;
+this marker alone does not certify that the controller has run successfully.
+The metadata-only service program is expected to create no AWS resources. Any
+actual resource, permission, backend or encryption change requires separate review.

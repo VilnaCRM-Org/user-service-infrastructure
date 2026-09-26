@@ -76,6 +76,7 @@ known_first_party = [
     "poc_registry_phase_entrypoint",
     "poc_registry_plan",
     "poc_registry_runner",
+    "poc_workload_aliases",
     "poc_workload_reconciliation",
     "poc_registry_completion",
     "service_boundary_worker",

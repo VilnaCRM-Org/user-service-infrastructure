@@ -265,3 +265,13 @@ the protected controller and its exact account-local stack list, backend and KMS
 provider. The general guarded command helper preserves explicit selected-stack
 or multi-stack configuration; the local fixture helper does not silently request
 shared TEST/PROD credentials.
+
+## TEST registry PR-comment rehearsal
+
+This documentation-only pull request freezes one reviewed head for
+`/pulumi test plan` and `/pulumi test up`. The installed-main controller reads
+the fixed TEST registry contract and does not execute code from this PR.
+The acceptance record must link the actual GitHub runs, protected TEST
+approvals, saved plan, AWS account, post-apply drift and registry receipt.
+This marker itself proves no AWS deployment. PROD and workload execution are
+outside this TEST registry rehearsal.

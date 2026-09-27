@@ -66,11 +66,7 @@ def test_pyproject_declares_quality_tooling_contracts() -> None:
     } <= set(deptry["known_first_party"])
     assert deptry["package_module_name_map"]["pyyaml"] == ["yaml"]
     assert deptry["package_module_name_map"]["pulumi-policy"] == ["pulumi_policy"]
-    assert deptry["per_rule_ignores"]["DEP002"] == [
-        "pulumi-aws",
-        "pulumi-random",
-        "pulumi-tls",
-    ]
+    assert deptry["per_rule_ignores"]["DEP002"] == ["pulumi-aws"]
     assert importlinter["root_packages"] == ["app", "policy"]
     assert importlinter["include_external_packages"] is True
     contracts = {contract["name"]: contract for contract in importlinter["contracts"]}
@@ -94,6 +90,11 @@ def test_pyproject_declares_quality_tooling_contracts() -> None:
     ] == ["app.environment"]
     assert contracts["Pulumi app layering remains one-way"]["containers"] == ["app"]
     assert contracts["Pulumi app layering remains one-way"]["layers"] == [
+        "stack",
+        "compute",
+        "data",
+        "messaging",
+        "network",
         "registry_phase",
         "registry",
         "mail_identity",
@@ -331,3 +332,34 @@ def test_mutation_script_derives_coverage_flags_from_mutation_paths() -> None:
     assert '"mutmut"' in script
     assert '"--test-time-multiplier"' in script
     assert "--cov=pulumi/app" not in script
+
+
+def test_mutation_workflow_covers_entrypoint_and_example_tags_stay_strings() -> None:
+    """Keep mutation scope aligned with the runtime surface.
+
+    Keep the example image tags explicit strings.
+    """
+    workflow = _workflow("pulumi-mutation.yml")
+    example_config = (PROJECT_ROOT / "pulumi" / "Pulumi.example.yaml").read_text(
+        encoding="utf-8"
+    )
+    shards = workflow["jobs"]["mutation"]["strategy"]["matrix"]["shard"]
+    environment_shard = next(
+        shard for shard in shards if shard["name"] == "environment"
+    )
+    web_tag = re.search(
+        r'user-service-infrastructure:webImageTag:\s*"([^"\n]+)"',
+        example_config,
+    )
+    worker_tag = re.search(
+        r'user-service-infrastructure:workerImageTag:\s*"([^"\n]+)"',
+        example_config,
+    )
+
+    assert environment_shard["paths"] == (
+        "pulumi/app/environment.py,pulumi/app/__init__.py,pulumi/__main__.py"
+    )
+    assert web_tag is not None
+    assert worker_tag is not None
+    assert web_tag.group(1)
+    assert worker_tag.group(1)

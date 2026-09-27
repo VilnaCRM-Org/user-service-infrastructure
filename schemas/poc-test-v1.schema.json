@@ -732,6 +732,7 @@
             "ca_bundle_path",
             "worker_mode",
             "worker_health_command",
+            "trusted_proxy_cidrs",
             "optional_social_providers"
           ],
           "properties": {
@@ -777,6 +778,17 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 512
+              }
+            },
+            "trusted_proxy_cidrs": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 16,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 4,
+                "maxLength": 49
               }
             },
             "optional_social_providers": {

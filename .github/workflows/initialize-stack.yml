@@ -67,6 +67,9 @@ jobs:
   initialize:
     needs: preflight
     if: github.ref == 'refs/heads/main'
+    concurrency:
+      group: pulumi-state-${{ github.repository }}-${{ inputs.environment }}-${{ inputs.environment }}
+      cancel-in-progress: false
     environment: ${{ inputs.environment }}
     runs-on: ubuntu-latest
     timeout-minutes: 25

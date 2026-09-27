@@ -486,7 +486,7 @@ def test_run_mutation_tests_main_uses_configurable_paths_and_runner(
         "mutmut",
         "run",
         "--paths-to-mutate",
-        "pulumi/app scripts",
+        "pulumi/app,scripts",
         "--runner",
         "uv run pytest -q tests/unit/test_guardrails.py",
         "--tests-dir",

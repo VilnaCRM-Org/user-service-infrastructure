@@ -1,4 +1,8 @@
 config:
+  aws:region: eu-central-1
+  user-service-infrastructure:deploymentMode: preview
   user-service-infrastructure:environment: dev
-  user-service-infrastructure:serviceName: user-service-infrastructure
+  user-service-infrastructure:serviceName: user-service
+  user-service-infrastructure:apiBaseUrl: https://user.dev.internal
+  user-service-infrastructure:apiUrl: https://user.dev.internal
 encryptionsalt: v1:pql7l6GqniM=:v1:HwvqtBlUIl+FsBp/:jWoOPxy3f+I5XI5c2ya3Z40+N65V1w==

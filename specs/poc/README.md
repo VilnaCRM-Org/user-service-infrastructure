@@ -95,23 +95,23 @@ Updates and rollback retain the release's original registry anchor; it must not
 be replaced with the current workload checkpoint version. Synthetic fixtures
 remain offline examples and cannot establish deployment readiness.
 
-The proposed `service-poc-phase-v1` receipt is not produced yet. Its next source
-integration can reuse the existing `platform_promotion` job's protected
-`governance-evidence` environment, trusted `github.sha` checkout and promotion App
-deployment-write authority. It needs no new App or service IAM grant. Preserve
-the current TEST+PROD promotion checks and status: a TEST registry result must
-publish a distinct receipt and must never set full `Governance Promotion` success.
+The reviewed workflow now connects a separate TEST registry observation and
+proof after apply and clean drift. The proof reuses the protected
+`governance-evidence` environment, trusted `github.sha` checkout and promotion
+App deployment-write authority. It needs no new App or service IAM grant. No
+live receipt has been produced or accepted yet. The TEST+PROD promotion checks
+and status remain separate: a TEST registry result must never set full
+`Governance Promotion` success.
 
-The concrete remaining producer/consumer work is:
+The remaining producer/consumer work and acceptance evidence are:
 
-1. Extend the trusted registry runner/result observer to retain bounded metadata
-   for the exact final eleven-resource checkpoint and native ECR identities after
-   saved apply and clean drift. Bind source/contract, plan, current checkpoint
-   version/hash and original run/attempt; keep checkpoint bodies private.
-2. Add a TEST-only result preparation/publication path beside
-   `governance_promotion.py` that verifies the actual original workflow/jobs and
-   immutable observation artifacts before using the existing protected App.
-   Return the deployment ID only after payload/issuer/status readback succeeds.
+1. Install and live-test the trusted registry observer against the exact final
+   eleven-resource checkpoint and native ECR identities after saved apply and
+   clean drift. Verify its bounded source/contract, checkpoint version/hash and
+   original run/attempt metadata while keeping checkpoint bodies private.
+2. Install and live-test the TEST-only proof publication path. Verify the actual
+   original workflow/jobs and immutable observation artifacts, the protected App
+   issuer and status readback, and the returned deployment ID.
 3. Authenticate that deployment and its original run/artifact/checkpoint chain
    before constructing `RegistryReleaseBinding` in publisher/workload admission.
    Reuse the source artifact transport's bounded ZIP/strict metadata checks with

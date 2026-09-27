@@ -266,6 +266,8 @@ def test_test_controller_admits_only_reviewed_registry_graph():
         "test_destructive_diff",
         "test_apply",
         "test_post_apply_drift",
+        "test_registry_observation",
+        "test_registry_proof",
         "comment_result",
     }
     preflight = jobs["preflight"]
@@ -291,6 +293,10 @@ def test_test_controller_admits_only_reviewed_registry_graph():
             "${{ needs.preflight.outputs.command == 'up' && "
             "needs.preflight.outputs.target_environment == 'test' }}"
         ),
+        "test_registry_observation": (
+            "${{ needs.preflight.outputs.command == 'up' && "
+            "needs.preflight.outputs.target_environment == 'test' }}"
+        ),
     }
     for name, condition in guards.items():
         assert jobs[name]["if"] == condition
@@ -302,10 +308,17 @@ def test_test_controller_admits_only_reviewed_registry_graph():
         or "configure-aws-credentials" in str(job)
         or "load-aws-ci-env" in str(job)
     }
-    assert credential_jobs == {"test_preview", "test_apply", "test_post_apply_drift"}
+    assert credential_jobs == {
+        "test_preview",
+        "test_apply",
+        "test_post_apply_drift",
+        "test_registry_observation",
+    }
     assert "test_destructive_diff" in jobs["test_apply"]["needs"]
     assert "test_apply" in jobs["test_post_apply_drift"]["needs"]
-    assert "TEST registry plan/apply/drift only" in str(jobs["comment_result"])
+    assert "TEST registry plan/apply/drift and separate completion proof only" in str(
+        jobs["comment_result"]
+    )
     assert "workload deployment remain disabled" in str(jobs["comment_result"])
 
 

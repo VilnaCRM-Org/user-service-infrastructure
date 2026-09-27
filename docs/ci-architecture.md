@@ -86,13 +86,11 @@ workload phase or change registry resource ownership.
 
 ## TEST registry completion proof
 
-The completion helpers remain candidate code. The installed controller has no
-`test_registry_observation`, `test_registry_proof` or `test_registry_dispatch`
-jobs; it cannot publish completion receipts or dispatch image publishing. The
-following describes the proposed integration, which requires separate validation
-before installation.
+The reviewed TEST workflow connects `test_registry_observation` and
+`test_registry_proof` after successful registry apply and clean drift. These
+jobs still require installation on main and live acceptance. Image publishing
+remains closed because `test_registry_dispatch` is not connected.
 
-After successful TEST registry apply and drift jobs, the proposed
 `test_registry_observation` starts on a fresh trusted-main checkout. It
 authenticates source, current review
 and requester before each credential transition. With the existing Preview
@@ -122,16 +120,17 @@ expired or missing artifacts fail closed. Source artifacts currently retain seve
 days, which also bounds this verifier's evidence lifetime. The receipt is an
 observation anchor, not a fresh AWS check or an atomic lock.
 
-These source changes need deployment and native acceptance before consumers rely
-on them. They do not activate image publishing/workloads, prove image availability,
-or replace the execution-isolation boundary below.
+These source changes need installation, PR-comment deployment and native acceptance
+before consumers rely on a receipt. They do not activate image publishing or
+workloads, prove image availability, or replace the execution-isolation boundary below.
 
 ## Isolated service execution
 
 The TEST controller admits only authenticated registry-phase plan/apply/drift
 jobs after source, requester, review and environment checks. Its TEST registry
 jobs use the installed-main `service_execution_host.py` launcher.
-PROD, registry-completion and workload routes remain absent. Scheduled drift retains the
+PROD and workload routes remain absent. Registry completion can publish only
+the distinct TEST proof after apply, drift and observation. Scheduled drift retains the
 existing main-only `make start` / `make test-drift` path; it does not call the
 TEST-only launcher. The launcher builds the existing pinned tooling
 and locked dependencies before configuration credentials or execution OIDC.

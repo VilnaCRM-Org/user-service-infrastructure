@@ -5,8 +5,9 @@ requester and review checks; workload execution remains closed. Its trusted
 service worker distinguishes the phase in the authenticated fixed PoC source
 contract and rejects workload requests with `workload-execution-not-enabled`
 before any workload checks or Pulumi program. The prerequisite helpers below
-remain candidate code for a future separately validated integration. PROD and
-completion jobs are absent; scheduled drift retains the installed-main path.
+remain candidate code for a future separately validated integration. The TEST
+registry completion jobs are connected in reviewed source but await installation
+and live acceptance. PROD remains absent; scheduled drift retains the installed-main path.
 
 The unconnected workload helper reuses the original registry completion verifier, including
 its App issuer, successful original workflow/jobs, historical source and immutable

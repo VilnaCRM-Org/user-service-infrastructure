@@ -58,14 +58,8 @@ jobs:
         id: resolve
         run: python3 scripts/pulumi_command_preflight.py --service
 
-      - name: Keep deployment closed pending complete controller validation
-        run: |
-          echo "TEST controller validation is incomplete; no AWS role is assumed." >&2
-          exit 1
-
   poc_prepare_source:
-    # Keep disabled until native graph and aggregate coverage gates pass.
-    if: ${{ false && success() }}
+    if: ${{ needs.preflight.result == 'success' && needs.preflight.outputs.target_environment == 'test' }}
     name: Prepare TEST PoC Source Facts
     needs:
       - preflight
@@ -142,7 +136,7 @@ jobs:
           retention-days: 7
 
   test_preview:
-    if: ${{ false && success() }}
+    if: ${{ needs.poc_prepare_source.result == 'success' && needs.preflight.outputs.target_environment == 'test' }}
     name: Test Preview
     environment: test-preview
     runs-on: ubuntu-latest
@@ -319,7 +313,7 @@ jobs:
 
   test_apply:
     name: Test Apply
-    if: ${{ false && needs.preflight.outputs.command == 'up' }}
+    if: ${{ needs.preflight.outputs.command == 'up' && needs.preflight.outputs.target_environment == 'test' }}
     environment: test
     runs-on: ubuntu-latest
     needs:
@@ -459,7 +453,7 @@ jobs:
 
   test_post_apply_drift:
     name: Test Post-Apply Drift
-    if: ${{ false && needs.preflight.outputs.command == 'up' }}
+    if: ${{ needs.preflight.outputs.command == 'up' && needs.preflight.outputs.target_environment == 'test' }}
     environment: test-preview
     runs-on: ubuntu-latest
     needs:
@@ -582,7 +576,7 @@ jobs:
             echo "| Test apply | \`${{ needs.test_apply.result }}\` |"
             echo "| Test post-apply drift | \`${{ needs.test_post_apply_drift.result }}\` |"
             echo
-            echo "TEST controller validation is incomplete; all PR deployment remains disabled."
+            echo "TEST registry plan/apply/drift only. Registry completion proof, image publishing and workload deployment remain disabled."
           } > "${body_file}"
 
           pr_number="${{ needs.preflight.outputs.pull_request_number }}"

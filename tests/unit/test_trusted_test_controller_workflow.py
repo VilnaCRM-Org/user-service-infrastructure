@@ -90,8 +90,16 @@ def test_apply_reuses_same_run_artifacts_and_remains_environment_gated():
     }
 
 
-def test_incomplete_installation_never_reaches_cloud_credentials():
+def test_registry_installation_requires_authenticated_test_source():
     jobs = workflow()["jobs"]
-    assert "exit 1" in jobs["preflight"]["steps"][-1]["run"]
+    assert jobs["preflight"]["steps"][-1]["run"] == (
+        "python3 scripts/pulumi_command_preflight.py --service"
+    )
     for name in JOBS | {"poc_prepare_source"}:
-        assert "false" in jobs[name]["if"]
+        assert (
+            "needs.preflight.outputs.target_environment == 'test'" in jobs[name]["if"]
+        )
+        assert "preflight" in jobs[name]["needs"]
+    for name in JOBS:
+        assert "poc_prepare_source" in jobs[name]["needs"]
+        assert "false" not in jobs[name]["if"]

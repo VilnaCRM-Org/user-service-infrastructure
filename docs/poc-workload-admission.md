@@ -1,6 +1,7 @@
 # Candidate workload prerequisite checks
 
-The installed controller remains closed pending complete validation. Its trusted
+The TEST registry plan/apply/drift route is admitted after authenticated source,
+requester and review checks; workload execution remains closed. Its trusted
 service worker distinguishes the phase in the authenticated fixed PoC source
 contract and rejects workload requests with `workload-execution-not-enabled`
 before any workload checks or Pulumi program. The prerequisite helpers below

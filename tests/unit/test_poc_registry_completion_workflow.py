@@ -27,7 +27,9 @@ def test_unvalidated_completion_route_is_not_installed(name):
 
 def test_completion_helpers_cannot_issue_credentials_from_workflow():
     graph = jobs()
-    assert "exit 1" in graph["preflight"]["steps"][-1]["run"]
+    assert graph["preflight"]["steps"][-1]["run"] == (
+        "python3 scripts/pulumi_command_preflight.py --service"
+    )
     for job in graph.values():
         assert job.get("environment") != "governance-evidence"
         assert "deployments" not in job.get("permissions", {})

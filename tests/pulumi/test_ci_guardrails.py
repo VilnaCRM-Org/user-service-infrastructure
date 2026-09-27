@@ -255,8 +255,8 @@ def test_pr_destructive_gates_exclude_scheduled_execution():
     assert "destructive-gate" in job["steps"][-1]["run"]
 
 
-def test_test_controller_remains_fail_closed(tmp_path):
-    """Installing the TEST graph cannot enable credentials or PROD execution."""
+def test_test_controller_admits_only_reviewed_registry_graph():
+    """TEST registry execution stays behind source and account admission."""
     workflow = _workflow("self-deploy.yml")
     jobs = workflow["jobs"]
     assert set(jobs) == {
@@ -271,30 +271,28 @@ def test_test_controller_remains_fail_closed(tmp_path):
     preflight = jobs["preflight"]
     assert "id-token" not in preflight["permissions"]
     assert "configure-aws-credentials" not in str(preflight)
-    closure = preflight["steps"][-1]
-    assert (
-        closure["name"]
-        == "Keep deployment closed pending complete controller validation"
+    assert preflight["steps"][-1]["run"] == (
+        "python3 scripts/pulumi_command_preflight.py --service"
     )
-    assert "if" not in closure and "continue-on-error" not in closure
-    result = subprocess.run(
-        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", closure["run"]],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 1
-    assert "no AWS role is assumed" in result.stderr
-    disabled = {
-        "poc_prepare_source": "${{ false && success() }}",
-        "test_preview": "${{ false && success() }}",
-        "test_apply": "${{ false && needs.preflight.outputs.command == 'up' }}",
+    guards = {
+        "poc_prepare_source": (
+            "${{ needs.preflight.result == 'success' && "
+            "needs.preflight.outputs.target_environment == 'test' }}"
+        ),
+        "test_preview": (
+            "${{ needs.poc_prepare_source.result == 'success' && "
+            "needs.preflight.outputs.target_environment == 'test' }}"
+        ),
+        "test_apply": (
+            "${{ needs.preflight.outputs.command == 'up' && "
+            "needs.preflight.outputs.target_environment == 'test' }}"
+        ),
         "test_post_apply_drift": (
-            "${{ false && needs.preflight.outputs.command == 'up' }}"
+            "${{ needs.preflight.outputs.command == 'up' && "
+            "needs.preflight.outputs.target_environment == 'test' }}"
         ),
     }
-    for name, condition in disabled.items():
+    for name, condition in guards.items():
         assert jobs[name]["if"] == condition
         assert "preflight" in jobs[name]["needs"]
     credential_jobs = {
@@ -307,7 +305,8 @@ def test_test_controller_remains_fail_closed(tmp_path):
     assert credential_jobs == {"test_preview", "test_apply", "test_post_apply_drift"}
     assert "test_destructive_diff" in jobs["test_apply"]["needs"]
     assert "test_apply" in jobs["test_post_apply_drift"]["needs"]
-    assert "all PR deployment remains disabled" in str(jobs["comment_result"])
+    assert "TEST registry plan/apply/drift only" in str(jobs["comment_result"])
+    assert "workload deployment remain disabled" in str(jobs["comment_result"])
 
 
 def test_state_operations_share_cross_workflow_stack_mutex():

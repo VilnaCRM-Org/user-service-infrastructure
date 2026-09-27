@@ -217,7 +217,8 @@ def test_every_cloud_or_promotion_job_requires_successful_source_ancestry():
     ):
         assert "poc_prepare_source" in ancestors(name)
         condition = graph[name].get("if", "")
-        assert "false &&" in condition
+        assert "needs.preflight.outputs.target_environment == 'test'" in condition
+        assert "false &&" not in condition
         assert "always(" not in condition
         assert "continue-on-error" not in graph[name]
     feedback = graph["comment_result"]

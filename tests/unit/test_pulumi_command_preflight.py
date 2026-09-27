@@ -175,6 +175,42 @@ def test_gh_uses_argument_array_and_parses_json(monkeypatch):
     assert calls[0][1]["check"] is True
 
 
+def test_gh_decodes_installed_cli_paginated_arrays(monkeypatch):
+    calls = []
+
+    def api(args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(stdout=' [{"id":1}]\n[]\n [{"id":2}]  ')
+
+    monkeypatch.setattr(preflight.subprocess, "run", api)
+    assert preflight.gh("repos/org/repo/statuses", "--paginate", "--slurp") == [
+        [{"id": 1}],
+        [],
+        [{"id": 2}],
+    ]
+    assert calls[0][0] == ["gh", "api", "repos/org/repo/statuses", "--paginate"]
+    assert calls[0][1]["check"] is True
+
+
+@pytest.mark.parametrize("raw", ["{}", "[] {}", "[", "true", "[1] trailing"])
+def test_paginated_arrays_reject_nonarrays_and_malformed_pages(raw):
+    with pytest.raises(ValueError):
+        preflight.decode_array_pages(raw)
+
+
+@pytest.mark.parametrize(
+    "arguments", [("--slurp",), ("--paginate", "--slurp", "--slurp")]
+)
+def test_gh_rejects_invalid_page_request_before_subprocess(monkeypatch, arguments):
+    monkeypatch.setattr(
+        preflight.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("invalid request reached GitHub CLI"),
+    )
+    with pytest.raises(ValueError, match="Invalid page request"):
+        preflight.gh("repos/org/repo/statuses", *arguments)
+
+
 def test_collect_evidence_paginates_and_protects_renamed_paths(monkeypatch):
     request, evidence = fixture_data()
     monkeypatch.setenv("GITHUB_REPOSITORY", "org/repo")

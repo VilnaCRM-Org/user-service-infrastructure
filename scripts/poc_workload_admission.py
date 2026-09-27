@@ -21,6 +21,7 @@ import poc_source_artifact as artifacts
 import poc_workload_capabilities as capabilities
 import poc_workload_images as images
 from poc_registry_phase_entrypoint import RegistryPhaseProjection
+from pulumi_command_preflight import decode_array_pages
 from service_execution_process import require, run
 
 
@@ -72,7 +73,19 @@ def _github_bytes(endpoint, *arguments):
 
 
 def _github(endpoint, *arguments):
-    return registry.backend._json(_github_bytes(endpoint, *arguments))
+    slurp = "--slurp" in arguments
+    if slurp:
+        require(
+            arguments.count("--slurp") == 1 and "--paginate" in arguments,
+            "workload-page-request",
+        )
+        arguments = tuple(arg for arg in arguments if arg != "--slurp")
+    raw = _github_bytes(endpoint, *arguments)
+    return (
+        decode_array_pages(raw.decode("utf-8"))
+        if slurp
+        else registry.backend._json(raw)
+    )
 
 
 def _download(identifier):

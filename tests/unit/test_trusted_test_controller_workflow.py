@@ -21,6 +21,7 @@ def test_no_pr_code_or_production_route():
         "test_destructive_diff",
         "test_registry_observation",
         "test_registry_proof",
+        "test_registry_dispatch",
         "comment_result",
     }
     for job in jobs.values():

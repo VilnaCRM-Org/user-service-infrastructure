@@ -114,6 +114,8 @@ The remaining producer/consumer work and acceptance evidence are:
    issuer and status readback, and the returned deployment ID.
 3. Authenticate that deployment and its original run/artifact/checkpoint chain
    before constructing `RegistryReleaseBinding` in publisher/workload admission.
+   Install and live-test the source-connected publisher dispatch with an
+   application-only Actions token and a pinned protected application revision.
    Reuse the source artifact transport's bounded ZIP/strict metadata checks with
    explicit result member and completed-producer rules; its current in-progress
    `source.json` protocol is not completed registry evidence.

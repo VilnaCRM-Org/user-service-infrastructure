@@ -102,12 +102,56 @@ def test_proof_uses_protected_issuer_without_full_promotion_status():
     assert "Governance Promotion" not in str(proof)
 
 
-def test_image_dispatch_and_workload_execution_stay_closed():
+def test_dispatch_uses_separate_application_only_token_without_aws():
     graph = jobs()
-    assert "test_registry_dispatch" not in graph
+    dispatch = graph["test_registry_dispatch"]
+    assert dispatch["needs"] == [
+        "preflight",
+        "poc_prepare_source",
+        "test_registry_observation",
+        "test_registry_proof",
+    ]
+    assert dispatch["if"] == "${{ needs.test_registry_proof.result == 'success' }}"
+    assert dispatch["environment"] == "governance-evidence"
+    assert dispatch["permissions"] == {
+        "actions": "read",
+        "contents": "read",
+        "deployments": "read",
+        "pull-requests": "read",
+    }
+    assert "id-token" not in dispatch["permissions"]
+    assert dispatch["env"]["POC_REGISTRY_RECEIPT_ID"] == (
+        "${{ needs.test_registry_proof.outputs.receipt_id }}"
+    )
+    assert dispatch["env"]["POC_PUBLISHER_WORKFLOW_SHA"] == (
+        "${{ vars.POC_PUBLISHER_WORKFLOW_SHA }}"
+    )
+    steps = dispatch["steps"]
+    assert steps[0]["with"]["ref"] == "${{ github.sha }}"
+    assert steps[0]["with"]["persist-credentials"] is False
+    assert "poc_publisher_dispatch.py prepare" in steps[2]["run"]
+    app = steps[3]["with"]
+    assert app["owner"] == "VilnaCRM-Org"
+    assert app["repositories"] == "user-service"
+    assert app["permission-actions"] == "write"
+    assert "permission-deployments" not in app
+    assert "permission-contents" not in app
+    assert "PUBLISHER_DISPATCH_APP_TOKEN" in steps[4]["env"]
+    assert "poc_publisher_dispatch.py dispatch" in steps[4]["run"]
+    assert "configure-aws-credentials" not in str(dispatch)
+    assert dispatch["outputs"]["publisher_run_id"] == (
+        "${{ steps.dispatch.outputs.publisher_run_id }}"
+    )
+
+
+def test_workload_execution_stays_closed_after_dispatch():
+    graph = jobs()
     assert "test_workload_apply" not in graph
-    assert all("poc_publisher_dispatch.py" not in str(job) for job in graph.values())
+    assert not any(name.startswith("test_workload") for name in graph)
+    assert all("poc_workload_admission.py" not in str(job) for job in graph.values())
     result = graph["comment_result"]
     assert "test_registry_observation" in result["needs"]
     assert "test_registry_proof" in result["needs"]
+    assert "test_registry_dispatch" in result["needs"]
     assert "TEST registry proof" in result["steps"][0]["run"]
+    assert "Image publication success" in result["steps"][0]["run"]

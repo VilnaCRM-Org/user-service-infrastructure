@@ -268,6 +268,7 @@ def test_test_controller_admits_only_reviewed_registry_graph():
         "test_post_apply_drift",
         "test_registry_observation",
         "test_registry_proof",
+        "test_registry_dispatch",
         "comment_result",
     }
     preflight = jobs["preflight"]
@@ -316,10 +317,12 @@ def test_test_controller_admits_only_reviewed_registry_graph():
     }
     assert "test_destructive_diff" in jobs["test_apply"]["needs"]
     assert "test_apply" in jobs["test_post_apply_drift"]["needs"]
-    assert "TEST registry plan/apply/drift and separate completion proof only" in str(
+    assert "TEST registry proof and application publisher dispatch only" in str(
         jobs["comment_result"]
     )
-    assert "workload deployment remain disabled" in str(jobs["comment_result"])
+    assert "workload deployment require separate verification" in str(
+        jobs["comment_result"]
+    )
 
 
 def test_state_operations_share_cross_workflow_stack_mutex():

@@ -209,7 +209,20 @@ def test_gh_decodes_paginated_workflow_job_objects(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "raw", ["", "   ", "[] {}", "[", "true", "42", '"text"', "null", "[1] trailing"]
+    "raw",
+    [
+        "",
+        "   ",
+        "[] {}",
+        "[",
+        "true",
+        "42",
+        '"text"',
+        "null",
+        "[1] trailing",
+        '{"jobs":[],"jobs":[]}',
+        '{"jobs":[NaN]}',
+    ],
 )
 def test_paginated_pages_reject_scalar_mixed_and_malformed_pages(raw):
     with pytest.raises(ValueError):

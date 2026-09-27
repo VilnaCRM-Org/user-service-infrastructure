@@ -22,9 +22,24 @@ from reviewed_source_admission import verify_reviewed_source
 INTAKE_PATH = ".github/workflows/pulumi-pr-commands.yml"
 
 
+def _unique_json_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate GitHub JSON key")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(_: str) -> None:
+    raise ValueError("Non-finite GitHub JSON value")
+
+
 def decode_paginated_pages(raw: str) -> list[list[object] | dict[str, object]]:
     """Decode complete array or object pages from the installed GitHub CLI."""
-    decoder = json.JSONDecoder()
+    decoder = json.JSONDecoder(
+        object_pairs_hook=_unique_json_pairs, parse_constant=_reject_json_constant
+    )
     pages: list[list[object] | dict[str, object]] = []
     offset = 0
     while offset < len(raw):

@@ -22,6 +22,42 @@ from reviewed_source_admission import verify_reviewed_source
 INTAKE_PATH = ".github/workflows/pulumi-pr-commands.yml"
 
 
+def _unique_json_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate GitHub JSON key")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(_: str) -> None:
+    raise ValueError("Non-finite GitHub JSON value")
+
+
+def decode_paginated_pages(raw: str) -> list[list[object] | dict[str, object]]:
+    """Decode complete array or object pages from the installed GitHub CLI."""
+    decoder = json.JSONDecoder(
+        object_pairs_hook=_unique_json_pairs, parse_constant=_reject_json_constant
+    )
+    pages: list[list[object] | dict[str, object]] = []
+    offset = 0
+    while offset < len(raw):
+        while offset < len(raw) and raw[offset].isspace():
+            offset += 1
+        if offset == len(raw):
+            break
+        page, offset = decoder.raw_decode(raw, offset)
+        if type(page) not in (list, dict) or (
+            pages and type(page) is not type(pages[0])
+        ):
+            raise ValueError("GitHub paginated response has invalid page types")
+        pages.append(page)
+    if not pages:
+        raise ValueError("GitHub paginated response is empty")
+    return pages
+
+
 def require(condition: bool, message: str) -> None:
     """Reject incomplete or contradictory evidence."""
     if not condition:
@@ -30,10 +66,17 @@ def require(condition: bool, message: str) -> None:
 
 def gh(*args: str) -> Any:
     """Read GitHub JSON without interpreting response text as commands."""
+    slurp = "--slurp" in args
+    if slurp:
+        require(
+            args.count("--slurp") == 1 and "--paginate" in args,
+            "Invalid page request",
+        )
+        args = tuple(arg for arg in args if arg != "--slurp")
     result = subprocess.run(  # nosec B603 B607
         ["gh", "api", *args], check=True, capture_output=True, text=True
     )
-    return json.loads(result.stdout)
+    return decode_paginated_pages(result.stdout) if slurp else json.loads(result.stdout)
 
 
 def authenticate_intake(request: dict, evidence: dict):

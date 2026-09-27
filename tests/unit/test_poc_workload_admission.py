@@ -32,6 +32,51 @@ def sha(raw):
 AUTHORITY = module.Authority(1234, "promotion-app", "a" * 40, "b" * 40)
 
 
+def test_workload_github_decoder_preserves_pages_without_cli_slurp(monkeypatch):
+    calls = []
+
+    def api(endpoint, *arguments):
+        calls.append((endpoint, arguments))
+        if arguments:
+            return b'[{"id":1}]\n[{"id":2}]'
+        return b'{"id":1}'
+
+    monkeypatch.setattr(module, "_github_bytes", api)
+    assert module._github("repos/org/repo/jobs", "--paginate", "--slurp") == [
+        [{"id": 1}],
+        [{"id": 2}],
+    ]
+    assert calls == [("repos/org/repo/jobs", ("--paginate",))]
+    assert module._github("repos/org/repo/jobs") == {"id": 1}
+
+
+def test_workload_github_decoder_preserves_object_pages(monkeypatch):
+    monkeypatch.setattr(
+        module,
+        "_github_bytes",
+        lambda *_args: (
+            b'{"total_count":2,"jobs":[{"id":1}]}{"total_count":2,"jobs":[{"id":2}]}'
+        ),
+    )
+    assert module._github("repos/org/repo/jobs", "--paginate", "--slurp") == [
+        {"total_count": 2, "jobs": [{"id": 1}]},
+        {"total_count": 2, "jobs": [{"id": 2}]},
+    ]
+
+
+@pytest.mark.parametrize(
+    "arguments", [("--slurp",), ("--paginate", "--slurp", "--slurp")]
+)
+def test_workload_github_rejects_invalid_page_request(monkeypatch, arguments):
+    monkeypatch.setattr(
+        module,
+        "_github_bytes",
+        lambda *_args: pytest.fail("invalid request reached GitHub CLI"),
+    )
+    with pytest.raises(ValueError, match="workload-page-request"):
+        module._github("repos/org/repo/jobs", *arguments)
+
+
 @pytest.fixture
 def registry_evidence(evidence, monkeypatch):
     evidence["run"].update(status="completed", conclusion="success")

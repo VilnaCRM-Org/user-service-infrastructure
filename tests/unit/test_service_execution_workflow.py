@@ -48,7 +48,7 @@ def test_all_credentialed_jobs_build_before_credentials(filename, name):
     assert "environment" in job
 
 
-def test_test_only_dag_keeps_unvalidated_completion_and_prod_routes_absent():
+def test_test_only_dag_keeps_dispatch_and_prod_routes_absent():
     jobs = yaml.safe_load((ROOT / ".github/workflows/self-deploy.yml").read_text())[
         "jobs"
     ]
@@ -56,7 +56,10 @@ def test_test_only_dag_keeps_unvalidated_completion_and_prod_routes_absent():
     assert "poc_prepare_source" in jobs["test_preview"]["needs"]
     assert "test_apply" in jobs["test_post_apply_drift"]["needs"]
     assert not any(name.startswith("prod_") for name in jobs)
-    assert not any(name.startswith("test_registry_") for name in jobs)
+    assert {name for name in jobs if name.startswith("test_registry_")} == {
+        "test_registry_observation",
+        "test_registry_proof",
+    }
 
 
 def test_composite_uses_installed_tools_and_exact_build_recipe():

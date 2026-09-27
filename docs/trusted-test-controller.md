@@ -41,7 +41,8 @@ children are killed before verifier rechecks. Docker sockets and PR source are n
 mounted. Worker logs stay private. Public output contains fixed trusted stage
 labels, never exception text or private command output. The last stage label
 identifies where a failed run stopped. Successful runs publish authenticated
-plan/preview artifacts.
+plan/preview artifacts. Backend stages distinguish a native AWS read from its
+response without printing the response or an AWS error body.
 
 Preview records the saved-plan hash, preview hash, head, backend, KMS key, provider
 configuration, and checkpoint version/ETag. Apply rechecks those identities and the

@@ -272,6 +272,7 @@ This documentation-only pull request freezes one reviewed head for
 `/pulumi test plan` and `/pulumi test up`. The installed-main controller reads
 the fixed TEST registry contract and does not execute code from this PR.
 The acceptance record must link the actual GitHub runs, protected TEST
-approvals, saved plan, AWS account, post-apply drift and registry receipt.
+approvals, saved plan, AWS account, post-apply drift, native ECR observation,
+and a separate registry receipt bound to the reviewed head.
 This marker itself proves no AWS deployment. PROD and workload execution are
 outside this TEST registry rehearsal.

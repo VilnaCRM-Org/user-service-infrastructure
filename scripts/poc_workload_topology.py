@@ -1,8 +1,9 @@
 """First-workload topology prerequisite, not complete input or IAM admission.
 
-Only the installed two-AZ ECS/Fargate composition is covered. Unknown computed
-inputs still need semantic validation. No capability object or caller boolean can
-turn this source-only validator into execution authority.
+Only the installed two-AZ ECS/Fargate composition and its task execution identity,
+network mode and platform are covered. Unknown computed inputs still need semantic
+validation. No capability object or caller boolean can turn this source-only
+validator into execution authority.
 """
 
 import base64
@@ -256,7 +257,7 @@ def validate_first_workload_topology(
     preview, *, saved_plan, prior_resources, projection
 ):
     """Check exact registry-to-workload owners and operations; never grant apply."""
-    _checked(projection)
+    projection = _checked(projection)
     baseline = registry._graph(RegistryPhaseProjection(registry.REGISTRIES))
     prior = registry._prior(prior_resources, baseline)
     _check(prior.keys() == baseline.keys())
@@ -280,6 +281,7 @@ def validate_first_workload_topology(
         desired[urn] = _new_goal(
             urn, plans[urn], graph, prior[registry.PROVIDER_URN]["id"]
         )
+        _task_execution_inputs(desired[urn], projection)
     # All references must remain inside the complete finite owner graph.
     for row in desired.values():
         references = {key: value for key, value in row.items() if key != "provider"}
@@ -291,6 +293,33 @@ def validate_first_workload_topology(
         if not graph[urn][0].startswith("pulumi:providers:")
     }
     _check(required <= seen)
+
+
+def _task_execution_inputs(resource, projection):
+    """Bind known task inputs even when matching plan/preview bytes were changed.
+
+    Container definitions can be unknown in the first native preview. This check
+    does not authenticate images, commands, secrets or the remaining task inputs.
+    """
+    if resource["type"] != "aws:ecs/taskDefinition:TaskDefinition":
+        return
+    central = projection.contract["workload"]["central"]
+    expected = {
+        "executionRoleArn": central["execution_role_arn"],
+        "taskRoleArn": central["task_role_arn"],
+        "networkMode": "awsvpc",
+        "requiresCompatibilities": ["FARGATE"],
+        "runtimePlatform": {
+            "cpuArchitecture": "X86_64",
+            "operatingSystemFamily": "LINUX",
+        },
+    }
+    require(
+        unchanged._same(
+            {key: resource["inputs"].get(key) for key in expected}, expected
+        ),
+        "workload-task-execution-inputs",
+    )
 
 
 def _validate_workload_steps(steps, baseline, graph, desired):

@@ -226,6 +226,9 @@ class ComputePlane(pulumi.ComponentResource):
             memory=settings.capacity.web_memory,
             network_mode="awsvpc",
             requires_compatibilities=["FARGATE"],
+            runtime_platform=aws.ecs.TaskDefinitionRuntimePlatformArgs(
+                cpu_architecture="X86_64", operating_system_family="LINUX"
+            ),
             execution_role_arn=settings.runtime.execution_role_arn,
             task_role_arn=settings.runtime.task_role_arn,
             container_definitions=self._web_container_definitions(
@@ -246,6 +249,9 @@ class ComputePlane(pulumi.ComponentResource):
             memory=settings.capacity.worker_memory,
             network_mode="awsvpc",
             requires_compatibilities=["FARGATE"],
+            runtime_platform=aws.ecs.TaskDefinitionRuntimePlatformArgs(
+                cpu_architecture="X86_64", operating_system_family="LINUX"
+            ),
             execution_role_arn=settings.runtime.execution_role_arn,
             task_role_arn=settings.runtime.task_role_arn,
             container_definitions=self._worker_container_definitions(

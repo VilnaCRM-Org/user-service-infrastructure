@@ -115,6 +115,71 @@ def test_exact_composition_topology_matches_and_cannot_authorize_execution(data)
     assert data == before
 
 
+@pytest.mark.parametrize("task", ["web", "worker"])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("executionRoleArn", "arn:aws:iam::891377212104:role/foreign"),
+        ("taskRoleArn", "arn:aws:iam::933245420672:role/foreign"),
+        ("networkMode", "host"),
+        ("requiresCompatibilities", ["EC2"]),
+        ("requiresCompatibilities", ["FARGATE", "EC2"]),
+        (
+            "runtimePlatform",
+            {"cpuArchitecture": "ARM64", "operatingSystemFamily": "LINUX"},
+        ),
+        (
+            "runtimePlatform",
+            {
+                "cpuArchitecture": "X86_64",
+                "operatingSystemFamily": "WINDOWS_SERVER_2022_CORE",
+            },
+        ),
+        ("runtimePlatform", {"cpuArchitecture": "X86_64"}),
+        (
+            "runtimePlatform",
+            {
+                "cpuArchitecture": "X86_64",
+                "operatingSystemFamily": "LINUX",
+                "foreign": True,
+            },
+        ),
+    ]
+    + [
+        (field, value)
+        for field in (
+            "executionRoleArn",
+            "taskRoleArn",
+            "networkMode",
+            "requiresCompatibilities",
+            "runtimePlatform",
+        )
+        for value in (None, gate.registry.UNKNOWN)
+    ],
+)
+def test_matching_plan_and_preview_cannot_change_task_execution_inputs(
+    data, task, field, value
+):
+    urn = next(
+        urn
+        for urn in data["saved_plan"]["resourcePlans"]
+        if urn.endswith(f"::user-service-{task}-task")
+    )
+    inputs = data["saved_plan"]["resourcePlans"][urn]["goal"]["inputDiff"]["adds"]
+    preview_inputs = next(
+        step["newState"]["inputs"]
+        for step in data["preview"]["steps"]
+        if step["urn"] == urn
+    )
+    for target in (inputs, preview_inputs):
+        if value is None:
+            target.pop(field)
+        else:
+            target[field] = copy.deepcopy(value)
+    with pytest.raises(ValueError, match="workload-task-execution-inputs"):
+        gate.validate_first_workload_topology(**data)
+
+
 def test_native_omitted_component_outputs_require_unchanged_saved_goal(data):
     root = next(
         step for step in data["preview"]["steps"] if step["urn"] == gate.registry.ROOT

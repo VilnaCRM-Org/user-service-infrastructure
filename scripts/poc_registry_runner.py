@@ -252,10 +252,13 @@ def _ecr_inventory(resources):
 
 
 def _capture(source, command, projection):
+    os.write(2, b"Trusted registry stage: backend checkpoint\n")
     capture = backend.capture_backend(source, operation=command)
     _require(capture.summary["state"]["kind"] == "observed_checkpoint")
     graph._prior(capture.resources, graph._graph(projection))
+    os.write(2, b"Trusted registry stage: ECR inventory\n")
     _ecr_inventory(capture.resources)
+    os.write(2, b"Trusted registry stage: SES inventory\n")
     graph.mail.inspect_inventory(capture.resources, graph.DEFAULT_TAGS)
     return capture
 
@@ -326,6 +329,7 @@ def execute(command, *, artifact_id, archive_sha256, source_sha256, transport=No
     """Authenticate then execute the sole fixed registry plan/replay path."""
     _require(command in ("plan", "up-plan", "drift"))
     _trusted_root()
+    os.write(2, b"Trusted registry stage: source review\n")
     source, contract = artifact.load_verified_contract(
         artifact_id=artifact_id,
         archive_sha256=archive_sha256,
@@ -335,6 +339,7 @@ def execute(command, *, artifact_id, archive_sha256, source_sha256, transport=No
     _require(source["source"]["base_sha"] == os.environ["GITHUB_SHA"])
     _require(command == "plan" or source["request"]["command"] == "up")
     _review(source)
+    os.write(2, b"Trusted registry stage: phase projection\n")
     projection = project_registry_phase(SourceAdmission(**source["source"]), contract)
     operation = "up-plan" if command == "up-plan" else "plan"
     initial = _capture(source, operation, projection)
@@ -342,6 +347,7 @@ def execute(command, *, artifact_id, archive_sha256, source_sha256, transport=No
         _require(len(initial.resources) == len(graph._graph(projection)))
     root = ROOT if transport is None else transport.repo
     with _project(projection, root=root) as project:
+        os.write(2, b"Trusted registry stage: Pulumi dispatch\n")
         context = runner.CommandContext(
             root_dir=root,
             env=_child_environment(source),

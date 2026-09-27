@@ -586,7 +586,9 @@ def test_isolated_cli_full_authenticated_path(native_cli):
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["prior_authority"] == "not-evaluated"
-    assert "PRIVATE" not in result.stdout and not marker.exists()
+    assert "Trusted backend stage: STS caller" in result.stderr
+    assert "Trusted backend stage: checkpoint read" in result.stderr
+    assert "PRIVATE" not in result.stdout + result.stderr and not marker.exists()
     fixture = json.loads((data / "aws.json").read_text())
     fixture["caller"]["Account"] = "933245420672"
     (data / "aws.json").write_text(json.dumps(fixture))
@@ -599,7 +601,12 @@ def test_isolated_cli_full_authenticated_path(native_cli):
         timeout=30,
     )
     assert result.returncode == 1 and result.stdout == ""
-    assert result.stderr == "INVALID: backend observation failed\n"
+    assert result.stderr == (
+        "Trusted backend stage: target coordinates validated\n"
+        "Trusted backend stage: STS caller\n"
+        "Trusted backend stage: STS response received\n"
+        "INVALID: backend observation failed\n"
+    )
     result = subprocess.run(
         command[:3],
         cwd=directory,

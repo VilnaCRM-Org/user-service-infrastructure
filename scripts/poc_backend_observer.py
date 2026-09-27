@@ -215,6 +215,7 @@ def _caller(aws, operation="plan"):
     _, role_kind, purpose = _operation_identity(operation)
     run_id = os.environ["GITHUB_RUN_ID"]
     caller = aws("sts", "get-caller-identity", {})
+    os.write(2, b"Trusted backend stage: STS response received\n")
     session = (
         f"gha-scheduled-test-drift-{run_id}"
         if operation == "scheduled-drift"
@@ -292,10 +293,12 @@ def _head(aws, key, limit):
 
 def _capture(aws, key, limit):
     """Read a version-pinned object only in a private temporary directory."""
+    os.write(2, b"Trusted backend stage: object head\n")
     before = _head(aws, key, limit)
     with TemporaryDirectory(prefix="poc-private-observation-") as directory:
         path = Path(directory) / "object"
         path.touch(mode=0o600)
+        os.write(2, b"Trusted backend stage: version-pinned object read\n")
         metadata = aws(
             "s3api",
             "get-object",
@@ -311,6 +314,7 @@ def _capture(aws, key, limit):
         raw = path.read_bytes()
     _require(len(raw) == before["ContentLength"])
     _require(all(metadata.get(field) == value for field, value in before.items()))
+    os.write(2, b"Trusted backend stage: object head recheck\n")
     _require(_head(aws, key, limit) == before)
     return before, raw
 
@@ -320,6 +324,7 @@ def _key(aws):
     key = aws(
         "kms", "describe-key", {"key-id": f"alias/pulumi-{PROJECT}-test-secrets"}
     )["KeyMetadata"]
+    os.write(2, b"Trusted backend stage: KMS response received\n")
     _require(
         key.get("KeyState") == "Enabled"
         and key.get("KeyUsage") == "ENCRYPT_DECRYPT"
@@ -414,6 +419,7 @@ def _inventory(raw, head):
 def capture_backend(source, *, aws=None, operation="plan") -> PrivateBackendCapture:
     """Return private rows only after all native end-of-observation rechecks."""
     _target(source, operation)
+    os.write(2, b"Trusted backend stage: target coordinates validated\n")
     return _capture_backend(
         source["source"]["contract_sha256"], aws or aws_read, operation
     )
@@ -431,19 +437,26 @@ def capture_scheduled_backend(contract_sha256, *, aws=None) -> PrivateBackendCap
 
 def _capture_backend(contract_sha256, aws, operation) -> PrivateBackendCapture:
     """Share native observations without conflating PR and scheduled authority."""
+    os.write(2, b"Trusted backend stage: STS caller\n")
     caller = _caller(aws, operation)
-    _require(
-        aws("s3api", "get-bucket-versioning", _bucket_args()).get("Status") == "Enabled"
-    )
+    os.write(2, b"Trusted backend stage: bucket versioning\n")
+    versioning = aws("s3api", "get-bucket-versioning", _bucket_args())
+    os.write(2, b"Trusted backend stage: bucket response received\n")
+    _require(versioning.get("Status") == "Enabled")
+    os.write(2, b"Trusted backend stage: KMS key\n")
     key_arn = _key(aws)
+    os.write(2, b"Trusted backend stage: Pulumi metadata\n")
     meta_head, meta = _capture(aws, ".pulumi/meta.yaml", 4096)
     _require(re.fullmatch(rb"version: 1\s*", meta) is not None)
+    os.write(2, b"Trusted backend stage: lock listing\n")
     _require(_list(aws, LOCKS) == [])
+    os.write(2, b"Trusted backend stage: checkpoint listing\n")
     listing = _list(aws, CHECKPOINT)
     _require(CHECKPOINT + ".gz" not in listing)
     state = {"kind": "observed_absence"}
     resources = []
     if CHECKPOINT in listing:
+        os.write(2, b"Trusted backend stage: checkpoint read\n")
         head, raw = _capture(aws, CHECKPOINT, MAX_BYTES)
         inventory, resources = _inventory(raw, head)
         state = {
@@ -453,6 +466,7 @@ def _capture_backend(contract_sha256, aws, operation) -> PrivateBackendCapture:
             **inventory,
         }
         _require(_head(aws, CHECKPOINT, MAX_BYTES) == head)
+    os.write(2, b"Trusted backend stage: final backend rechecks\n")
     _require(_list(aws, CHECKPOINT) == listing and _list(aws, LOCKS) == [])
     _require(
         _head(aws, ".pulumi/meta.yaml", 4096) == meta_head and _key(aws) == key_arn

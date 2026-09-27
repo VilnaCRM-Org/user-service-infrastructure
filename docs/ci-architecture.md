@@ -128,10 +128,10 @@ or replace the execution-isolation boundary below.
 
 ## Isolated service execution
 
-The installed TEST controller remains closed: preflight fails and all execution
-jobs have explicit false guards pending complete controller validation. Its
-TEST registry jobs use the installed-main `service_execution_host.py` launcher.
-PROD and registry-completion routes are absent. Scheduled drift retains the
+The TEST controller admits only authenticated registry-phase plan/apply/drift
+jobs after source, requester, review and environment checks. Its TEST registry
+jobs use the installed-main `service_execution_host.py` launcher.
+PROD, registry-completion and workload routes remain absent. Scheduled drift retains the
 existing main-only `make start` / `make test-drift` path; it does not call the
 TEST-only launcher. The launcher builds the existing pinned tooling
 and locked dependencies before configuration credentials or execution OIDC.
@@ -161,7 +161,8 @@ The TEST-only source prerequisite still blocks PROD promotion, and no workload
 phase is admitted by this change. Network-disabled Docker tests prove the local
 UID/filesystem/process boundary with synthetic state; they do not establish
 hosted OIDC, cloud deployment or workload acceptance. Installation and current-head
-TEST/PROD evidence remain required before issue 185 can be considered complete.
+TEST registry evidence remain required before this route is accepted; issue 185
+still needs its own full TEST/PROD evidence.
 
 ## Local Parity
 

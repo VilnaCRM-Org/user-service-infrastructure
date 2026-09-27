@@ -121,6 +121,24 @@ def execute(job, area):
             copy_tree(port.repo / ".artifacts" / name, output / name)
 
 
+def _trusted_failure_location(error):
+    """Expose only installed script coordinates, never private exception data."""
+    location = "unknown"
+    trusted_scripts = Path(__file__).resolve().parent
+    frame = error.__traceback__
+    while frame is not None:
+        code = frame.tb_frame.f_code
+        filename = Path(code.co_filename)
+        if filename.parent == trusted_scripts and code.co_name not in {
+            "main",
+            "require",
+            "_require",
+        }:
+            location = f"{filename.name}:{code.co_name}:{frame.tb_lineno}"
+        frame = frame.tb_next
+    return location
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("job", choices=tuple(JOBS))
@@ -143,8 +161,12 @@ def main(argv=None):
                     execute(arguments.job, area)
         print("Service execution completed with trusted checks.")
         return 0
-    except Exception:
+    except Exception as error:
         print("Service execution failed its trusted prerequisites.", file=sys.stderr)
+        print(
+            f"Trusted failure location: {_trusted_failure_location(error)}",
+            file=sys.stderr,
+        )
         return 1
 
 

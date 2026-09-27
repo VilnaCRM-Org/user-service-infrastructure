@@ -684,6 +684,68 @@ jobs:
           ./.venv/bin/python -I scripts/poc_registry_completion.py publish \
             >> "${GITHUB_OUTPUT}"
 
+  test_registry_dispatch:
+    name: Dispatch TEST Application Publisher
+    if: ${{ needs.test_registry_proof.result == 'success' }}
+    environment: governance-evidence
+    runs-on: ubuntu-latest
+    needs:
+      - preflight
+      - poc_prepare_source
+      - test_registry_observation
+      - test_registry_proof
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      deployments: read
+      pull-requests: read
+    outputs:
+      publisher_run_id: ${{ steps.dispatch.outputs.publisher_run_id }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
+      POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
+      POC_SOURCE_FILE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
+      POC_OBSERVATION_ARTIFACT_ID: ${{ needs.test_registry_observation.outputs.artifact_id }}
+      POC_OBSERVATION_ARCHIVE_SHA256: ${{ needs.test_registry_observation.outputs.archive_sha256 }}
+      POC_OBSERVATION_FILE_SHA256: ${{ needs.test_registry_observation.outputs.file_sha256 }}
+      POC_REGISTRY_RECEIPT_ID: ${{ needs.test_registry_proof.outputs.receipt_id }}
+      POC_PUBLISHER_WORKFLOW_SHA: ${{ vars.POC_PUBLISHER_WORKFLOW_SHA }}
+    steps:
+      - name: Check out immutable trusted dispatcher
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          path: .trusted
+          persist-credentials: false
+
+      - name: Install trusted dispatcher runtime before App credentials
+        uses: ./.trusted/.github/actions/setup-poc-runtime
+
+      - name: Authenticate registry proof and protected publisher before minting
+        working-directory: .trusted
+        run: ./.venv/bin/python -I scripts/poc_publisher_dispatch.py prepare
+
+      - name: Create application-only Actions dispatch token
+        id: publisher_app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ vars.GOVERNANCE_PROMOTION_APP_ID }}
+          private-key: ${{ secrets.GOVERNANCE_PROMOTION_APP_PRIVATE_KEY }}
+          owner: VilnaCRM-Org
+          repositories: user-service
+          permission-actions: write
+
+      - name: Dispatch once and authenticate native application run
+        id: dispatch
+        working-directory: .trusted
+        env:
+          PUBLISHER_DISPATCH_APP_TOKEN: ${{ steps.publisher_app.outputs.token }}
+        run: |
+          ./.venv/bin/python -I scripts/poc_publisher_dispatch.py dispatch \
+            >> "${GITHUB_OUTPUT}"
+
   comment_result:
     name: Comment Result
     if: always()
@@ -697,6 +759,7 @@ jobs:
       - test_post_apply_drift
       - test_registry_observation
       - test_registry_proof
+      - test_registry_dispatch
     timeout-minutes: 10
     permissions:
       issues: write
@@ -707,6 +770,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       REGISTRY_RECEIPT_ID: ${{ needs.test_registry_proof.outputs.receipt_id }}
+      PUBLISHER_RUN_ID: ${{ needs.test_registry_dispatch.outputs.publisher_run_id }}
     steps:
       - name: Post PR command result
         run: |
@@ -728,13 +792,19 @@ jobs:
             echo "| Test post-apply drift | \`${{ needs.test_post_apply_drift.result }}\` |"
             echo "| TEST registry observation | \`${{ needs.test_registry_observation.result }}\` |"
             echo "| TEST registry proof | \`${{ needs.test_registry_proof.result }}\` |"
+            echo "| TEST publisher dispatch | \`${{ needs.test_registry_dispatch.result }}\` |"
             if [[ "${{ needs.test_registry_proof.result }}" == success ]]; then
               if [[ "${REGISTRY_RECEIPT_ID}" =~ ^[1-9][0-9]*$ ]]; then
                 printf '%s\n' "- TEST registry receipt ID: \`${REGISTRY_RECEIPT_ID}\`"
               fi
             fi
+            if [[ "${{ needs.test_registry_dispatch.result }}" == success ]]; then
+              if [[ "${PUBLISHER_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+                printf '%s\n' "- Application publisher run: https://github.com/VilnaCRM-Org/user-service/actions/runs/${PUBLISHER_RUN_ID}"
+              fi
+            fi
             echo
-            echo "TEST registry plan/apply/drift and separate completion proof only. Image publishing and workload deployment remain disabled."
+            echo "TEST registry proof and application publisher dispatch only. Image publication success and workload deployment require separate verification."
           } > "${body_file}"
 
           pr_number="${{ needs.preflight.outputs.pull_request_number }}"

@@ -143,8 +143,9 @@ existing meanings. Workload-to-registry downgrade remains forbidden.
 
 ## Automatic publisher dispatch
 
-The dispatcher helper is not connected to the installed workflow. The proposed
-integration below is unavailable until separately validated and installed.
+The reviewed service workflow now connects the dispatcher after TEST registry
+proof. It is not installed on main or accepted in AWS yet, and its native
+prerequisites fail closed until configured.
 
 After successful registry proof publication, a separate `test_registry_dispatch`
 job checks out only the installed service workflow revision. It reauthenticates
@@ -199,13 +200,14 @@ admission.
 Enabling prerequisites remain external: install the reviewed publisher on
 application `main`; set `POC_PUBLISHER_WORKFLOW_SHA` to that installed main commit;
 and grant/accept Actions write for the existing App installation with access to
-`user-service`. Public App permissions on 2026-09-23 still advertise Actions read,
-and application main lacks the publisher workflow. Installation selection could
+`user-service`. App permissions currently advertise Actions read, and
+application main lacks the publisher workflow. Installation selection could
 not be verified with the available organization API access. Token creation fails
 if the installation has not accepted the permission or lacks repository access.
-The application main review rules and `poc-test-images` environment must also be
-installed: operator API inspection on 2026-09-23 found no main branch protection,
-only a tag ruleset, and no publisher environment. The runtime must be able to
+The application main review rules must also be installed: current API inspection
+finds no effective main branch ruleset. The `poc-test-images` environment already
+exists with Kravalg as its independent reviewer.
+The runtime must be able to
 read the effective rules, ruleset and environment through its existing read
 token; API denial remains a blocking prerequisite rather than an admission bypass.
 The dispatcher therefore remains fail-closed with the current configuration.

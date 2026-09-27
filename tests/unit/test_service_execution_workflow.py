@@ -59,6 +59,7 @@ def test_test_only_dag_keeps_dispatch_and_prod_routes_absent():
     assert {name for name in jobs if name.startswith("test_registry_")} == {
         "test_registry_observation",
         "test_registry_proof",
+        "test_registry_dispatch",
     }
 
 

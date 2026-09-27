@@ -6,6 +6,7 @@ import json
 import os
 import stat
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -361,3 +362,31 @@ def test_wrong_file_owner_or_group_prevents_publication(
     with pytest.raises(ValueError, match="materializer-file-metadata"):
         module.materialize_workload(area, projection, raw)
     assert not (area / "workload").exists()
+
+
+@pytest.mark.parametrize(
+    "mutation", [None, "type", "binding", "digest", "extra", "content"]
+)
+def test_dispatch_readback_checks_original_inputs_and_protected_bytes(
+    protected, mutation
+):
+    area, projection, raw = protected
+    result = module.materialize_workload(area, projection, raw)
+    if mutation == "type":
+        result = None
+    elif mutation == "binding":
+        result = replace(result, baseline_sha256="a" * 64)
+    elif mutation == "digest":
+        result = replace(result, files=())
+    elif mutation == "extra":
+        (result.directory / "extra.py").write_text("unexpected")
+    elif mutation == "content":
+        path = result.directory / "__main__.py"
+        path.chmod(0o600)
+        path.write_bytes(b"X" * path.stat().st_size)
+        path.chmod(0o440)
+    if mutation is None:
+        assert module.verify_materialized_workload(result, projection, raw) is None
+    else:
+        with pytest.raises(ValueError, match="workload-material"):
+            module.verify_materialized_workload(result, projection, raw)

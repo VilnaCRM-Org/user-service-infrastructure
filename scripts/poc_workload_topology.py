@@ -128,7 +128,7 @@ def _network_graph(add, planes):
             network[f"{prefix}-rt-{index}"] = "routeTable:RouteTable"
         network[f"nat-eip-{index}"] = "eip:Eip"
         network[f"nat-{index}"] = "natGateway:NatGateway"
-    for purpose in ("alb", "service", "documentdb", "redis"):
+    for purpose in ("alb", "vpc-link", "service", "documentdb", "redis"):
         network[f"{purpose}-sg"] = "securityGroup:SecurityGroup"
     for name, kind in network.items():
         add(f"user-service-{name}", f"aws:ec2/{kind}", planes["network"])
@@ -157,7 +157,6 @@ def _application_graph(add, planes):
         "ecs-cluster": "ecs/cluster:Cluster",
         "alb": "lb/loadBalancer:LoadBalancer",
         "target-group": "lb/targetGroup:TargetGroup",
-        "http-listener": "lb/listener:Listener",
         "https-listener": "lb/listener:Listener",
     }
     for kind in ("web", "worker"):

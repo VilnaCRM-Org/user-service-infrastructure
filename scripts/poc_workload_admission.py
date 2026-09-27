@@ -452,15 +452,30 @@ def inspect_release(contract, authority, *, gh=None, download=None):
     return digest
 
 
-def inspect_workload(source, contract, authority, command):
-    """Run real authenticated reads; never substitute these for a workload plan gate."""
+@dataclass(frozen=True)
+class WorkloadObservation:
+    """Observed prerequisites only; no workload plan or replay authorization."""
+
+    anchor: RegistryAnchor
+    images: dict = field(repr=False)
+    certificate: dict | None = None
+
+
+def observe_workload(source, contract, authority, command):
+    """Collect real authenticated reads without admitting a workload plan."""
     anchor = inspect_registry(source, contract, authority, command)
     inspect_release(contract, authority)
-    images.inspect_images(contract)
+    observed_images = images.inspect_images(contract)
     registry.graph.mail.inspect_identity(ready=True)
-    capabilities.inspect_capabilities(contract)
+    certificate = capabilities.inspect_capabilities(contract)
     require(
         inspect_registry(source, contract, authority, command) == anchor,
         "workload-prior-changed",
     )
+    return WorkloadObservation(anchor, observed_images, certificate)
+
+
+def inspect_workload(source, contract, authority, command):
+    """Retain the existing rejecting admission interface until all gates exist."""
+    observe_workload(source, contract, authority, command)
     raise ValueError("workload-native-image-capability-and-plan-gates-required")

@@ -88,7 +88,7 @@ def test_runtime_descriptor_properties_return_declared_values() -> None:
         ):
             descriptor.validate_target(
                 SimpleNamespace(
-                    network=SimpleNamespace(public_subnet_cidrs=("10.42.1.0/24",))
+                    network=SimpleNamespace(app_subnet_cidrs=("10.42.1.0/24",))
                 )
             )
 

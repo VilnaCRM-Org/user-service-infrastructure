@@ -3,6 +3,7 @@
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from app.runtime_secrets import RuntimeSecrets, RuntimeSecretsDescriptor
@@ -39,3 +40,13 @@ def test_workload_tag_composition_preserves_explicit_tags_without_owner_override
     for forbidden in ({"Owner": "foreign"}, "invalid-shape"):
         with pytest.raises(ValueError, match="preserved baseline tags"):
             _merge_tags(forbidden, baseline)
+
+
+def test_private_gateway_missing_certificate_cannot_fall_back_to_http():
+    from app.compute import ComputePlane
+
+    settings = SimpleNamespace(runtime=SimpleNamespace(certificate_arn=None))
+    with pytest.raises(ValueError, match="admitted certificate"):
+        object.__new__(ComputePlane)._create_http_listener(
+            settings, None, None, private_gateway=True
+        )

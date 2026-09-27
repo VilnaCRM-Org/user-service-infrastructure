@@ -14,7 +14,7 @@ from test_poc_workload_phase import graph
     [
         None,
         [],
-        "10.42.0.0/24",
+        "10.42.10.0/24",
         [""],
         ["private_ranges"],
         ["REMOTE_ADDR"],
@@ -25,12 +25,12 @@ from test_poc_workload_phase import graph
         ["10.42.0.1"],
         ["10.42.0.1/24"],
         ["10.42.0.0/255.255.255.0"],
-        [" 10.42.0.0/24"],
-        ["10.42.0.0/24\n"],
-        ["10.42.0.0/24,10.42.1.0/24"],
-        ["10.42.0.0/24", "10.42.0.0/24"],
-        ["10.42.0.0/24", "10.42.0.0/25"],
-        ["10.42.0.0/24"] * 17,
+        [" 10.42.10.0/24"],
+        ["10.42.10.0/24\n"],
+        ["10.42.10.0/24,10.42.11.0/24"],
+        ["10.42.10.0/24", "10.42.10.0/24"],
+        ["10.42.10.0/24", "10.42.10.0/25"],
+        ["10.42.10.0/24"] * 17,
     ],
 )
 def test_invalid_trusted_proxy_declarations_fail_closed(cidrs):
@@ -59,7 +59,7 @@ def test_canonical_ipv6_is_valid_without_expanding_trust():
 
     contract = fixture("workload")
     contract["workload"]["runtime"]["trusted_proxy_cidrs"] = [
-        "10.42.0.0/24",
+        "10.42.10.0/24",
         "fd00::/64",
     ]
     _validate_document(contract)
@@ -75,7 +75,7 @@ def test_web_injects_same_exact_set_in_both_parser_formats(tmp_path):
     assert environment["TRUSTED_PROXIES"] == ",".join(cidrs)
     assert environment["TRUSTED_PROXY_CIDRS"] == " ".join(cidrs)
     registered_subnets = {
-        rows[f"user-service-public-subnet-{index}"]["inputs"]["cidrBlock"]
+        rows[f"user-service-app-subnet-{index}"]["inputs"]["cidrBlock"]
         for index in (1, 2)
     }
     assert set(environment["TRUSTED_PROXIES"].split(",")) == registered_subnets
@@ -89,7 +89,7 @@ def test_web_injects_same_exact_set_in_both_parser_formats(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "cidrs", [["10.42.0.0/16"], ["10.42.0.0/24"], ["10.42.2.0/24", "10.42.1.0/24"]]
+    "cidrs", [["10.42.0.0/16"], ["10.42.10.0/24"], ["10.42.2.0/24", "10.42.11.0/24"]]
 )
 def test_descriptor_rejects_broader_missing_or_foreign_subnets(cidrs):
     from app.runtime_secrets import RuntimeSecretsDescriptor
@@ -98,7 +98,7 @@ def test_descriptor_rejects_broader_missing_or_foreign_subnets(cidrs):
     contract["workload"]["runtime"]["trusted_proxy_cidrs"] = cidrs
     descriptor = RuntimeSecretsDescriptor(contract)
     settings = SimpleNamespace(
-        network=SimpleNamespace(public_subnet_cidrs=("10.42.0.0/24", "10.42.1.0/24"))
+        network=SimpleNamespace(app_subnet_cidrs=("10.42.10.0/24", "10.42.11.0/24"))
     )
     with patch.object(descriptor, "validate_context"):
         with pytest.raises(ValueError, match="exactly match"):
@@ -111,5 +111,5 @@ def test_descriptor_list_is_detached_and_legacy_has_no_implicit_trust():
 
     descriptor = RuntimeSecretsDescriptor(fixture("workload"))
     descriptor.trusted_proxy_cidrs.append("10.42.2.0/24")
-    assert descriptor.trusted_proxy_cidrs == ["10.42.0.0/24", "10.42.1.0/24"]
+    assert descriptor.trusted_proxy_cidrs == ["10.42.10.0/24", "10.42.11.0/24"]
     assert object.__new__(ComputePlane)._trusted_proxy_environment() == []

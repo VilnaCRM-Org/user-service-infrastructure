@@ -58,7 +58,7 @@ def _mutate(value, registries, mutation):
         "role": {"runtime": replace(value.runtime, task_role_arn="foreign")},
         "runtime": {"runtime": replace(value.runtime, app_env="dev")},
         "proxy-subnets": {
-            "network": replace(value.network, public_subnet_cidrs=("10.42.0.0/16",))
+            "network": replace(value.network, app_subnet_cidrs=("10.42.0.0/16",))
         },
     }
     return replace(value, **changes.get(mutation, {}))
@@ -178,6 +178,7 @@ def _probe(root, mode, mutation, coverage_path):
             str(root / "pulumi/app/workload_phase.py"),
             str(root / "pulumi/app/registry_phase.py"),
             str(root / "pulumi/app/runtime_secrets.py"),
+            str(root / "pulumi/app/network.py"),
             str(root / "pulumi/app/data.py"),
             str(root / "pulumi/app/compute.py"),
             str(root / "pulumi/app/access_logs.py"),
@@ -254,6 +255,9 @@ def _probe(root, mode, mutation, coverage_path):
         ),
         "appEnv": "prod",
     }
+    config["certificateArn"] = _fixture_contract(root, config)["workload"]["external"][
+        "domain"
+    ]["certificate_arn"]
     config["mailSender"] = _fixture_contract(root, config)["workload"]["external"][
         "mail"
     ]["sender"]
@@ -475,3 +479,45 @@ def test_workload_tags_preserve_extra_fields_and_reject_baseline_conflicts():
 if __name__ == "__main__":
     assert sys.argv[1] == "probe"
     _probe(Path(sys.argv[2]), sys.argv[3], sys.argv[4], Path(sys.argv[5]))
+
+
+def test_private_workload_network_has_only_gateway_https(tmp_path):
+    result = graph(tmp_path, "bridge")
+    assert result["error"] is None
+    rows = result["registrations"]
+    alb = rows["user-service-alb"]["inputs"]
+    assert alb["internal"] is True
+    assert alb["subnets"] == [
+        rows[f"user-service-app-subnet-{index}"]["id"] for index in (1, 2)
+    ]
+    link = rows["user-service-vpc-link-sg"]
+    assert link["inputs"]["vpcId"] == rows["user-service-vpc"]["id"]
+    assert link["inputs"]["ingress"] == []
+    assert link["inputs"]["egress"] == [
+        {
+            "protocol": "tcp",
+            "fromPort": 443,
+            "toPort": 443,
+            "cidrBlocks": ["10.42.10.0/24", "10.42.11.0/24"],
+        }
+    ]
+    assert rows["user-service-alb-sg"]["inputs"]["ingress"] == [
+        {
+            "protocol": "tcp",
+            "fromPort": 443,
+            "toPort": 443,
+            "securityGroups": [link["id"]],
+        }
+    ]
+    assert "user-service-http-listener" not in rows
+    assert rows["user-service-https-listener"]["inputs"]["port"] == 443
+
+
+def test_private_gateway_listener_requires_certificate():
+    from app.compute import ComputePlane
+
+    settings = SimpleNamespace(runtime=SimpleNamespace(certificate_arn=None))
+    with pytest.raises(ValueError, match="admitted certificate"):
+        object.__new__(ComputePlane)._create_http_listener(
+            settings, None, None, private_gateway=True
+        )

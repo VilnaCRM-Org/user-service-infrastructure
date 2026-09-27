@@ -216,6 +216,13 @@ def test_native_generated_workload_preserves_registry_and_registers_secret_versi
     baseline = {row.urn: row for row in resources(events)}
     assert len(baseline) == 11
     events.clear()
+    contract = json.loads((work / "contract.json").read_text())
+    stack.set_config(
+        "certificateArn",
+        auto.ConfigValue(
+            value=contract["workload"]["external"]["domain"]["certificate_arn"]
+        ),
+    )
     (work / "scenario.json").write_text('{"mode":"workload"}')
     result = stack.preview(on_event=events.append)
     assert result.change_summary

@@ -25,6 +25,7 @@ class NetworkOutputs:
     service_security_group_id: pulumi.Input[str]
     documentdb_security_group_id: pulumi.Input[str]
     redis_security_group_id: pulumi.Input[str]
+    vpc_link_security_group_id: pulumi.Input[str] | None = None
 
 
 class NetworkPlane(pulumi.ComponentResource):
@@ -37,13 +38,14 @@ class NetworkPlane(pulumi.ComponentResource):
         name: str,
         *,
         settings: StackSettings,
+        private_gateway: bool = False,
         opts: Optional[pulumi.ResourceOptions] = None,
     ) -> None:
         """Build preview-safe outputs or provision the managed network topology."""
         super().__init__("user-service-infrastructure:network:Plane", name, None, opts)
 
         self.outputs = (
-            self._build_managed_network(settings)
+            self._build_managed_network(settings, private_gateway=private_gateway)
             if settings.is_managed
             else self._build_preview_outputs(settings)
         )
@@ -54,6 +56,7 @@ class NetworkPlane(pulumi.ComponentResource):
                 "appSubnetIds": self.outputs.app_subnet_ids,
                 "dataSubnetIds": self.outputs.data_subnet_ids,
                 "albSecurityGroupId": self.outputs.alb_security_group_id,
+                "vpcLinkSecurityGroupId": self.outputs.vpc_link_security_group_id,
                 "serviceSecurityGroupId": self.outputs.service_security_group_id,
                 "documentDbSecurityGroupId": self.outputs.documentdb_security_group_id,
                 "redisSecurityGroupId": self.outputs.redis_security_group_id,
@@ -98,7 +101,9 @@ class NetworkPlane(pulumi.ComponentResource):
             ),
         )
 
-    def _build_managed_network(self, settings: StackSettings) -> NetworkOutputs:
+    def _build_managed_network(
+        self, settings: StackSettings, *, private_gateway: bool = False
+    ) -> NetworkOutputs:
         """Provision the VPC, subnets, routes, and security groups."""
         vpc = aws.ec2.Vpc(
             "user-service-vpc",
@@ -154,6 +159,7 @@ class NetworkPlane(pulumi.ComponentResource):
                 vpc_id=vpc.id,
                 availability_zone=availability_zone,
                 cidr_block=settings.network.app_subnet_cidrs[index],
+                map_public_ip_on_launch=False,
                 opts=pulumi.ResourceOptions(parent=self),
             )
             app_subnets.append(app_subnet)
@@ -210,24 +216,46 @@ class NetworkPlane(pulumi.ComponentResource):
                 opts=pulumi.ResourceOptions(parent=self),
             )
 
-        alb_security_group = aws.ec2.SecurityGroup(
-            "user-service-alb-sg",
-            vpc_id=vpc.id,
-            description="Allow public HTTP and HTTPS traffic to the load balancer.",
-            ingress=[
-                aws.ec2.SecurityGroupIngressArgs(
-                    protocol="tcp",
-                    from_port=80,
-                    to_port=80,
-                    cidr_blocks=["0.0.0.0/0"],
-                ),
+        vpc_link_security_group = None
+        if private_gateway:
+            vpc_link_security_group = aws.ec2.SecurityGroup(
+                "user-service-vpc-link-sg",
+                vpc_id=vpc.id,
+                description="Allow API Gateway VPC Link HTTPS to private ALB subnets.",
+                ingress=[],
+                egress=[
+                    aws.ec2.SecurityGroupEgressArgs(
+                        protocol="tcp",
+                        from_port=443,
+                        to_port=443,
+                        cidr_blocks=list(settings.network.app_subnet_cidrs),
+                    )
+                ],
+                opts=pulumi.ResourceOptions(parent=self),
+            )
+        ingress = [
+            aws.ec2.SecurityGroupIngressArgs(
+                protocol="tcp",
+                from_port=port,
+                to_port=port,
+                cidr_blocks=["0.0.0.0/0"],
+            )
+            for port in (80, 443)
+        ]
+        if vpc_link_security_group is not None:
+            ingress = [
                 aws.ec2.SecurityGroupIngressArgs(
                     protocol="tcp",
                     from_port=443,
                     to_port=443,
-                    cidr_blocks=["0.0.0.0/0"],
-                ),
-            ],
+                    security_groups=[vpc_link_security_group.id],
+                )
+            ]
+        alb_security_group = aws.ec2.SecurityGroup(
+            "user-service-alb-sg",
+            vpc_id=vpc.id,
+            description="Allow admitted traffic to the load balancer.",
+            ingress=ingress,
             egress=[
                 aws.ec2.SecurityGroupEgressArgs(
                     protocol="-1",
@@ -242,7 +270,7 @@ class NetworkPlane(pulumi.ComponentResource):
         service_security_group = aws.ec2.SecurityGroup(
             "user-service-service-sg",
             vpc_id=vpc.id,
-            description="Allow application traffic from the public load balancer.",
+            description="Allow application traffic from the load balancer.",
             ingress=[
                 aws.ec2.SecurityGroupIngressArgs(
                     protocol="tcp",
@@ -317,4 +345,9 @@ class NetworkPlane(pulumi.ComponentResource):
             service_security_group_id=service_security_group.id,
             documentdb_security_group_id=documentdb_security_group.id,
             redis_security_group_id=redis_security_group.id,
+            vpc_link_security_group_id=(
+                vpc_link_security_group.id
+                if vpc_link_security_group is not None
+                else None
+            ),
         )

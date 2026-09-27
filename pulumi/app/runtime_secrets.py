@@ -100,7 +100,7 @@ class RuntimeSecretsDescriptor:
     def validate_target(self, settings: Any) -> None:
         """Bind declarations to protected configuration and workload roles."""
         self.validate_context()
-        if set(self.trusted_proxy_cidrs) != set(settings.network.public_subnet_cidrs):
+        if set(self.trusted_proxy_cidrs) != set(settings.network.app_subnet_cidrs):
             raise ValueError("Trusted proxy CIDRs must exactly match the ALB subnets")
         central = self._contract["workload"]["central"]
         actual = (

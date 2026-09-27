@@ -94,7 +94,9 @@ class WorkloadPhaseStack(RegistryPhaseStack):
         self.runtime_secrets = RuntimeSecrets(
             "runtime-secrets", descriptor=secrets, opts=opts
         )
-        self.network = NetworkPlane("network", settings=settings, opts=opts)
+        self.network = NetworkPlane(
+            "network", settings=settings, private_gateway=True, opts=opts
+        )
         self.data = DataPlane(
             "data",
             settings=settings,

@@ -173,13 +173,18 @@ class ComputePlane(pulumi.ComponentResource):
         )
 
         access_logs_bucket, access_logs_dependencies = self._access_logs(settings)
+        private_gateway = network.outputs.vpc_link_security_group_id is not None
         load_balancer = aws.lb.LoadBalancer(
             "user-service-alb",
             name=build_resource_name(settings.stack_tag, "alb", max_length=32),
-            internal=False,
+            internal=private_gateway,
             load_balancer_type="application",
             security_groups=[network.outputs.alb_security_group_id],
-            subnets=network.outputs.public_subnet_ids,
+            subnets=(
+                network.outputs.app_subnet_ids
+                if private_gateway
+                else network.outputs.public_subnet_ids
+            ),
             access_logs=aws.lb.LoadBalancerAccessLogsArgs(
                 bucket=access_logs_bucket,
                 enabled=True,
@@ -217,6 +222,7 @@ class ComputePlane(pulumi.ComponentResource):
             settings,
             load_balancer,
             target_group,
+            private_gateway=private_gateway,
         )
 
         web_task_definition = aws.ecs.TaskDefinition(
@@ -414,9 +420,15 @@ class ComputePlane(pulumi.ComponentResource):
         settings: StackSettings,
         load_balancer: aws.lb.LoadBalancer,
         target_group: aws.lb.TargetGroup,
+        *,
+        private_gateway: bool = False,
     ) -> aws.lb.Listener:
         """Create HTTP and optional HTTPS listeners."""
         if settings.runtime.certificate_arn is None:
+            if private_gateway:
+                raise ValueError(
+                    "Private gateway listener requires an admitted certificate"
+                )
             return aws.lb.Listener(
                 "user-service-http-listener",
                 load_balancer_arn=load_balancer.arn,
@@ -446,6 +458,8 @@ class ComputePlane(pulumi.ComponentResource):
             ],
             opts=pulumi.ResourceOptions(parent=self),
         )
+        if private_gateway:
+            return https_listener
         return aws.lb.Listener(
             "user-service-http-listener",
             load_balancer_arn=load_balancer.arn,

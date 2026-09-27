@@ -16,11 +16,12 @@ from typing import Any, cast
 import poc_contract
 from poc_phase_admission import CONTRACT_PATH, SourceAdmission
 from poc_registry_phase_entrypoint import _stable_registries
+from poc_workload_capabilities import certificate_projection
 from poc_workload_images import MAX_CONFIG_BYTES, MEDIA
 from service_execution_process import require
 
 MAX_PROJECTION_BYTES = poc_contract.MAX_BYTES + 16384
-PROJECTION_VERSION = "poc-workload-child-v1"
+PROJECTION_VERSION = "poc-workload-child-v2"
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,7 @@ class WorkloadPhaseProjection:
     source: SourceAdmission
     contract: dict[str, Any]
     images: dict[str, Any]
+    certificate: dict[str, Any] | None = None
 
 
 def _source(source):
@@ -90,7 +92,7 @@ def _images(contract, observed):
         )
 
 
-def project_workload_phase(source, contract, images):
+def project_workload_phase(source, contract, images, certificate=None):
     """Bind already-authenticated facts without contacting AWS or resolving secrets."""
     _source(source)
     require(type(contract) is dict, "workload-contract-object")
@@ -114,13 +116,19 @@ def project_workload_phase(source, contract, images):
     )
     observed = copy.deepcopy(images)
     _images(document, observed)
-    return WorkloadPhaseProjection(source, document, observed)
+    observed_certificate = certificate_projection(
+        document["workload"]["external"]["domain"], certificate
+    )
+    return WorkloadPhaseProjection(source, document, observed, observed_certificate)
 
 
 def _checked(projection):
     require(type(projection) is WorkloadPhaseProjection, "workload-projection")
     return project_workload_phase(
-        projection.source, projection.contract, projection.images
+        projection.source,
+        projection.contract,
+        projection.images,
+        projection.certificate,
     )
 
 
@@ -133,6 +141,7 @@ def encode_workload_projection(projection):
             "source": asdict(checked.source),
             "contract": checked.contract,
             "images": checked.images,
+            "certificate": checked.certificate,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -158,7 +167,8 @@ def decode_workload_projection(raw):
         raise ValueError("workload-projection-json") from None
     require(
         type(document) is dict
-        and set(document) == {"schema_version", "source", "contract", "images"}
+        and set(document)
+        == {"schema_version", "source", "contract", "images", "certificate"}
         and document["schema_version"] == PROJECTION_VERSION,
         "workload-projection-fields",
     )
@@ -169,7 +179,10 @@ def decode_workload_projection(raw):
         "workload-source-fields",
     )
     projection = project_workload_phase(
-        SourceAdmission(**source), document["contract"], document["images"]
+        SourceAdmission(**source),
+        document["contract"],
+        document["images"],
+        document["certificate"],
     )
     require(
         raw == encode_workload_projection(projection), "workload-projection-canonical"
@@ -209,6 +222,14 @@ def run_workload_program(raw):
     return run_workload_phase(decode_workload_projection(raw))
 
 
+def workload_certificate_arn(projection):
+    """Return only the checked resolved ARN; explicit input is for internal callers."""
+    checked = _checked(projection)
+    if checked.certificate is not None:
+        return checked.certificate["certificate_arn"]
+    return checked.contract["workload"]["external"]["domain"]["certificate_arn"]
+
+
 def workload_configuration(projection):
     """Return only generated application settings for protected config assembly.
 
@@ -234,7 +255,7 @@ def workload_configuration(projection):
         "apiBaseUrl": base_url,
         "apiUrl": base_url,
         "corsAllowOrigin": "^" + re.escape(base_url) + "$",
-        "certificateArn": domain["certificate_arn"],
+        "certificateArn": workload_certificate_arn(checked),
         "mailSender": workload["external"]["mail"]["sender"],
         "healthCheckPath": workload["runtime"]["health_path"],
         "healthCheckQueueName": "health-check-queue",

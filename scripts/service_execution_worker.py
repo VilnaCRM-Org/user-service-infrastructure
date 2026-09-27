@@ -78,6 +78,7 @@ def _replay_inputs(port, account):
 
 
 def _test(port, command, head):
+    os.write(2, b"Trusted worker stage: source contract\n")
     references = {
         "artifact_id": os.environ["POC_SOURCE_ARTIFACT_ID"],
         "archive_sha256": os.environ["POC_SOURCE_ARCHIVE_SHA256"],
@@ -90,17 +91,22 @@ def _test(port, command, head):
         and source["request"]["target_environment"] == "test",
         "workload-source-binding",
     )
+    os.write(2, b"Trusted worker stage: source review\n")
     registry._review(source)
     if contract["phase"] == "workload":
         raise ValueError("workload-execution-not-enabled")
+    os.write(2, b"Trusted worker stage: registry execution\n")
     return registry.execute(command, **references, transport=port)
 
 
 def execute(job, area):
     require(job in JOBS and os.environ.get("GITHUB_JOB") == job, "worker-job")
     account, command = JOBS[job]
+    os.write(2, b"Trusted worker stage: request admission\n")
     head = admit(job)
+    os.write(2, b"Trusted worker stage: account coordinates\n")
     coordinates = _coordinates(account)
+    os.write(2, b"Trusted worker stage: isolated transport\n")
     port = ServiceTransport(
         area,
         session={key: os.environ.get(key, "") for key in SESSION_KEYS},
@@ -111,6 +117,7 @@ def execute(job, area):
         ),
     )
     if command == "up-plan":
+        os.write(2, b"Trusted worker stage: saved plan inputs\n")
         _replay_inputs(port, account)
     result = _test(port, command, head)
     require(result == 0, "worker-execution")

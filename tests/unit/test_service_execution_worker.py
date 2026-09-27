@@ -222,3 +222,16 @@ def test_entrypoint_redacts_private_output(monkeypatch, capsys, success):
     assert "synthetic-private" not in captured.out + captured.err
     monkeypatch.setattr(worker.os, "getpid", lambda: 2)
     assert worker.main(["test_preview"]) == 1
+
+
+def test_failure_reports_fixed_stage_without_private_data(monkeypatch, capfd):
+    monkeypatch.setattr(worker.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(worker.os, "getpid", lambda: 1)
+    monkeypatch.setenv("PATH", "/opt/pulumi:/usr/local/bin:/usr/bin:/bin")
+    monkeypatch.setenv("GITHUB_JOB", "test_preview")
+    monkeypatch.setenv("AWS_ACCOUNT_ID", "synthetic-private-account")
+    monkeypatch.setattr(worker, "admit", lambda *_: "a" * 40)
+    assert worker.main(["test_preview"]) == 1
+    captured = capfd.readouterr()
+    assert "Trusted worker stage: account coordinates" in captured.err
+    assert "synthetic-private-account" not in captured.out + captured.err

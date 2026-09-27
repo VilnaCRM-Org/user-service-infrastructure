@@ -38,8 +38,10 @@ The root verifier runs as PID 1 in a read-only container. Pulumi and policy chil
 run as UID/GID 2000 without GitHub or Actions authority. Protected configuration and
 saved plans are root-owned; tools and provider binaries are read-only. Detached
 children are killed before verifier rechecks. Docker sockets and PR source are not
-mounted. Worker logs stay private and public output is a fixed success/failure
-message plus authenticated plan/preview artifacts.
+mounted. Worker logs stay private. Public output contains fixed trusted stage
+labels, never exception text or private command output. The last stage label
+identifies where a failed run stopped. Successful runs publish authenticated
+plan/preview artifacts.
 
 Preview records the saved-plan hash, preview hash, head, backend, KMS key, provider
 configuration, and checkpoint version/ETag. Apply rechecks those identities and the

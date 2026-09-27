@@ -50,6 +50,20 @@ def test_workload_github_decoder_preserves_pages_without_cli_slurp(monkeypatch):
     assert module._github("repos/org/repo/jobs") == {"id": 1}
 
 
+def test_workload_github_decoder_preserves_object_pages(monkeypatch):
+    monkeypatch.setattr(
+        module,
+        "_github_bytes",
+        lambda *_args: (
+            b'{"total_count":2,"jobs":[{"id":1}]}{"total_count":2,"jobs":[{"id":2}]}'
+        ),
+    )
+    assert module._github("repos/org/repo/jobs", "--paginate", "--slurp") == [
+        {"total_count": 2, "jobs": [{"id": 1}]},
+        {"total_count": 2, "jobs": [{"id": 2}]},
+    ]
+
+
 @pytest.mark.parametrize(
     "arguments", [("--slurp",), ("--paginate", "--slurp", "--slurp")]
 )

@@ -192,10 +192,28 @@ def test_gh_decodes_installed_cli_paginated_arrays(monkeypatch):
     assert calls[0][1]["check"] is True
 
 
-@pytest.mark.parametrize("raw", ["{}", "[] {}", "[", "true", "[1] trailing"])
-def test_paginated_arrays_reject_nonarrays_and_malformed_pages(raw):
+def test_gh_decodes_paginated_workflow_job_objects(monkeypatch):
+    def api(_args, **_kwargs):
+        return SimpleNamespace(
+            stdout='{"total_count":2,"jobs":[{"id":1}]}'
+            '\n{"total_count":2,"jobs":[{"id":2}]}'
+        )
+
+    monkeypatch.setattr(preflight.subprocess, "run", api)
+    assert preflight.gh(
+        "repos/org/repo/actions/runs/1/jobs", "--paginate", "--slurp"
+    ) == [
+        {"total_count": 2, "jobs": [{"id": 1}]},
+        {"total_count": 2, "jobs": [{"id": 2}]},
+    ]
+
+
+@pytest.mark.parametrize(
+    "raw", ["", "   ", "[] {}", "[", "true", "42", '"text"', "null", "[1] trailing"]
+)
+def test_paginated_pages_reject_scalar_mixed_and_malformed_pages(raw):
     with pytest.raises(ValueError):
-        preflight.decode_array_pages(raw)
+        preflight.decode_paginated_pages(raw)
 
 
 @pytest.mark.parametrize(

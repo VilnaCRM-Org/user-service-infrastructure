@@ -21,7 +21,7 @@ import poc_source_artifact as artifacts
 import poc_workload_capabilities as capabilities
 import poc_workload_images as images
 from poc_registry_phase_entrypoint import RegistryPhaseProjection
-from pulumi_command_preflight import decode_array_pages
+from pulumi_command_preflight import decode_paginated_pages
 from service_execution_process import require, run
 
 
@@ -82,7 +82,7 @@ def _github(endpoint, *arguments):
         arguments = tuple(arg for arg in arguments if arg != "--slurp")
     raw = _github_bytes(endpoint, *arguments)
     return (
-        decode_array_pages(raw.decode("utf-8"))
+        decode_paginated_pages(raw.decode("utf-8"))
         if slurp
         else registry.backend._json(raw)
     )

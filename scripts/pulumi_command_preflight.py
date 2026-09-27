@@ -22,10 +22,10 @@ from reviewed_source_admission import verify_reviewed_source
 INTAKE_PATH = ".github/workflows/pulumi-pr-commands.yml"
 
 
-def decode_array_pages(raw: str) -> list[list[object]]:
-    """Decode complete ``gh api --paginate`` pages on the installed CLI."""
+def decode_paginated_pages(raw: str) -> list[list[object] | dict[str, object]]:
+    """Decode complete array or object pages from the installed GitHub CLI."""
     decoder = json.JSONDecoder()
-    pages: list[list[object]] = []
+    pages: list[list[object] | dict[str, object]] = []
     offset = 0
     while offset < len(raw):
         while offset < len(raw) and raw[offset].isspace():
@@ -33,9 +33,13 @@ def decode_array_pages(raw: str) -> list[list[object]]:
         if offset == len(raw):
             break
         page, offset = decoder.raw_decode(raw, offset)
-        if type(page) is not list:
-            raise ValueError("GitHub paginated response must contain arrays")
+        if type(page) not in (list, dict) or (
+            pages and type(page) is not type(pages[0])
+        ):
+            raise ValueError("GitHub paginated response has invalid page types")
         pages.append(page)
+    if not pages:
+        raise ValueError("GitHub paginated response is empty")
     return pages
 
 
@@ -57,7 +61,7 @@ def gh(*args: str) -> Any:
     result = subprocess.run(  # nosec B603 B607
         ["gh", "api", *args], check=True, capture_output=True, text=True
     )
-    return decode_array_pages(result.stdout) if slurp else json.loads(result.stdout)
+    return decode_paginated_pages(result.stdout) if slurp else json.loads(result.stdout)
 
 
 def authenticate_intake(request: dict, evidence: dict):

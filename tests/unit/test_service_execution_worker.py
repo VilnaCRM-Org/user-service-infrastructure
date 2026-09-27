@@ -220,24 +220,18 @@ def test_entrypoint_redacts_private_output(monkeypatch, capsys, success):
     assert worker.main(["test_preview"]) == (0 if success else 1)
     captured = capsys.readouterr()
     assert "synthetic-private" not in captured.out + captured.err
-    if not success:
-        assert "Trusted failure location: unknown" in captured.err
     monkeypatch.setattr(worker.os, "getpid", lambda: 2)
     assert worker.main(["test_preview"]) == 1
 
 
-def test_failure_location_reports_trusted_frame_without_exception_data(
-    monkeypatch, capsys
-):
+def test_failure_reports_fixed_stage_without_private_data(monkeypatch, capfd):
     monkeypatch.setattr(worker.os, "geteuid", lambda: 0)
     monkeypatch.setattr(worker.os, "getpid", lambda: 1)
     monkeypatch.setenv("PATH", "/opt/pulumi:/usr/local/bin:/usr/bin:/bin")
+    monkeypatch.setenv("GITHUB_JOB", "test_preview")
     monkeypatch.setenv("AWS_ACCOUNT_ID", "synthetic-private-account")
-    monkeypatch.setattr(worker, "execute", lambda *_: worker._coordinates("test"))
+    monkeypatch.setattr(worker, "admit", lambda *_: "a" * 40)
     assert worker.main(["test_preview"]) == 1
-    captured = capsys.readouterr()
-    assert (
-        "Trusted failure location: service_execution_worker.py:_coordinates:"
-        in captured.err
-    )
+    captured = capfd.readouterr()
+    assert "Trusted worker stage: account coordinates" in captured.err
     assert "synthetic-private-account" not in captured.out + captured.err

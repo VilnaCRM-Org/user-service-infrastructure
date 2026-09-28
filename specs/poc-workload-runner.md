@@ -58,6 +58,14 @@ their fixed visibility timeout. These checks operate on the saved native plan an
 preview together; live resource identifiers and effective cloud behavior still
 require the accepted-result observer and manual TEST acceptance.
 
+The source includes a metadata-only first-create secret-history checker. It
+compares the protected checkpoint graph with the registry baseline and reads
+Secrets Manager `DescribeSecret` twice for every declared runtime secret. It
+requires the same ARN, name, KMS key and sole current version in checkpoint and
+native metadata, with no pending rotation or deletion. It never calls
+`GetSecretValue`. This checker does not authenticate the checkpoint, accepted
+apply or AWS session and cannot issue a deployment receipt or enable apply.
+
 Live prerequisites remain external: installed central runtime/deployment IAM and
 the exact SSM read grant in bootstrap #219; completed registry proof; authenticated
 immutable image publication; gateway-owned issued ACM certificate and its SSM

@@ -25,7 +25,10 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "scripts"), str(ROOT / "tests/unit")]
 from test_environment_component import _resource_mock_outputs  # noqa: E402
 from test_poc_registry_phase_entrypoint import source  # noqa: E402
-from test_poc_workload_phase import _generated_outputs  # noqa: E402
+from test_poc_workload_phase import (  # noqa: E402
+    _generated_outputs,
+    _workload_queue_outputs,
+)
 from test_poc_workload_phase_entrypoint import fixture, parameter_fixture  # noqa: E402
 
 gate = importlib.import_module("poc_workload_topology")
@@ -72,6 +75,7 @@ class LocalProvider(provider_pb2_grpc.ResourceProviderServicer):
             args, dict(inputs), resource_id=name + "-id"
         )
         outputs = _generated_outputs(args, outputs)
+        identifier, outputs = _workload_queue_outputs(args, identifier, outputs)
         if kind == gate.registry.ECR:
             identifier = inputs["name"]
             outputs.update(

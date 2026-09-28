@@ -40,9 +40,10 @@ ALLOWED_HTTPS_RULE_FIELDS = frozenset(
 CONTAINER_SECRET_NAMES = {
     "MONGODB_URL": "document_db_url",
     "REDIS_URL": "redis_url",
-    "APP_SECRET": "app_secret",
+    # These are environment-variable and secret-purpose identifiers, not values.
+    "APP_SECRET": "app_secret",  # nosec B105
     "OAUTH_ENCRYPTION_KEY": "oauth_encryption_key",
-    "OAUTH_PASSPHRASE": "oauth_passphrase",
+    "OAUTH_PASSPHRASE": "oauth_passphrase",  # nosec B105
     "TWO_FACTOR_ENCRYPTION_KEY": "two_factor_encryption_key",
     "OAUTH_PRIVATE_KEY_PEM": "oauth_private_key",
     "OAUTH_PUBLIC_KEY_PEM": "oauth_public_key",

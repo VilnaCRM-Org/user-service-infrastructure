@@ -3,6 +3,7 @@
 import base64
 import copy
 import importlib
+import json
 
 import pytest
 from test_poc_registry_phase_entrypoint import source
@@ -59,6 +60,16 @@ def _native_numbers(kind, inputs):
 def data(captured):
     value = case("repeat")
     contract, images = fixture()
+    # This graph uses the synthetic composition release; bind the projection to
+    # those exact digests instead of a different image-observation test fixture.
+    for kind in ("web", "worker"):
+        container = json.loads(
+            captured[f"user-service-{kind}-task"]["inputs"]["containerDefinitions"]
+        )[0]
+        images[kind]["uri"] = container["image"]
+        contract["workload"]["release"][kind]["digest"] = container["image"].split("@")[
+            1
+        ]
     value["projection"] = bridge.project_workload_phase(
         source(contract), contract, images
     )
@@ -615,7 +626,259 @@ def test_coherent_configured_target_port_is_accepted(data):
         data, "user-service-web-service", ("loadBalancers", 0, "containerPort"), 8080
     )
     _set_matching_input(data, "user-service-worker-service", ("loadBalancers",), [])
+    _set_container_field(data, "web", ("portMappings", 0, "containerPort"), 8080)
+    _set_container_field(data, "web", ("portMappings", 0, "hostPort"), 8080)
     gate.validate_first_workload_topology(**data)
+
+
+def _task_containers(data, kind):
+    urn = next(
+        urn
+        for urn in data["saved_plan"]["resourcePlans"]
+        if urn.endswith(f"::user-service-{kind}-task")
+    )
+    raw = data["saved_plan"]["resourcePlans"][urn]["goal"]["inputDiff"]["adds"][
+        "containerDefinitions"
+    ]
+    return json.loads(raw)
+
+
+def _set_container_field(data, kind, path, value):
+    containers = _task_containers(data, kind)
+    current = containers[0]
+    for key in path[:-1]:
+        current = current[key]
+    current[path[-1]] = value
+    _set_matching_input(
+        data,
+        f"user-service-{kind}-task",
+        ("containerDefinitions",),
+        json.dumps(containers),
+    )
+
+
+@pytest.mark.parametrize("kind", ["web", "worker"])
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        (
+            ("image",),
+            "891377212104.dkr.ecr.eu-central-1.amazonaws.com/user-service-test-web:latest",
+        ),
+        (("image",), "foreign@sha256:" + "a" * 64),
+        (("image",), gate.registry.UNKNOWN),
+        (("command",), ["/bin/sh", "-c", "echo changed"]),
+        (("name",), "foreign"),
+        (("essential",), 1),
+        (("privileged",), True),
+        (("entryPoint",), ["/bin/sh"]),
+        (("mountPoints",), []),
+        (("environmentFiles",), []),
+        (("logConfiguration", "logDriver"), "fluentd"),
+        (("logConfiguration", "options", "awslogs-group"), "/foreign"),
+        (("logConfiguration", "options", "awslogs-region"), "us-east-1"),
+        (("logConfiguration", "options", "awslogs-stream-prefix"), "foreign"),
+        (("logConfiguration", "options", "awslogs-create-group"), "true"),
+    ],
+)
+def test_matching_known_container_cannot_change_runtime(data, kind, path, value):
+    _set_container_field(data, kind, path, value)
+    with pytest.raises(ValueError, match="workload-task-container-runtime"):
+        gate.validate_first_workload_topology(**data)
+
+
+@pytest.mark.parametrize("kind", ["web", "worker"])
+@pytest.mark.parametrize(
+    "raw",
+    [
+        None,
+        "",
+        "[secret]",
+        "{}",
+        "[]",
+        "[null]",
+        "[{}, {}]",
+        "[",
+        "[NaN]",
+        '[{"name":"first","name":"second"}]',
+        " " * 65537,
+    ],
+)
+def test_container_json_is_closed_and_bounded(data, kind, raw):
+    _set_matching_input(
+        data, f"user-service-{kind}-task", ("containerDefinitions",), raw
+    )
+    with pytest.raises(ValueError, match="workload-task-container-json"):
+        gate.validate_first_workload_topology(**data)
+
+
+@pytest.mark.parametrize("kind", ["web", "worker"])
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("APP_ENV", "dev"),
+        ("APP_DEBUG", "1"),
+        ("API_URL", "https://foreign"),
+        ("MAIL_SENDER", "foreign@example.com"),
+        ("MAILER_DSN", "smtp://foreign"),
+        ("SOCIAL_OAUTH_ENABLED", "true"),
+        ("OAUTH_ENCRYPTION_KEY_TYPE", "defuse"),
+        ("AWS_SQS_ENDPOINT_BASE", "https://foreign"),
+        ("LOCALSTACK_PORT", "4566"),
+        ("OAUTH_PRIVATE_KEY", "/tmp/foreign"),
+        ("AWS_ACCESS_KEY_ID", "synthetic-credential"),
+        ("JWT_ISSUER", gate.registry.UNKNOWN),
+        (
+            "SEND_EMAIL_TRANSPORT_DSN",
+            "https://sqs.eu-central-1.amazonaws.com/123456789012/send-email?region=eu-central-1&auto_setup=true",
+        ),
+    ],
+)
+def test_container_environment_rejects_known_contract_changes(data, kind, name, value):
+    rows = _task_containers(data, kind)[0]["environment"]
+    rows = [row for row in rows if row["name"] != name] + [
+        {"name": name, "value": value}
+    ]
+    _set_container_field(data, kind, ("environment",), rows)
+    with pytest.raises(ValueError, match="workload-task-container-environment"):
+        gate.validate_first_workload_topology(**data)
+
+
+@pytest.mark.parametrize("field", ["environment", "secrets"])
+@pytest.mark.parametrize(
+    "mutation", ["duplicate", "missing", "extra-field", "wrong-type"]
+)
+def test_container_named_values_reject_ambiguous_mappings(data, field, mutation):
+    rows = _task_containers(data, "web")[0][field]
+    if mutation == "duplicate":
+        rows.append(copy.deepcopy(rows[0]))
+    elif mutation == "missing":
+        rows.pop()
+    elif mutation == "extra-field":
+        rows[0]["unexpected"] = "foreign"
+    else:
+        rows = {}
+    _set_container_field(data, "web", (field,), rows)
+    with pytest.raises(ValueError, match=f"workload-task-container-{field}"):
+        gate.validate_first_workload_topology(**data)
+
+
+@pytest.mark.parametrize("kind", ["web", "worker"])
+@pytest.mark.parametrize(
+    "mutation", ["account", "name", "unpinned", "stage", "version", "unknown", "redis"]
+)
+def test_container_secrets_require_declared_version_pinned_references(
+    data, kind, mutation
+):
+    rows = _task_containers(data, kind)[0]["secrets"]
+    original = rows[0]["valueFrom"]
+    if mutation == "redis":
+        rows[-1]["valueFrom"] = rows[1]["valueFrom"].rsplit(":", 1)[0] + ":" + "2" * 32
+    else:
+        rows[0]["valueFrom"] = {
+            "account": original.replace("891377212104", "123456789012"),
+            "name": original.replace("synthetic-document_db_url", "foreign"),
+            "unpinned": original.split(":::")[0],
+            "stage": original.split(":::")[0] + "::AWSCURRENT:",
+            "version": original.rsplit(":", 1)[0] + ":short",
+            "unknown": gate.registry.UNKNOWN,
+        }[mutation]
+    _set_container_field(data, kind, ("secrets",), rows)
+    with pytest.raises(ValueError, match="workload-task-container-secrets"):
+        gate.validate_first_workload_topology(**data)
+
+
+@pytest.mark.parametrize(
+    "kind,path,value",
+    [
+        ("web", ("portMappings", 0, "hostPort"), 81),
+        ("web", ("portMappings", 0, "containerPort"), True),
+        ("web", ("portMappings", 0, "protocol"), "udp"),
+        ("web", ("healthCheck",), {}),
+        ("worker", ("portMappings",), [{"containerPort": 80}]),
+        ("worker", ("healthCheck", "command"), ["CMD-SHELL", "true"]),
+        ("worker", ("healthCheck", "interval"), 300),
+    ],
+)
+def test_container_ports_and_worker_health_are_fixed(data, kind, path, value):
+    _set_container_field(data, kind, path, value)
+    with pytest.raises(ValueError, match="workload-task-container-runtime"):
+        gate.validate_first_workload_topology(**data)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("cpu", gate.registry.UNKNOWN),
+        ("memory", "0"),
+        ("cpu", 512),
+        ("memory", "1e3"),
+        ("cpu", "9999999"),
+        ("family", "foreign"),
+        ("volumes", []),
+    ],
+)
+def test_task_inputs_reject_unknown_capacity_or_additional_configuration(
+    data, field, value
+):
+    _set_matching_input(data, "user-service-web-task", (field,), value)
+    with pytest.raises(ValueError, match="workload-task-(capacity|definition)-inputs"):
+        gate.validate_first_workload_topology(**data)
+
+
+def test_first_create_unknown_containers_never_authorize_execution(data):
+    for kind in ("web", "worker"):
+        _set_matching_input(
+            data,
+            f"user-service-{kind}-task",
+            ("containerDefinitions",),
+            gate.registry.UNKNOWN,
+        )
+    gate.validate_first_workload_topology(**data)
+    with pytest.raises(
+        ValueError, match="workload-native-capability-and-input-admission-required"
+    ):
+        gate.admit_first_workload_plan(**data)
+
+
+def test_named_environment_and_secret_order_is_not_semantic(data):
+    for kind in ("web", "worker"):
+        for field in ("environment", "secrets"):
+            rows = _task_containers(data, kind)[0][field]
+            _set_container_field(data, kind, (field,), list(reversed(rows)))
+    gate.validate_first_workload_topology(**data)
+
+
+@pytest.mark.parametrize("kind", ["web", "worker"])
+@pytest.mark.parametrize(
+    "target", ["logs", "runtime-app_secret", "runtime-app_secret-version"]
+)
+def test_unknown_containers_still_require_native_secret_and_log_edges(
+    data, kind, target
+):
+    plans = data["saved_plan"]["resourcePlans"]
+    name = f"user-service-{kind}-task"
+    target = f"user-service-{kind}-logs" if target == "logs" else target
+    owner_urn = next(urn for urn in plans if urn.endswith("::" + name))
+    target_urn = next(urn for urn in plans if urn.endswith("::" + target))
+    goal = plans[owner_urn]["goal"]
+    assert target_urn in goal["dependencies"]
+    goal["dependencies"].remove(target_urn)
+    step = next(row for row in data["preview"]["steps"] if row["urn"] == owner_urn)
+    step["newState"]["dependencies"] = list(goal["dependencies"])
+    _set_matching_input(data, name, ("containerDefinitions",), gate.registry.UNKNOWN)
+    with pytest.raises(ValueError, match="workload-task-container-dependencies"):
+        gate.validate_first_workload_topology(**data)
+
+
+def test_capacity_form_checks_do_not_invent_baseline_contract_pins(data):
+    _set_matching_input(data, "user-service-web-task", ("cpu",), "1024")
+    _set_matching_input(data, "user-service-web-task", ("memory",), "2048")
+    gate.validate_first_workload_topology(**data)
+    with pytest.raises(
+        ValueError, match="workload-native-capability-and-input-admission-required"
+    ):
+        gate.admit_first_workload_plan(**data)
 
 
 def test_native_omitted_component_outputs_require_unchanged_saved_goal(data):

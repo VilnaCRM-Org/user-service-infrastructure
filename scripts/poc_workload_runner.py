@@ -1,9 +1,10 @@
-"""Sealed first-workload preview adapter; apply and drift remain disabled.
+"""Sealed first-workload plan and first-apply adapter; later releases stay closed.
 
 Authenticated registry, release, image and native prerequisite observations feed
 only the installed generated program. The exact first-workload topology admits
-preview; apply additionally requires a result observer and remains blocked by
-the worker. Drift requires an authenticated accepted-workload receipt.
+the saved plan. A successful first apply must pass private checkpoint and native
+secret-metadata readback; it issues no cross-run receipt. Drift and subsequent
+releases require an authenticated accepted-workload receipt.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import poc_registry_runner as registry
 import poc_workload_admission as admission
 import poc_workload_materializer as materializer
 import poc_workload_phase_entrypoint as bridge
+import poc_workload_secret_result as secret_result
 import poc_workload_topology as topology
 from poc_phase_admission import SourceAdmission
 from poc_registry_phase_entrypoint import RegistryPhaseProjection
@@ -68,8 +70,7 @@ def _gate(source, contract, authority, command, projection, initial):
             "workload-plan-bytes-changed",
         )
         registry.preflight.revalidate_requester(source["request"])
-        # Preview admission must never enable unobserved applies.
-        require(command == "plan", "workload-result-observer-required")
+        require(command in ("plan", "up-plan"), "workload-first-command")
 
     return validate
 
@@ -120,6 +121,33 @@ def _prepared_workload(context, transport, projection):
             transport.before_program = previous_admission
 
 
+def _inspect_first_result(source, contract, prior):
+    """Require a complete stable first-create checkpoint and native secret metadata.
+
+    This is same-run TEST apply evidence, not a receipt for later release or drift.
+    Native application behavior and resolved gateway relationships still require
+    live acceptance before the PoC is considered deployed.
+    """
+    os.write(2, b"Trusted worker stage: workload result observation\n")
+    final = registry.backend.capture_backend(source, operation="up-plan")
+    require(
+        final.summary["state"]["kind"] == "observed_checkpoint"
+        and _checkpoint(final) != _checkpoint(prior),
+        "workload-first-result-checkpoint",
+    )
+    secret_result.inspect_first_secret_history(
+        contract, prior.resources, final.resources
+    )
+    repeat = registry.backend.capture_backend(source, operation="up-plan")
+    require(
+        repeat.summary["state"] == final.summary["state"]
+        and repeat.resources == final.resources,
+        "workload-first-result-moved",
+    )
+    registry._review(source)
+    registry.preflight.revalidate_requester(source["request"])
+
+
 def execute(command, *, artifact_id, archive_sha256, source_sha256, transport):
     """Authenticate and materialize the fixed TEST graph; never accept PR code."""
     require(command in ("plan", "up-plan", "drift"), "workload-command")
@@ -154,7 +182,7 @@ def execute(command, *, artifact_id, archive_sha256, source_sha256, transport):
         initial.images,
         initial.certificate,
     )
-    _capture(source, command, initial)
+    prior = _capture(source, command, initial)
     root = transport.repo
     context = registry.runner.CommandContext(
         root_dir=root,
@@ -171,4 +199,7 @@ def execute(command, *, artifact_id, archive_sha256, source_sha256, transport):
     )
     context = transport.bind(context)
     with _prepared_workload(context, transport, projection) as prepared:
-        return registry.runner._dispatch_command(command, prepared, ["test"])
+        status = registry.runner._dispatch_command(command, prepared, ["test"])
+        if status == 0 and command == "up-plan":
+            _inspect_first_result(source, contract, prior)
+        return status

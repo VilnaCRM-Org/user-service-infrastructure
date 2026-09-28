@@ -74,6 +74,7 @@ jobs:
       artifact_id: ${{ steps.source_artifact.outputs.artifact-id }}
       archive_sha256: ${{ steps.source_artifact.outputs.artifact-digest }}
       source_sha256: ${{ steps.prepare.outputs.source_sha256 }}
+      phase: ${{ steps.prepare.outputs.phase }}
     steps:
       - name: Require the TEST-only PoC source route
         env:
@@ -461,7 +462,10 @@ jobs:
 
   test_post_apply_drift:
     name: Test Post-Apply Drift
-    if: ${{ needs.preflight.outputs.command == 'up' && needs.preflight.outputs.target_environment == 'test' }}
+    if: >-
+      needs.preflight.outputs.command == 'up' &&
+      needs.preflight.outputs.target_environment == 'test' &&
+      needs.poc_prepare_source.outputs.phase == 'registry'
     environment: test-preview
     runs-on: ubuntu-latest
     needs:
@@ -550,7 +554,10 @@ jobs:
 
   test_registry_observation:
     name: Observe TEST Registry Completion
-    if: ${{ needs.preflight.outputs.command == 'up' && needs.preflight.outputs.target_environment == 'test' }}
+    if: >-
+      needs.preflight.outputs.command == 'up' &&
+      needs.preflight.outputs.target_environment == 'test' &&
+      needs.poc_prepare_source.outputs.phase == 'registry'
     environment: test-preview
     runs-on: ubuntu-latest
     needs:
@@ -783,6 +790,7 @@ jobs:
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       REGISTRY_RECEIPT_ID: ${{ needs.test_registry_proof.outputs.receipt_id }}
       PUBLISHER_RUN_ID: ${{ needs.test_registry_dispatch.outputs.publisher_run_id }}
+      POC_PHASE: ${{ needs.poc_prepare_source.outputs.phase }}
     steps:
       - name: Post PR command result
         run: |
@@ -816,7 +824,17 @@ jobs:
               fi
             fi
             echo
-            echo "TEST registry proof and application publisher dispatch only. Image publication success and workload deployment require separate verification."
+            case "${POC_PHASE}" in
+              registry)
+                echo "Registry proof and publisher dispatch do not establish image publication or workload readiness."
+                ;;
+              workload)
+                echo "Workload result requires live application acceptance; registry proof and publisher dispatch are not repeated."
+                ;;
+              *)
+                echo "The PoC phase was not authenticated; no deployment acceptance is claimed."
+                ;;
+            esac
           } > "${body_file}"
 
           pr_number="${{ needs.preflight.outputs.pull_request_number }}"

@@ -29,12 +29,15 @@ the protected generated files are read back with exact content, mode, ownership,
 single-link and path checks. The child uses the generated isolated Python wrapper.
 Neither GitHub authority nor PR-controlled Python is passed to that child.
 
-This is a preview-only workload route. The installed worker sends only
-`test_preview` to the protected workload runner; workload apply and drift stop
-before that runner. The first-workload semantic gate admits the exact topology
-for preview, while replay independently requires a workload result observer.
-No success receipt or gateway descriptor can be issued by this adapter. Complete
-the remaining apply capability and result/secret observation gates before apply.
+The installed worker sends `test_preview` and first-create `test_apply` to the
+protected workload runner. The exact first-workload topology is checked again
+against the saved plan before replay. A successful apply must produce a new,
+stable complete checkpoint with the fixed graph, unchanged registry resources
+and native secret metadata read twice. The backend and requester are rechecked
+before the job reports success. Workload drift and later releases remain closed
+until an authenticated accepted-workload receipt exists. This first-apply result
+is not a success receipt or gateway descriptor; live application acceptance is
+still required.
 
 The workload source uses an internal ALB in its application subnets and only an
 HTTPS listener. A service-owned VPC-link security group is its exclusive ingress
@@ -69,8 +72,9 @@ compares the protected checkpoint graph with the registry baseline and reads
 Secrets Manager `DescribeSecret` twice for every declared runtime secret. It
 requires the same ARN, name, KMS key and sole current version in checkpoint and
 native metadata, with no pending rotation or deletion. It never calls
-`GetSecretValue`. This checker does not authenticate the checkpoint, accepted
-apply or AWS session and cannot issue a deployment receipt or enable apply.
+`GetSecretValue`. On its own this checker does not authenticate the checkpoint or
+AWS session. The installed runner composes it with authenticated private
+checkpoint reads after the first saved-plan apply; it still issues no receipt.
 
 Live prerequisites remain external: installed central runtime/deployment IAM and
 the exact SSM read grant in bootstrap #219; completed registry proof; authenticated

@@ -95,8 +95,8 @@ def _test(port, command, head):
     os.write(2, b"Trusted worker stage: source review\n")
     registry._review(source)
     if contract["phase"] == "workload":
-        require(command == "plan", "workload-apply-not-enabled")
-        os.write(2, b"Trusted worker stage: workload preview\n")
+        require(command in ("plan", "up-plan"), "workload-drift-not-enabled")
+        os.write(2, b"Trusted worker stage: workload saved-plan execution\n")
         return workload.execute(command, **references, transport=port)
     os.write(2, b"Trusted worker stage: registry execution\n")
     return registry.execute(command, **references, transport=port)

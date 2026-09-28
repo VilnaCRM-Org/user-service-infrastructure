@@ -134,30 +134,91 @@ def test_generated_projection_and_wrapper_reach_existing_dispatch(driver, monkey
 
 
 @pytest.mark.parametrize("command", ["plan", "up-plan"])
-def test_preview_semantic_gate_runs_and_apply_still_requires_observer(
+def test_first_saved_plan_gate_runs_and_apply_checks_result(
     driver, monkeypatch, command
 ):
+    observed = []
+    monkeypatch.setattr(
+        module,
+        "_inspect_first_result",
+        lambda source, contract, prior: observed.append((source, contract, prior)),
+    )
     monkeypatch.setattr(
         module.topology, "validate_first_workload_topology", lambda *a, **k: None
     )
     dispatch(driver, monkeypatch)
-    if command == "plan":
-        assert execute(driver, command) == 0
-    else:
-        with pytest.raises(ValueError, match="workload-result-observer-required"):
-            execute(driver, command)
+    assert execute(driver, command) == 0
+    assert len(observed) == (1 if command == "up-plan" else 0)
+    if observed:
+        assert observed[0][2] is driver.capture
     assert driver.transport.environment["PULUMI_PYTHON_CMD"] == "installed-python"
 
 
-def test_replay_still_requires_result_observer_if_topology_gate_later_opens(
-    driver, monkeypatch
-):
+def test_failed_result_observation_stops_first_apply_success(driver, monkeypatch):
+    def reject(*_):
+        raise ValueError("workload-result-invalid")
+
+    monkeypatch.setattr(module, "_inspect_first_result", reject)
     monkeypatch.setattr(
         module.topology, "admit_first_workload_plan", lambda *a, **k: None
     )
     dispatch(driver, monkeypatch)
-    with pytest.raises(ValueError, match="workload-result-observer-required"):
+    with pytest.raises(ValueError, match="workload-result-invalid"):
         execute(driver, "up-plan")
+
+
+def test_first_result_binds_changed_stable_checkpoint_and_secret_readback(
+    driver, monkeypatch
+):
+    final = copy.deepcopy(driver.capture)
+    final.summary["state"]["VersionId"] = "new-version"
+    final.resources = [{"urn": "synthetic-workload"}]
+    reads = iter((final, copy.deepcopy(final)))
+    monkeypatch.setattr(
+        module.registry.backend,
+        "capture_backend",
+        lambda *_a, **_k: next(reads),
+    )
+    observed = []
+    monkeypatch.setattr(
+        module.secret_result,
+        "inspect_first_secret_history",
+        lambda contract, before, after: observed.append((contract, before, after)),
+    )
+    module._inspect_first_result(
+        driver.source, driver.projection.contract, driver.capture
+    )
+    assert observed == [
+        (driver.projection.contract, driver.capture.resources, final.resources)
+    ]
+    assert driver.calls[-2:] == ["review", "actor"]
+
+
+@pytest.mark.parametrize("fault", ["unchanged", "moved", "secret"])
+def test_first_result_rejects_missing_or_unstable_evidence(driver, monkeypatch, fault):
+    final = copy.deepcopy(driver.capture)
+    final.summary["state"]["VersionId"] = "new-version"
+    repeated = copy.deepcopy(final)
+    if fault == "unchanged":
+        final.summary["state"]["VersionId"] = "original"
+    if fault == "moved":
+        repeated.summary["state"]["VersionId"] = "other-version"
+    reads = iter((final, repeated))
+    monkeypatch.setattr(
+        module.registry.backend,
+        "capture_backend",
+        lambda *_a, **_k: next(reads),
+    )
+
+    def secrets(*_):
+        if fault == "secret":
+            raise ValueError("workload-secret-result")
+
+    monkeypatch.setattr(module.secret_result, "inspect_first_secret_history", secrets)
+    with pytest.raises(ValueError, match="workload-"):
+        module._inspect_first_result(
+            driver.source, driver.projection.contract, driver.capture
+        )
 
 
 @pytest.mark.parametrize(

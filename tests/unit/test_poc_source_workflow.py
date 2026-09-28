@@ -197,6 +197,7 @@ def test_upload_matches_same_run_artifact_verifier_protocol():
         "artifact_id": "${{ steps.source_artifact.outputs.artifact-id }}",
         "archive_sha256": "${{ steps.source_artifact.outputs.artifact-digest }}",
         "source_sha256": "${{ steps.prepare.outputs.source_sha256 }}",
+        "phase": "${{ steps.prepare.outputs.phase }}",
     }
 
 

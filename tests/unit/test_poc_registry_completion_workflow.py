@@ -23,6 +23,7 @@ def test_observation_requires_successful_test_apply_and_drift():
     ]
     assert "command == 'up'" in observer["if"]
     assert "target_environment == 'test'" in observer["if"]
+    assert "poc_prepare_source.outputs.phase == 'registry'" in observer["if"]
     assert observer["environment"] == "test-preview"
     assert observer["permissions"] == {
         "contents": "read",
@@ -153,5 +154,8 @@ def test_workload_execution_stays_closed_after_dispatch():
     assert "test_registry_observation" in result["needs"]
     assert "test_registry_proof" in result["needs"]
     assert "test_registry_dispatch" in result["needs"]
-    assert "TEST registry proof" in result["steps"][0]["run"]
-    assert "Image publication success" in result["steps"][0]["run"]
+    assert result["env"]["POC_PHASE"] == "${{ needs.poc_prepare_source.outputs.phase }}"
+    assert (
+        "registry proof and publisher dispatch are not repeated"
+        in result["steps"][0]["run"]
+    )

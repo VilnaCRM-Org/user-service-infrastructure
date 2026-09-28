@@ -833,6 +833,9 @@ def _container_environment(rows, kind, projection):
         "CORS_ALLOW_ORIGIN": "^" + re.escape(url) + "$",
         "MAIL_SENDER": workload["external"]["mail"]["sender"],
         "MAILER_DSN": f"ses+api://default?region={region}",
+        "JWT_ISSUER": "vilnacrm-user-service",
+        "JWT_AUDIENCE": "vilnacrm-api",
+        "AWS_EMF_NAMESPACE": "UserService/BusinessMetrics",
         "SOCIAL_OAUTH_ENABLED": "false",
         "OAUTH_ENCRYPTION_KEY_TYPE": "plain",
         "AWS_SQS_VERSION": "latest",
@@ -849,15 +852,9 @@ def _container_environment(rows, kind, projection):
         )
     else:
         expected["MESSENGER_CONSUMER_NAME"] = f"{registry.PROJECT}-test-worker-consumer"
-    # JWT/EMF values still need authenticated baseline/config binding. Native
-    # queue identity and effective policy also need post-apply observation.
-    unbound = {
-        "JWT_ISSUER",
-        "JWT_AUDIENCE",
-        "AWS_EMF_NAMESPACE",
-    } | set(QUEUE_ENVIRONMENT_NAMES)
+    # Native queue identity and effective policy still need post-apply observation.
     require(
-        set(actual) == set(expected) | unbound
+        set(actual) == set(expected) | set(QUEUE_ENVIRONMENT_NAMES)
         and {key: actual[key] for key in expected} == expected,
         label,
     )

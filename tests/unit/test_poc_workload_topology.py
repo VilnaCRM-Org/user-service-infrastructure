@@ -740,6 +740,9 @@ def test_container_json_is_closed_and_bounded(data, kind, raw):
         ("OAUTH_PRIVATE_KEY", "/tmp/foreign"),
         ("AWS_ACCESS_KEY_ID", "synthetic-credential"),
         ("JWT_ISSUER", gate.registry.UNKNOWN),
+        ("JWT_ISSUER", "foreign-issuer"),
+        ("JWT_AUDIENCE", "foreign-audience"),
+        ("AWS_EMF_NAMESPACE", "Foreign/Metrics"),
         (
             "SEND_EMAIL_TRANSPORT_DSN",
             "https://sqs.eu-central-1.amazonaws.com/123456789012/send-email?region=eu-central-1&auto_setup=false",

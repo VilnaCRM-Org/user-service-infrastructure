@@ -56,6 +56,9 @@ def overlay():
             "00000000-0000-0000-0000-000000000000"
         ),
         "user-service-infrastructure:mailSender": "sender@poc.example",
+        "user-service-infrastructure:jwtIssuer": "vilnacrm-user-service",
+        "user-service-infrastructure:jwtAudience": "vilnacrm-api",
+        "user-service-infrastructure:awsEmfNamespace": "UserService/BusinessMetrics",
         "user-service-infrastructure:healthCheckPath": "/health",
         "user-service-infrastructure:healthCheckQueueName": "health-check-queue",
         "user-service-infrastructure:awsSqsEndpointBase": (
@@ -116,6 +119,18 @@ def test_default_configuration_does_not_add_workload_settings(module, stack):
         lambda values: {
             **values,
             "user-service-infrastructure:appDebug": "x" * 4097,
+        },
+        lambda values: {
+            **values,
+            "user-service-infrastructure:jwtIssuer": "foreign-issuer",
+        },
+        lambda values: {
+            **values,
+            "user-service-infrastructure:jwtAudience": "foreign-audience",
+        },
+        lambda values: {
+            **values,
+            "user-service-infrastructure:awsEmfNamespace": "Foreign/Metrics",
         },
     ],
 )

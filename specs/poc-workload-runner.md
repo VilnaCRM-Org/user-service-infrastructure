@@ -60,6 +60,9 @@ to its fixed queue name, TEST account, region and `auto_setup=false`. These chec
 operate on the saved native plan and preview together; live resource identifiers
 and effective cloud behavior still require the accepted-result observer and manual
 TEST acceptance.
+The generated configuration also fixes the application's JWT issuer/audience and
+metrics namespace to its TEST runtime contract. The protected config overlay and
+native task-definition gate reject changes to those three public values.
 
 The source includes a metadata-only first-create secret-history checker. It
 compares the protected checkpoint graph with the registry baseline and reads

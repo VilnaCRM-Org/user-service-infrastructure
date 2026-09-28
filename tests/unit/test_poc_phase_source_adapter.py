@@ -392,8 +392,9 @@ def test_source_adapter_rejects_invalid_base64_contract_content() -> None:
         )
 
 
+@pytest.mark.parametrize("github_output", [True, False])
 def test_source_adapter_cli_uses_only_fake_trusted_transport(
-    monkeypatch, capsys, tmp_path: Path
+    github_output: bool, monkeypatch, capsys, tmp_path: Path
 ) -> None:
     """The CLI serializes source facts and no deployment or accepted-prior state."""
     monkeypatch.setattr(preflight, "read_request", request)
@@ -401,14 +402,20 @@ def test_source_adapter_cli_uses_only_fake_trusted_transport(
     monkeypatch.setattr(preflight, "collect_evidence", collect)
     monkeypatch.setattr(preflight, "gh", transport())
     output = tmp_path / "github-output"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    if github_output:
+        monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    else:
+        monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
 
     assert adapter.main([]) == 0
 
     result = json.loads(capsys.readouterr().out)
     assert result["kind"] == "poc-phase-source/v1"
     assert "phase" not in result and "prior" not in result
-    assert output.read_text() == "phase=registry\n"
+    if github_output:
+        assert output.read_text() == "phase=registry\n"
+    else:
+        assert not output.exists()
 
 
 def test_source_adapter_cli_redacts_transport_failure(monkeypatch, capsys) -> None:

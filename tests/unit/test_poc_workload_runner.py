@@ -134,15 +134,18 @@ def test_generated_projection_and_wrapper_reach_existing_dispatch(driver, monkey
 
 
 @pytest.mark.parametrize("command", ["plan", "up-plan"])
-def test_real_admission_stop_survives_adapter(driver, monkeypatch, command):
+def test_preview_semantic_gate_runs_and_apply_still_requires_observer(
+    driver, monkeypatch, command
+):
     monkeypatch.setattr(
         module.topology, "validate_first_workload_topology", lambda *a, **k: None
     )
     dispatch(driver, monkeypatch)
-    with pytest.raises(
-        ValueError, match="native-capability-and-input-admission-required"
-    ):
-        execute(driver, command)
+    if command == "plan":
+        assert execute(driver, command) == 0
+    else:
+        with pytest.raises(ValueError, match="workload-result-observer-required"):
+            execute(driver, command)
     assert driver.transport.environment["PULUMI_PYTHON_CMD"] == "installed-python"
 
 

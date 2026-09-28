@@ -962,6 +962,5 @@ def _baseline_steps(preview, prior):
 
 
 def admit_first_workload_plan(*args, **kwargs):
-    """Keep execution closed until native capability and input gates are installed."""
+    """Admit a validated preview; the worker still forbids workload apply."""
     validate_first_workload_topology(*args, **kwargs)
-    raise ValueError("workload-native-capability-and-input-admission-required")

@@ -151,13 +151,10 @@ def data(captured):
     return value
 
 
-def test_exact_composition_topology_matches_and_cannot_authorize_execution(data):
+def test_exact_composition_topology_admits_preview_without_mutating_inputs(data):
     before = copy.deepcopy(data)
     gate.validate_first_workload_topology(**data)
-    with pytest.raises(
-        ValueError, match="native-capability-and-input-admission-required"
-    ):
-        gate.admit_first_workload_plan(**data)
+    gate.admit_first_workload_plan(**data)
     assert data == before
 
 
@@ -625,10 +622,7 @@ def test_unresolved_target_arn_keeps_terminal_admission_closed(data):
     ):
         _set_matching_input(data, name, path, gate.registry.UNKNOWN)
     gate.validate_first_workload_topology(**data)
-    with pytest.raises(
-        ValueError, match="workload-native-capability-and-input-admission-required"
-    ):
-        gate.admit_first_workload_plan(**data)
+    gate.admit_first_workload_plan(**data)
 
 
 def test_coherent_configured_target_port_is_accepted(data):
@@ -854,10 +848,7 @@ def test_first_create_unknown_containers_never_authorize_execution(data):
             gate.registry.UNKNOWN,
         )
     gate.validate_first_workload_topology(**data)
-    with pytest.raises(
-        ValueError, match="workload-native-capability-and-input-admission-required"
-    ):
-        gate.admit_first_workload_plan(**data)
+    gate.admit_first_workload_plan(**data)
 
 
 def test_named_environment_and_secret_order_is_not_semantic(data):
@@ -894,10 +885,7 @@ def test_capacity_form_checks_do_not_invent_baseline_contract_pins(data):
     _set_matching_input(data, "user-service-web-task", ("cpu",), "1024")
     _set_matching_input(data, "user-service-web-task", ("memory",), "2048")
     gate.validate_first_workload_topology(**data)
-    with pytest.raises(
-        ValueError, match="workload-native-capability-and-input-admission-required"
-    ):
-        gate.admit_first_workload_plan(**data)
+    gate.admit_first_workload_plan(**data)
 
 
 def test_native_omitted_component_outputs_require_unchanged_saved_goal(data):

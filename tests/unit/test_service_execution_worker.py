@@ -131,7 +131,7 @@ def test_every_route_preserves_checks_and_exports_only_plan(monkeypatch, tmp_pat
     assert all(target.parent == Path("/public") for _, target in copied)
 
 
-def test_workload_branch_reads_verified_source_and_cannot_fall_through(monkeypatch):
+def test_workload_branch_routes_preview_and_rejects_apply(monkeypatch):
     for key in (
         "POC_SOURCE_ARTIFACT_ID",
         "POC_SOURCE_ARCHIVE_SHA256",
@@ -156,9 +156,16 @@ def test_workload_branch_reads_verified_source_and_cannot_fall_through(monkeypat
         "execute",
         lambda *_a, **_k: pytest.fail("registry execution after workload admission"),
     )
-    with pytest.raises(ValueError, match="workload-execution-not-enabled"):
-        worker._test(None, "plan", "a" * 40)
-    assert calls == ["review"]
+    monkeypatch.setattr(
+        worker.workload,
+        "execute",
+        lambda command, **kwargs: calls.append((command, kwargs["transport"])) or 0,
+    )
+    assert worker._test(None, "plan", "a" * 40) == 0
+    for command in ("up-plan", "drift"):
+        with pytest.raises(ValueError, match="workload-apply-not-enabled"):
+            worker._test(None, command, "a" * 40)
+    assert calls == ["review", ("plan", None), "review", "review"]
     source["source"]["head_sha"] = "c" * 40
     with pytest.raises(ValueError, match="workload-source-binding"):
         worker._test(None, "plan", "a" * 40)

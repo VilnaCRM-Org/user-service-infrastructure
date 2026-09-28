@@ -17,6 +17,7 @@ import contextlib  # noqa: E402
 import tempfile  # noqa: E402
 
 import poc_registry_runner as registry  # noqa: E402
+import poc_workload_runner as workload  # noqa: E402
 from service_execution_process import require  # noqa: E402
 from service_execution_transport import ServiceTransport, copy_tree  # noqa: E402
 
@@ -94,7 +95,9 @@ def _test(port, command, head):
     os.write(2, b"Trusted worker stage: source review\n")
     registry._review(source)
     if contract["phase"] == "workload":
-        raise ValueError("workload-execution-not-enabled")
+        require(command == "plan", "workload-apply-not-enabled")
+        os.write(2, b"Trusted worker stage: workload preview\n")
+        return workload.execute(command, **references, transport=port)
     os.write(2, b"Trusted worker stage: registry execution\n")
     return registry.execute(command, **references, transport=port)
 

@@ -30,24 +30,23 @@ exact Pulumi unknown sentinel. The topology check permits that sentinel only in
 the new resource with mandatory `secretString` secret-output marking. Known values
 require Pulumi secret wrappers. The no-change/prior-state validator is unchanged.
 
-## Execution remains closed
+## Preview-only admission
 
-`admit_first_workload_plan` always rejects after a successful topology check with
-`workload-native-capability-and-input-admission-required`. There is no capability
-boolean, caller assertion or synthetic receipt that bypasses this stop. The
-existing worker stops also remain unchanged.
+`admit_first_workload_plan` accepts the exact validated TEST first-create preview.
+The installed worker routes only `test_preview` to the workload runner. It rejects
+workload `up-plan` and drift before invoking the runner; the runner independently
+requires a result observer before apply. Preview admission is not apply authority.
 
-The unconnected helper implements bounded native role/boundary, execution-role
-ECR simulation and certificate prerequisites described in
-[workload admission](poc-workload-admission.md). The installed worker rejects
-workloads before invoking this helper.
-They do not satisfy the complete capability/input or saved-plan replay gate here.
+The preview observation path implements bounded native role/boundary,
+execution-role ECR simulation and certificate prerequisites described in
+[workload admission](poc-workload-admission.md). Apply stops before this path.
+They do not satisfy the complete apply capability/input or accepted-result gate.
 
 Topology does not establish all workload input semantics, generated unknown
 values, installed runtime/deployer IAM intersection, current native resources,
 artifact provenance, authenticated prior/result receipts or cloud health. Those
 gates and same-run source/checkpoint replay binding must be implemented and
-independently verified before replacing this stop. No successful check here is a
+independently verified before enabling apply. No successful check here is a
 deployment or workload acceptance receipt.
 
 Tests run the actual installed registry/workload composition and Pulumi v3.223.0

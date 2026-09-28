@@ -29,12 +29,12 @@ the protected generated files are read back with exact content, mode, ownership,
 single-link and path checks. The child uses the generated isolated Python wrapper.
 Neither GitHub authority nor PR-controlled Python is passed to that child.
 
-This is not an enabled deployment route. The installed worker's workload stop
-remains intact, the first-workload semantic gate still rejects every plan, replay
-additionally requires a workload result observer, and drift rejects without an
-authenticated accepted-workload receipt. No success receipt or gateway descriptor
-can be issued by this adapter. Complete the remaining resource-input validation,
-result/secret observation and phase-aware workflow/drift routes before enabling it.
+This is a preview-only workload route. The installed worker sends only
+`test_preview` to the protected workload runner; workload apply and drift stop
+before that runner. The first-workload semantic gate admits the exact topology
+for preview, while replay independently requires a workload result observer.
+No success receipt or gateway descriptor can be issued by this adapter. Complete
+the remaining apply capability and result/secret observation gates before apply.
 
 The workload source uses an internal ALB in its application subnets and only an
 HTTPS listener. A service-owned VPC-link security group is its exclusive ingress

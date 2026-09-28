@@ -1,11 +1,11 @@
 # Candidate workload prerequisite checks
 
 The TEST registry plan/apply/drift route is admitted after authenticated source,
-requester and review checks; workload execution remains closed. Its trusted
-service worker distinguishes the phase in the authenticated fixed PoC source
-contract and rejects workload requests with `workload-execution-not-enabled`
-before any workload checks or Pulumi program. The prerequisite helpers below
-remain candidate code for a future separately validated integration. The TEST
+requester and review checks. The trusted service worker distinguishes the phase
+in the authenticated fixed PoC source contract: it routes workload previews
+through the protected runner and rejects workload apply and drift before invoking
+that runner. The prerequisite helpers below remain candidate code for a future
+separately validated apply integration. The TEST
 registry completion jobs are connected in reviewed source but await installation
 and live acceptance. PROD remains absent; scheduled drift retains the installed-main path.
 
@@ -44,9 +44,8 @@ declared byte size and SHA-256, then its native `os` and `architecture` are comp
 with the reviewed `linux/amd64` or `linux/arm64` release platform. Only platform,
 config digest and size join the image projection. Image environment, labels,
 history and other configuration never enter the projection or diagnostic errors.
-The bounded role/input prerequisite reader below runs only when the candidate
-helper is invoked directly. The installed worker stops before invoking it.
-Full installed runtime capability admission remains required before constructing
+The preview-only worker invokes the bounded role/input prerequisite reader.
+Full installed runtime capability admission remains required before applying
 workload settings.
 The observer supports at most 100 layers and deliberately accepts only compressed
 Docker gzip or OCI gzip/zstd layers. A different valid image shape requires a
@@ -102,8 +101,8 @@ permission denial fails closed and is not evidence of an empty registry.
 
 ## Remaining enabling work
 
-The unconnected helper calls `poc_workload_capabilities.inspect_capabilities`;
-the installed worker rejects workloads before reaching this helper.
+The preview path calls `poc_workload_capabilities.inspect_capabilities`;
+the installed worker rejects workload apply before reaching this helper.
 It requires the fixed central TEST execution/task role ARNs, native names, root
 paths, IAM role IDs, and exact independently enrolled `issue219/test/boundary/`
 policy ARNs. Execution trust must match the existing central ECS task service
@@ -129,10 +128,10 @@ and endpoints, with bounded output, no ambient profiles, credentials files or
 endpoint overrides. Access denial fails closed. Offline tests use synthetic native
 responses; no AWS validation or successful workload receipt is claimed.
 
-Successful direct helper reads currently end with
-`workload-native-image-capability-and-plan-gates-required`. No plan artifact is
-published and no workload is registered or applied. This is an intentional
-execution boundary, not an acceptance result.
+The older `inspect_workload` helper still ends with
+`workload-native-image-capability-and-plan-gates-required`. The protected runner
+uses `observe_workload` and the first-topology gate for previews only. No workload
+apply is admitted; a successful preview is not an acceptance result.
 
 Before enabling the full graph, establish actual runtime pulls, authenticated seed
 inventory/revision and immutable guard/policy installation, full task and deployer

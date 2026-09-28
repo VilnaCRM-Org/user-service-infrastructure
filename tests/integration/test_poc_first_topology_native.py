@@ -228,7 +228,4 @@ def _run_native(tmp_path, addresses, certificate_source):
         "projection": projection,
     }
     gate.validate_first_workload_topology(preview, **arguments)
-    with pytest.raises(
-        ValueError, match="native-capability-and-input-admission-required"
-    ):
-        gate.admit_first_workload_plan(preview, **arguments)
+    gate.admit_first_workload_plan(preview, **arguments)

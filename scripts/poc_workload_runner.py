@@ -1,9 +1,9 @@
-"""Sealed first-workload plan/replay adapter, not an enabled worker route.
+"""Sealed first-workload preview adapter; apply and drift remain disabled.
 
 Authenticated registry, release, image and native prerequisite observations feed
-only the installed generated program. The incomplete first-workload input gate
-still rejects every plan. Apply additionally requires a result observer; drift
-requires an authenticated accepted-workload receipt. Neither exists yet.
+only the installed generated program. The exact first-workload topology admits
+preview; apply additionally requires a result observer and remains blocked by
+the worker. Drift requires an authenticated accepted-workload receipt.
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ def _gate(source, contract, authority, command, projection, initial):
             "workload-plan-bytes-changed",
         )
         registry.preflight.revalidate_requester(source["request"])
-        # Removing the topology stop alone must never enable unobserved applies.
+        # Preview admission must never enable unobserved applies.
         require(command == "plan", "workload-result-observer-required")
 
     return validate

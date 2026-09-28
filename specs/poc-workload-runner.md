@@ -40,6 +40,13 @@ The workload source uses an internal ALB in its application subnets and only an
 HTTPS listener. A service-owned VPC-link security group is its exclusive ingress
 source. The generated application trusted-proxy CIDRs match these ALB subnets.
 The legacy template path remains separate from this fixed workload projection.
+The first-workload native plan gate now checks the private ALB flag, single
+security-group HTTPS ingress, VPC-link egress limited to the admitted application
+subnet CIDRs, issued-certificate listener input, and private noninteractive
+Fargate service settings with circuit-breaker rollback. First-create physical
+IDs are unresolved in the plan; the accepted-result observer must still bind
+their actual subnet, listener and security-group relationships before issuing
+any workload receipt or gateway descriptor.
 
 Live prerequisites remain external: installed central runtime/deployment IAM and
 the exact SSM read grant in bootstrap #219; completed registry proof; authenticated

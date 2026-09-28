@@ -53,6 +53,11 @@ def data(captured):
             continue
         row = rows.get(urn, {})
         inputs = copy.deepcopy(row.get("inputs", {}))
+        if kind == "aws:ecs/service:Service":
+            # SDK MockMonitor encodes numeric inputs as floats; native Pulumi
+            # saved plans retain desiredCount as an integer.
+            assert inputs["desiredCount"] == 2.0
+            inputs["desiredCount"] = 2
         if "secretString" in inputs:
             inputs["secretString"] = {
                 gate.unchanged.PULUMI_MARKER_SIGNATURE: (
@@ -177,6 +182,111 @@ def test_matching_plan_and_preview_cannot_change_task_execution_inputs(
         else:
             target[field] = copy.deepcopy(value)
     with pytest.raises(ValueError, match="workload-task-execution-inputs"):
+        gate.validate_first_workload_topology(**data)
+
+
+@pytest.mark.parametrize(
+    "name,path,value,error",
+    [
+        ("user-service-alb", ("internal",), False, "private-alb-inputs"),
+        (
+            "user-service-alb-sg",
+            ("ingress", 0, "cidrBlocks"),
+            ["0.0.0.0/0"],
+            "private-alb-ingress",
+        ),
+        (
+            "user-service-alb-sg",
+            ("ingress", 0, "unexpectedRule"),
+            True,
+            "private-alb-ingress",
+        ),
+        (
+            "user-service-vpc-link-sg",
+            ("ingress",),
+            [{"protocol": "tcp", "fromPort": 443, "toPort": 443}],
+            "vpc-link-group-inputs",
+        ),
+        (
+            "user-service-vpc-link-sg",
+            ("egress", 0, "cidrBlocks"),
+            ["0.0.0.0/0"],
+            "vpc-link-group-inputs",
+        ),
+        (
+            "user-service-https-listener",
+            ("protocol",),
+            "HTTP",
+            "https-listener-inputs",
+        ),
+        (
+            "user-service-https-listener",
+            ("certificateArn",),
+            "arn:aws:acm:eu-central-1:891377212104:certificate/foreign",
+            "https-listener-inputs",
+        ),
+        (
+            "user-service-web-service",
+            ("networkConfiguration", "assignPublicIp"),
+            True,
+            "private-fargate-service-inputs",
+        ),
+        (
+            "user-service-worker-service",
+            ("enableExecuteCommand",),
+            True,
+            "private-fargate-service-inputs",
+        ),
+        (
+            "user-service-web-service",
+            ("deploymentCircuitBreaker", "rollback"),
+            False,
+            "private-fargate-service-inputs",
+        ),
+        (
+            "user-service-web-service",
+            ("deploymentCircuitBreaker", "rollback"),
+            1,
+            "private-fargate-service-inputs",
+        ),
+        (
+            "user-service-worker-service",
+            ("desiredCount",),
+            0,
+            "private-fargate-service-inputs",
+        ),
+        (
+            "user-service-worker-service",
+            ("desiredCount",),
+            True,
+            "private-fargate-service-inputs",
+        ),
+        (
+            "user-service-web-service",
+            ("launchType",),
+            "EC2",
+            "private-fargate-service-inputs",
+        ),
+    ],
+)
+def test_matching_plan_and_preview_cannot_expose_private_workload(
+    data, name, path, value, error
+):
+    urn = next(
+        urn for urn in data["saved_plan"]["resourcePlans"] if urn.endswith(f"::{name}")
+    )
+    goal = data["saved_plan"]["resourcePlans"][urn]["goal"]["inputDiff"]["adds"]
+    preview = next(
+        step["newState"]["inputs"]
+        for step in data["preview"]["steps"]
+        if step["urn"] == urn
+    )
+    for inputs in (goal, preview):
+        current = inputs
+        for key in path[:-1]:
+            current = current[key]
+        current[path[-1]] = copy.deepcopy(value)
+    with pytest.raises(ValueError, match=error):
         gate.validate_first_workload_topology(**data)
 
 

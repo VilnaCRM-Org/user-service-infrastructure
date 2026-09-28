@@ -12,7 +12,7 @@ import poc_registry_plan as registry
 import poc_workload_reconciliation as unchanged
 from poc_registry_phase_entrypoint import RegistryPhaseProjection
 from poc_workload_aliases import state_aliases, structured_aliases
-from poc_workload_phase_entrypoint import _checked
+from poc_workload_phase_entrypoint import _checked, workload_certificate_arn
 from service_execution_process import require
 
 SECRET_VERSION_OUTPUTS = [
@@ -21,6 +21,19 @@ SECRET_VERSION_OUTPUTS = [
     "secretString",
     "secretStringWo",
 ]
+ALLOWED_HTTPS_RULE_FIELDS = frozenset(
+    {
+        "protocol",
+        "fromPort",
+        "toPort",
+        "securityGroups",
+        "cidrBlocks",
+        "ipv6CidrBlocks",
+        "prefixListIds",
+        "self",
+        "description",
+    }
+)
 
 
 def _sdk_aliases(kind):
@@ -285,6 +298,8 @@ def validate_first_workload_topology(
     for row in desired.values():
         references = {key: value for key, value in row.items() if key != "provider"}
         unchanged._references(references, desired)
+    _private_gateway_inputs(desired, projection)
+    _fargate_service_inputs(desired)
     seen = _validate_workload_steps(preview["steps"], baseline, graph, desired)
     required = {
         urn
@@ -292,6 +307,125 @@ def validate_first_workload_topology(
         if not graph[urn][0].startswith("pulumi:providers:")
     }
     _check(required <= seen)
+
+
+def _inputs(desired, name):
+    rows = [row for urn, row in desired.items() if urn.rsplit("::", 1)[-1] == name]
+    _check(len(rows) == 1 and type(rows[0].get("inputs")) is dict)
+    return rows[0]["inputs"]
+
+
+def _private_gateway_inputs(desired, projection):
+    """Reject public ingress and cleartext listeners in the saved native plan.
+
+    First-create physical IDs can still be unknown. The accepted-result observer
+    must later bind the actual ALB, listener and security-group relationships.
+    """
+    _private_alb(_inputs(desired, "user-service-alb"))
+    _alb_ingress(_inputs(desired, "user-service-alb-sg"))
+    cidrs = projection.contract["workload"]["runtime"]["trusted_proxy_cidrs"]
+    _vpc_link_group(_inputs(desired, "user-service-vpc-link-sg"), cidrs)
+    _https_listener(_inputs(desired, "user-service-https-listener"), projection)
+
+
+def _private_alb(alb):
+    label = "workload-private-alb-inputs"
+    require(
+        alb.get("internal") is True
+        and alb.get("loadBalancerType") == "application"
+        and alb.get("dropInvalidHeaderFields") is True,
+        label,
+    )
+    for field, count in (("subnets", 2), ("securityGroups", 1)):
+        values = alb.get(field)
+        require(type(values) is list and len(values) == count, label)
+
+
+def _https_rule(rule, label):
+    require(type(rule) is dict and set(rule) <= ALLOWED_HTTPS_RULE_FIELDS, label)
+    require(
+        rule.get("protocol") == "tcp"
+        and rule.get("fromPort") == 443
+        and rule.get("toPort") == 443
+        and rule.get("self", False) is False,
+        label,
+    )
+
+
+def _alb_ingress(alb_group):
+    label = "workload-private-alb-ingress"
+    rules = alb_group.get("ingress")
+    require(type(rules) is list and len(rules) == 1, label)
+    rule = rules[0]
+    _https_rule(rule, label)
+    require(
+        type(rule.get("securityGroups")) is list
+        and len(rule["securityGroups"]) == 1
+        and all(
+            rule.get(field, []) == []
+            for field in ("cidrBlocks", "ipv6CidrBlocks", "prefixListIds")
+        ),
+        label,
+    )
+
+
+def _vpc_link_group(link_group, expected_cidrs):
+    label = "workload-vpc-link-group-inputs"
+    require(link_group.get("ingress") == [], label)
+    egress = link_group.get("egress")
+    require(type(egress) is list and len(egress) == 1, label)
+    rule = egress[0]
+    _https_rule(rule, label)
+    require(
+        rule.get("cidrBlocks") == expected_cidrs
+        and all(
+            rule.get(field, []) == []
+            for field in ("ipv6CidrBlocks", "prefixListIds", "securityGroups")
+        ),
+        label,
+    )
+
+
+def _https_listener(listener, projection):
+    require(
+        listener.get("protocol") == "HTTPS"
+        and listener.get("port") == 443
+        and listener.get("certificateArn") == workload_certificate_arn(projection),
+        "workload-https-listener-inputs",
+    )
+
+
+def _fargate_service_inputs(desired):
+    """Require private, noninteractive Fargate services with rollback enabled."""
+    for kind in ("web", "worker"):
+        inputs = _inputs(desired, f"user-service-{kind}-service")
+        require(
+            inputs.get("launchType") == "FARGATE"
+            and type(inputs.get("desiredCount")) is int
+            and inputs["desiredCount"] > 0
+            and inputs.get("enableExecuteCommand") is False,
+            "workload-private-fargate-service-inputs",
+        )
+        _fargate_breaker(inputs.get("deploymentCircuitBreaker"))
+        _fargate_network(inputs.get("networkConfiguration"))
+
+
+def _fargate_breaker(breaker):
+    require(
+        type(breaker) is dict
+        and set(breaker) == {"enable", "rollback"}
+        and breaker["enable"] is True
+        and breaker["rollback"] is True,
+        "workload-private-fargate-service-inputs",
+    )
+
+
+def _fargate_network(network):
+    label = "workload-private-fargate-service-inputs"
+    require(type(network) is dict and network.get("assignPublicIp") is False, label)
+    for field, count in (("securityGroups", 1), ("subnets", 2)):
+        values = network.get(field)
+        require(type(values) is list and len(values) == count, label)
 
 
 def _task_execution_inputs(resource, projection):

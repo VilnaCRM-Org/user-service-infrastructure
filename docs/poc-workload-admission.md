@@ -78,20 +78,22 @@ are `poc-release-manifest-{run}-1` (`release-manifest.json`),
 `poc-quality-evidence-{run}-1` (`quality.json`),
 `poc-build-provenance-{run}-1` (`provenance.json`), and
 `poc-image-build-{run}-1`. The release uses the existing `poc-release-v1` fields.
-Publisher source and installation must implement this protocol before any real
-evidence can pass; these source checks do not establish that it is installed.
+The publisher workflow is on application `main` at `a95c1e854bf21770b7fc630611a8257b0f9c600b`;
+these source checks do not establish a successful TEST publication.
 
 ## Trusted inputs
 
-Future integration would need the three TEST execution jobs to pass protected
+Workload integration needs the three TEST execution jobs to pass protected
 `GOVERNANCE_PROMOTION_APP_ID` and `GOVERNANCE_PROMOTION_APP_SLUG` variables, plus
 explicit `POC_REGISTRY_WORKFLOW_SHA` and `POC_PUBLISHER_WORKFLOW_SHA` revision pins.
 The latter pins must be set to reviewed installed workflow revisions. No value
 is inferred from a receipt, PR, dispatch input or current application branch.
-Missing values reject the candidate helper's workload observation. The installed
-TEST jobs do not forward these inputs, and the host allowlist omits all four.
-Neither the root worker nor the UID 2000 program currently receives them; GitHub
-credentials remain outside the program environment.
+Missing values reject the candidate helper's workload observation. In this PR's
+workflow source, the three TEST execution jobs pass these values through the
+fixed host allowlist to the isolated root worker. The candidate worker still
+rejects workload requests before invoking that helper. The UID 2000 program
+does not receive these authority values or GitHub credentials. This source is
+not installed on `main` yet.
 
 The read adapter uses fixed `/usr/bin/gh`, `api.github.com`, a root-private HOME,
 a closed GitHub environment and the existing bounded process runner. Native
@@ -197,18 +199,17 @@ the helper never retries an uncertain POST. Inspect the native run before any
 operator retry. Reruns of the service workflow remain rejected by attempt-one
 admission.
 
-Enabling prerequisites remain external: install the reviewed publisher on
-application `main`; set `POC_PUBLISHER_WORKFLOW_SHA` to that installed main commit;
-and grant/accept Actions write for the existing App installation with access to
-`user-service`. App permissions currently advertise Actions read, and
-application main lacks the publisher workflow. Installation selection could
-not be verified with the available organization API access. Token creation fails
-if the installation has not accepted the permission or lacks repository access.
-The application main review rules must also be installed: current API inspection
-finds no effective main branch ruleset. The `poc-test-images` environment already
-exists with Kravalg as its independent reviewer.
+The reviewed publisher is now on application `main`, and
+`POC_PUBLISHER_WORKFLOW_SHA` is pinned to that commit in the service repository.
+The application `main` branch has an active repository PR review ruleset, and
+`poc-test-images` exists with Kravalg as its independent reviewer. The remaining
+App prerequisite is to grant and accept Actions write for the existing App
+installation with access to `user-service`. Its advertised permission is still
+Actions read, and installation selection could not be verified with the
+available organization API access. Token creation fails if the installation
+has not accepted the permission or lacks repository access.
 The runtime must be able to
 read the effective rules, ruleset and environment through its existing read
 token; API denial remains a blocking prerequisite rather than an admission bypass.
-The dispatcher therefore remains fail-closed with the current configuration.
-No App setting, workflow pin or AWS permission is changed by this source patch.
+The dispatcher therefore remains fail-closed with the current App configuration.
+This source patch changes no App setting or AWS permission.

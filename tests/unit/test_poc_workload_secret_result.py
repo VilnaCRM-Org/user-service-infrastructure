@@ -245,3 +245,84 @@ def test_metadata_cli_uses_only_describe_secret_in_isolated_session(monkeypatch)
     assert options["env"]["AWS_SHARED_CREDENTIALS_FILE"] == "/dev/null"
     assert options["env"]["AWS_SESSION_TOKEN"] == "synthetic-session-token"
     assert "get-secret-value" not in command
+
+
+def retained(data, *, before=None, after=None, previous=None, native=None):
+    contract, _, first_after, _, details = data
+    before = copy.deepcopy(first_after) if before is None else before
+    after = copy.deepcopy(first_after) if after is None else after
+    previous = observe(data) if previous is None else previous
+    native = details if native is None else native
+    return module.inspect_retained_secret_history(
+        contract,
+        before,
+        after,
+        previous,
+        native=native if callable(native) else lambda name: copy.deepcopy(native[name]),
+    )
+
+
+def test_release_and_rollback_keep_secret_versions_with_other_workload_changes(data):
+    before = copy.deepcopy(data[2])
+    after = copy.deepcopy(before)
+    task = next(row for row in after if row["urn"].endswith("::user-service-web-task"))
+    task["inputs"]["containerDefinitions"] = "synthetic-next-image"
+    secret = next(row for row in after if row["urn"].endswith("::runtime-app_secret"))
+    secret["modified"] = "2026-09-28T12:00:00Z"
+    previous = observe(data)
+    calls = []
+
+    def read(name):
+        calls.append(name)
+        return copy.deepcopy(data[-1][name])
+
+    assert (
+        retained(data, before=before, after=after, previous=previous, native=read)
+        == previous
+    )
+    names = [
+        declaration["name"]
+        for declaration in data[0]["workload"]["secret_lifecycle"][
+            "references"
+        ].values()
+    ]
+    assert calls == names + names
+
+
+@pytest.mark.parametrize("fault", ["version", "replacement", "missing", "plaintext"])
+def test_release_secret_change_or_partial_checkpoint_rejects(data, fault):
+    before = copy.deepcopy(data[2])
+    after = copy.deepcopy(before)
+    rows = {row["urn"].rsplit("::", 1)[-1]: row for row in after}
+    if fault == "version":
+        rows["runtime-app_secret-version"]["outputs"]["versionId"] = "f" * 32
+    elif fault == "replacement":
+        rows["runtime-app_secret"]["id"] += "-new"
+    elif fault == "missing":
+        after.remove(rows["runtime-app_secret-version"])
+    else:
+        rows["runtime-app_secret-version"]["outputs"]["secretString"] = "plaintext"
+    with pytest.raises(ValueError):
+        retained(data, before=before, after=after)
+
+
+def test_release_rejects_untrusted_previous_version_and_moving_native_secret(data):
+    previous = copy.deepcopy(observe(data))
+    previous["app_secret"]["version_id"] = "f" * 32
+    with pytest.raises(ValueError):
+        retained(data, previous=previous)
+
+    native = data[-1]
+    name = next(iter(native))
+    calls = 0
+
+    def moving(candidate):
+        nonlocal calls
+        calls += 1
+        result = copy.deepcopy(native[candidate])
+        if candidate == name and calls > len(native):
+            result["VersionIdsToStages"] = {"f" * 32: ["AWSCURRENT"]}
+        return result
+
+    with pytest.raises(ValueError):
+        retained(data, native=moving)

@@ -21,6 +21,40 @@ def captured(tmp_path_factory):
     return value["registrations"]
 
 
+def _native_numbers(kind, inputs):
+    """Restore integer JSON shapes lost by the SDK MockMonitor wire format."""
+    if kind == "aws:ecs/service:Service":
+        # SDK MockMonitor encodes numeric inputs as floats; native Pulumi
+        # saved plans retain desiredCount as an integer.
+        assert inputs["desiredCount"] == 2.0
+        inputs["desiredCount"] = 2
+        for target in inputs.get("loadBalancers", []):
+            target["containerPort"] = int(target["containerPort"])
+    if kind == "aws:lb/targetGroup:TargetGroup":
+        for field in ("port", "deregistrationDelay"):
+            inputs[field] = int(inputs[field])
+        for field in (
+            "healthyThreshold",
+            "unhealthyThreshold",
+            "interval",
+            "timeout",
+        ):
+            inputs["healthCheck"][field] = int(inputs["healthCheck"][field])
+    for field in {
+        "aws:docdb/cluster:Cluster": ("backupRetentionPeriod",),
+        "aws:elasticache/replicationGroup:ReplicationGroup": (
+            "snapshotRetentionLimit",
+        ),
+        "aws:sqs/queue:Queue": (
+            "receiveWaitTimeSeconds",
+            "visibilityTimeoutSeconds",
+        ),
+    }.get(kind, ()):
+        # The native saved-plan JSON keeps these integer settings.
+        assert type(inputs[field]) is float and inputs[field].is_integer()
+        inputs[field] = int(inputs[field])
+
+
 @pytest.fixture
 def data(captured):
     value = case("repeat")
@@ -53,24 +87,7 @@ def data(captured):
             continue
         row = rows.get(urn, {})
         inputs = copy.deepcopy(row.get("inputs", {}))
-        if kind == "aws:ecs/service:Service":
-            # SDK MockMonitor encodes numeric inputs as floats; native Pulumi
-            # saved plans retain desiredCount as an integer.
-            assert inputs["desiredCount"] == 2.0
-            inputs["desiredCount"] = 2
-        for field in {
-            "aws:docdb/cluster:Cluster": ("backupRetentionPeriod",),
-            "aws:elasticache/replicationGroup:ReplicationGroup": (
-                "snapshotRetentionLimit",
-            ),
-            "aws:sqs/queue:Queue": (
-                "receiveWaitTimeSeconds",
-                "visibilityTimeoutSeconds",
-            ),
-        }.get(kind, ()):
-            # The native saved-plan JSON keeps these integer settings.
-            assert type(inputs[field]) is float and inputs[field].is_integer()
-            inputs[field] = int(inputs[field])
+        _native_numbers(kind, inputs)
         if "secretString" in inputs:
             inputs["secretString"] = {
                 gate.unchanged.PULUMI_MARKER_SIGNATURE: (
@@ -141,6 +158,7 @@ def test_exact_composition_topology_matches_and_cannot_authorize_execution(data)
         ("user-service-alb-sg", "user-service-vpc-link-sg"),
         ("user-service-vpc-link-sg", "user-service-vpc"),
         ("user-service-https-listener", "user-service-alb"),
+        ("user-service-target-group", "user-service-vpc"),
         ("user-service-web-service", "user-service-web-task"),
         ("user-service-web-service", "user-service-https-listener"),
         ("user-service-worker-service", "user-service-worker-task"),
@@ -486,6 +504,117 @@ def test_explicit_private_data_subnet_flag_is_accepted(data):
     ] = False
     step = next(row for row in data["preview"]["steps"] if row["urn"] == urn)
     step["newState"]["inputs"]["mapPublicIpOnLaunch"] = False
+    gate.validate_first_workload_topology(**data)
+
+
+def _set_matching_input(data, name, path, value):
+    """Change saved and preview inputs together to exercise semantic admission."""
+    urn = next(
+        urn for urn in data["saved_plan"]["resourcePlans"] if urn.endswith(f"::{name}")
+    )
+    goal = data["saved_plan"]["resourcePlans"][urn]["goal"]["inputDiff"]["adds"]
+    preview = next(
+        step["newState"]["inputs"]
+        for step in data["preview"]["steps"]
+        if step["urn"] == urn
+    )
+    for inputs in (goal, preview):
+        current = inputs
+        for key in path[:-1]:
+            current = current[key]
+        current[path[-1]] = copy.deepcopy(value)
+
+
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        (("sslPolicy",), "ELBSecurityPolicy-2016-08"),
+        (("sslPolicy",), gate.registry.UNKNOWN),
+        (("defaultActions",), []),
+        (("defaultActions",), gate.registry.UNKNOWN),
+        (("defaultActions",), [None]),
+        (("defaultActions",), [{"type": "forward"}]),
+        (("defaultActions", 0, "type"), "redirect"),
+        (("defaultActions", 0, "targetGroupArn"), ""),
+        (("defaultActions", 0, "targetGroupArn"), None),
+        (("defaultActions", 0, "redirect"), {"statusCode": "HTTP_302"}),
+    ],
+)
+def test_matching_plan_and_preview_cannot_change_https_routing(data, path, value):
+    _set_matching_input(data, "user-service-https-listener", path, value)
+    with pytest.raises(ValueError, match="workload-https-listener"):
+        gate.validate_first_workload_topology(**data)
+
+
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        (("protocol",), "HTTPS"),
+        (("targetType",), "instance"),
+        (("port",), True),
+        (("port",), 0),
+        (("port",), 65536),
+        (("port",), gate.registry.UNKNOWN),
+        (("deregistrationDelay",), 0),
+        (("healthCheck",), gate.registry.UNKNOWN),
+        (("healthCheck", "enabled"), False),
+        (("healthCheck", "enabled"), 1),
+        (("healthCheck", "path"), "/"),
+        (("healthCheck", "protocol"), "HTTPS"),
+        (("healthCheck", "matcher"), "200-499"),
+        (("healthCheck", "healthyThreshold"), True),
+        (("healthCheck", "unhealthyThreshold"), 10),
+        (("healthCheck", "interval"), 300),
+        (("healthCheck", "timeout"), 60),
+        (("healthCheck", "port"), "443"),
+    ],
+)
+def test_matching_plan_and_preview_cannot_change_web_target(data, path, value):
+    _set_matching_input(data, "user-service-target-group", path, value)
+    with pytest.raises(ValueError, match="workload-web-target"):
+        gate.validate_first_workload_topology(**data)
+
+
+@pytest.mark.parametrize(
+    "name,path,value",
+    [
+        ("web", ("loadBalancers",), []),
+        ("web", ("loadBalancers",), gate.registry.UNKNOWN),
+        ("web", ("loadBalancers", 0, "containerName"), "user-service-worker"),
+        ("web", ("loadBalancers", 0, "containerPort"), 8080),
+        ("web", ("loadBalancers", 0, "containerPort"), True),
+        ("web", ("loadBalancers", 0, "targetGroupArn"), "foreign"),
+        ("web", ("loadBalancers", 0, "elbName"), "foreign"),
+        ("worker", ("loadBalancers",), [{"containerName": "user-service-worker"}]),
+        ("worker", ("loadBalancers",), None),
+    ],
+)
+def test_matching_plan_and_preview_cannot_rewire_web_service(data, name, path, value):
+    _set_matching_input(data, f"user-service-{name}-service", path, value)
+    with pytest.raises(ValueError, match="workload-web-service-target"):
+        gate.validate_first_workload_topology(**data)
+
+
+def test_unresolved_target_arn_keeps_terminal_admission_closed(data):
+    for name, path in (
+        ("user-service-https-listener", ("defaultActions", 0, "targetGroupArn")),
+        ("user-service-web-service", ("loadBalancers", 0, "targetGroupArn")),
+    ):
+        _set_matching_input(data, name, path, gate.registry.UNKNOWN)
+    gate.validate_first_workload_topology(**data)
+    with pytest.raises(
+        ValueError, match="workload-native-capability-and-input-admission-required"
+    ):
+        gate.admit_first_workload_plan(**data)
+
+
+def test_coherent_configured_target_port_is_accepted(data):
+    # Container port is baseline configuration, not a fixed contract literal.
+    _set_matching_input(data, "user-service-target-group", ("port",), 8080)
+    _set_matching_input(
+        data, "user-service-web-service", ("loadBalancers", 0, "containerPort"), 8080
+    )
+    _set_matching_input(data, "user-service-worker-service", ("loadBalancers",), [])
     gate.validate_first_workload_topology(**data)
 
 

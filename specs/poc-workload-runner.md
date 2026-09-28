@@ -71,3 +71,11 @@ the exact SSM read grant in bootstrap #219; completed registry proof; authentica
 immutable image publication; gateway-owned issued ACM certificate and its SSM
 publication; verified SES prerequisites. Gateway route deployment follows the
 [authenticated backend descriptor contract](poc-api-gateway-backend.md).
+
+The metadata-only release/rollback secret checker accepts two complete workload
+checkpoints and a prior secret observation supplied by a future authenticated
+receipt. It requires every secret and secret-version state row to remain unchanged
+apart from observation timestamps, then reads native secret descriptions twice
+and requires the current version, ARN and KMS key to match that prior observation.
+It never reads secret values. Neither this checker nor its caller yet authenticates
+an accepted workload receipt or enables a release/rollback apply.

@@ -197,3 +197,69 @@ def inspect_first_secret_history(
     _check(first == second)
     secret_history.validate_secret_observation(contract, second)
     return second
+
+
+def _workload_rows(resources):
+    """Require a complete, fixed workload checkpoint before comparing versions."""
+    inventory = state._inventory(resources)
+    graph = topology.expected_graph()
+    _check(inventory.keys() == graph.keys())
+    for urn, row in inventory.items():
+        _check(
+            state._same(
+                (
+                    row["type"],
+                    row.get("parent", ""),
+                    row["custom"],
+                    row.get("protect", False),
+                ),
+                graph[urn],
+            )
+        )
+    rows = {urn.rsplit("::", 1)[-1]: row for urn, row in inventory.items()}
+    _check(len(rows) == len(inventory))
+    return rows
+
+
+def _stable_row(before, after):
+    """Ignore observation timestamps, not resource identity or secret metadata."""
+    fields = state.OBSERVATION_FIELDS
+    _check(
+        state._same(
+            {key: value for key, value in before.items() if key not in fields},
+            {key: value for key, value in after.items() if key not in fields},
+        )
+    )
+
+
+def inspect_retained_secret_history(
+    contract, before_resources, after_resources, previous, *, native=None
+):
+    """Reject secret replacement or rotation across release and rollback.
+
+    ``previous`` must come from an authenticated accepted-workload receipt. The
+    caller must also authenticate both checkpoints, source and AWS session; this
+    bounded metadata check does not issue a receipt or enable workload apply.
+    """
+    contracts._validate_document(contract)
+    _check(contract["phase"] == "workload")
+    secret_history.validate_secret_observation(contract, previous)
+    before = _workload_rows(before_resources)
+    after = _workload_rows(after_resources)
+    declarations = contract["workload"]["secret_lifecycle"]["references"]
+    for purpose in declarations:
+        for suffix in ("", "-version"):
+            name = f"runtime-{purpose}{suffix}"
+            _stable_row(before[name], after[name])
+    read = native or _native
+    first = {
+        purpose: _observed_secret(after, purpose, declaration, read)
+        for purpose, declaration in declarations.items()
+    }
+    second = {
+        purpose: _observed_secret(after, purpose, declaration, read)
+        for purpose, declaration in declarations.items()
+    }
+    _check(first == second)
+    secret_history.validate_secret_observation(contract, second, previous=previous)
+    return second

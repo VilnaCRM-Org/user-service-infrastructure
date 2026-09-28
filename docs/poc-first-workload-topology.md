@@ -3,7 +3,8 @@
 `poc_workload_topology.py` checks the exact current two-AZ workload owner graph:
 the unchanged eleven-resource registry/prerequisite baseline, pinned AWS/Random/TLS providers,
 generated secret resources, network/data/queue planes, ECS Fargate web and worker,
-public HTTPS ALB, and service-owned ALB log storage. No AWS apply is enabled.
+internal HTTPS ALB for the API Gateway private integration, and service-owned ALB
+log storage. No AWS apply is enabled.
 
 The prior graph must be the complete registry graph. Its goals retain the existing
 strict registry validator. Every additional owner must have the exact name, type,
@@ -17,6 +18,12 @@ The native CLI can omit unchanged component outputs from `newState`. This module
 restores only an absent projection from the validated prior; the saved goal still
 must have no output changes. An explicitly different output map rejects. This
 handling does not modify the existing registry runner or validator.
+
+The native saved-plan gate also binds the fixed TLS policy, sole HTTPS forward
+action, HTTP/IP target-group health settings, web service target and container
+port, absence of a worker load balancer, and the target-group VPC dependency.
+First-create target and listener ARNs may still be unknown; these checks do not
+prove resolved physical relationships or authorize execution.
 
 A first preview can serialize an unresolved generated SecretVersion value as the
 exact Pulumi unknown sentinel. The topology check permits that sentinel only in

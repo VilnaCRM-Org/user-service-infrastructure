@@ -300,6 +300,7 @@ def validate_first_workload_topology(
         unchanged._references(references, desired)
     _dependency_edges(desired)
     _private_gateway_inputs(desired, projection)
+    _web_target_inputs(desired, projection)
     _private_subnet_inputs(desired, projection)
     _managed_data_inputs(desired)
     _encrypted_queue_inputs(desired)
@@ -335,6 +336,7 @@ def _dependency_edges(desired):
         },
         "user-service-alb-sg": {"user-service-vpc", "user-service-vpc-link-sg"},
         "user-service-vpc-link-sg": {"user-service-vpc"},
+        "user-service-target-group": {"user-service-vpc"},
         "user-service-https-listener": {
             "user-service-alb",
             "user-service-target-group",
@@ -438,8 +440,67 @@ def _https_listener(listener, projection):
     require(
         listener.get("protocol") == "HTTPS"
         and listener.get("port") == 443
+        and listener.get("sslPolicy") == "ELBSecurityPolicy-TLS13-1-2-Res-2021-06"
         and listener.get("certificateArn") == workload_certificate_arn(projection),
         "workload-https-listener-inputs",
+    )
+    actions = listener.get("defaultActions")
+    label = "workload-https-listener-action"
+    require(type(actions) is list and len(actions) == 1, label)
+    action = actions[0]
+    require(
+        type(action) is dict
+        and set(action) == {"type", "targetGroupArn"}
+        and action["type"] == "forward"
+        and type(action["targetGroupArn"]) is str
+        and bool(action["targetGroupArn"]),
+        label,
+    )
+
+
+def _web_target_inputs(desired, projection):
+    """Check known routing settings; unknown ARNs still need native observation."""
+    target = _inputs(desired, "user-service-target-group")
+    require(
+        target.get("protocol") == "HTTP"
+        and target.get("targetType") == "ip"
+        and type(target.get("port")) is int
+        and 1 <= target["port"] <= 65535
+        and unchanged._same(target.get("deregistrationDelay"), 30),
+        "workload-web-target-inputs",
+    )
+    require(
+        unchanged._same(
+            target.get("healthCheck"),
+            {
+                "enabled": True,
+                "path": projection.contract["workload"]["runtime"]["health_path"],
+                "protocol": "HTTP",
+                "matcher": "200-399",
+                "healthyThreshold": 2,
+                "unhealthyThreshold": 3,
+                "interval": 30,
+                "timeout": 5,
+            },
+        ),
+        "workload-web-target-health",
+    )
+    action = _inputs(desired, "user-service-https-listener")["defaultActions"][0]
+    web = _inputs(desired, "user-service-web-service")
+    worker = _inputs(desired, "user-service-worker-service")
+    require(
+        unchanged._same(
+            web.get("loadBalancers"),
+            [
+                {
+                    "containerName": "user-service-web",
+                    "containerPort": target["port"],
+                    "targetGroupArn": action["targetGroupArn"],
+                }
+            ],
+        )
+        and worker.get("loadBalancers", []) == [],
+        "workload-web-service-target",
     )
 
 

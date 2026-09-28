@@ -58,6 +58,19 @@ def data(captured):
             # saved plans retain desiredCount as an integer.
             assert inputs["desiredCount"] == 2.0
             inputs["desiredCount"] = 2
+        for field in {
+            "aws:docdb/cluster:Cluster": ("backupRetentionPeriod",),
+            "aws:elasticache/replicationGroup:ReplicationGroup": (
+                "snapshotRetentionLimit",
+            ),
+            "aws:sqs/queue:Queue": (
+                "receiveWaitTimeSeconds",
+                "visibilityTimeoutSeconds",
+            ),
+        }.get(kind, ()):
+            # The native saved-plan JSON keeps these integer settings.
+            assert type(inputs[field]) is float and inputs[field].is_integer()
+            inputs[field] = int(inputs[field])
         if "secretString" in inputs:
             inputs["secretString"] = {
                 gate.unchanged.PULUMI_MARKER_SIGNATURE: (
@@ -326,6 +339,154 @@ def test_matching_plan_and_preview_cannot_expose_private_workload(
         current[path[-1]] = copy.deepcopy(value)
     with pytest.raises(ValueError, match=error):
         gate.validate_first_workload_topology(**data)
+
+
+@pytest.mark.parametrize(
+    "name,field,value,error",
+    [
+        (
+            "user-service-app-subnet-1",
+            "cidrBlock",
+            "10.42.99.0/24",
+            "private-subnet-inputs",
+        ),
+        (
+            "user-service-app-subnet-2",
+            "mapPublicIpOnLaunch",
+            True,
+            "private-subnet-inputs",
+        ),
+        (
+            "user-service-data-subnet-1",
+            "mapPublicIpOnLaunch",
+            True,
+            "private-subnet-inputs",
+        ),
+        (
+            "user-service-data-subnet-2",
+            "mapPublicIpOnLaunch",
+            0,
+            "private-subnet-inputs",
+        ),
+        ("user-service-documentdb-cluster", "engine", "mysql", "managed-data-inputs"),
+        (
+            "user-service-documentdb-cluster",
+            "engineVersion",
+            "4.0.0",
+            "managed-data-inputs",
+        ),
+        (
+            "user-service-documentdb-cluster",
+            "storageEncrypted",
+            False,
+            "managed-data-inputs",
+        ),
+        (
+            "user-service-documentdb-cluster",
+            "enabledCloudwatchLogsExports",
+            [],
+            "managed-data-inputs",
+        ),
+        (
+            "user-service-documentdb-cluster",
+            "backupRetentionPeriod",
+            0,
+            "managed-data-retention",
+        ),
+        (
+            "user-service-documentdb-cluster",
+            "backupRetentionPeriod",
+            True,
+            "managed-data-retention",
+        ),
+        ("user-service-redis", "engine", "memcached", "managed-data-inputs"),
+        ("user-service-redis", "engineVersion", "6.0", "managed-data-inputs"),
+        (
+            "user-service-redis",
+            "atRestEncryptionEnabled",
+            False,
+            "managed-data-inputs",
+        ),
+        (
+            "user-service-redis",
+            "transitEncryptionEnabled",
+            False,
+            "managed-data-inputs",
+        ),
+        (
+            "user-service-redis",
+            "transitEncryptionMode",
+            "preferred",
+            "managed-data-inputs",
+        ),
+        (
+            "user-service-redis",
+            "authTokenUpdateStrategy",
+            "SET",
+            "managed-data-inputs",
+        ),
+        (
+            "user-service-redis",
+            "snapshotRetentionLimit",
+            0,
+            "managed-data-retention",
+        ),
+        (
+            "user-service-redis",
+            "snapshotRetentionLimit",
+            True,
+            "managed-data-retention",
+        ),
+        (
+            "user-service-send-email",
+            "kmsMasterKeyId",
+            "",
+            "encrypted-queue-inputs",
+        ),
+        (
+            "user-service-domain-events",
+            "receiveWaitTimeSeconds",
+            0,
+            "encrypted-queue-inputs",
+        ),
+        (
+            "user-service-health-check",
+            "visibilityTimeoutSeconds",
+            0,
+            "encrypted-queue-inputs",
+        ),
+    ],
+)
+def test_matching_plan_and_preview_cannot_weaken_private_data_or_queues(
+    data, name, field, value, error
+):
+    urn = next(
+        urn for urn in data["saved_plan"]["resourcePlans"] if urn.endswith(f"::{name}")
+    )
+    goal = data["saved_plan"]["resourcePlans"][urn]["goal"]["inputDiff"]["adds"]
+    preview = next(
+        step["newState"]["inputs"]
+        for step in data["preview"]["steps"]
+        if step["urn"] == urn
+    )
+    for inputs in (goal, preview):
+        inputs[field] = copy.deepcopy(value)
+    with pytest.raises(ValueError, match=error):
+        gate.validate_first_workload_topology(**data)
+
+
+def test_explicit_private_data_subnet_flag_is_accepted(data):
+    urn = next(
+        urn
+        for urn in data["saved_plan"]["resourcePlans"]
+        if urn.endswith("::user-service-data-subnet-1")
+    )
+    data["saved_plan"]["resourcePlans"][urn]["goal"]["inputDiff"]["adds"][
+        "mapPublicIpOnLaunch"
+    ] = False
+    step = next(row for row in data["preview"]["steps"] if row["urn"] == urn)
+    step["newState"]["inputs"]["mapPublicIpOnLaunch"] = False
+    gate.validate_first_workload_topology(**data)
 
 
 def test_native_omitted_component_outputs_require_unchanged_saved_goal(data):

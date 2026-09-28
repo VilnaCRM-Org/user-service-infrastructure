@@ -50,6 +50,13 @@ any workload receipt or gateway descriptor.
 The native gate also requires the fixed ALB/subnet/security-group, HTTPS listener,
 and ECS task/service dependency edges. These edges are an early rejection check,
 not proof of the resolved physical relationships.
+The first-plan gate binds both private application subnet CIDRs to the admitted
+trusted-proxy networks, rejects public IP assignment on application/data subnets,
+requires encrypted DocumentDB and Redis with retained backups/snapshots, and
+requires all six SQS queues to keep AWS-managed KMS encryption, long polling and
+their fixed visibility timeout. These checks operate on the saved native plan and
+preview together; live resource identifiers and effective cloud behavior still
+require the accepted-result observer and manual TEST acceptance.
 
 Live prerequisites remain external: installed central runtime/deployment IAM and
 the exact SSM read grant in bootstrap #219; completed registry proof; authenticated

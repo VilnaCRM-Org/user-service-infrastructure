@@ -300,6 +300,9 @@ def validate_first_workload_topology(
         unchanged._references(references, desired)
     _dependency_edges(desired)
     _private_gateway_inputs(desired, projection)
+    _private_subnet_inputs(desired, projection)
+    _managed_data_inputs(desired)
+    _encrypted_queue_inputs(desired)
     _fargate_service_inputs(desired)
     seen = _validate_workload_steps(preview["steps"], baseline, graph, desired)
     required = {
@@ -438,6 +441,88 @@ def _https_listener(listener, projection):
         and listener.get("certificateArn") == workload_certificate_arn(projection),
         "workload-https-listener-inputs",
     )
+
+
+def _private_subnet_inputs(desired, projection):
+    """Bind the private ALB/ECS networks to the admitted proxy CIDRs."""
+    expected = projection.contract["workload"]["runtime"]["trusted_proxy_cidrs"]
+    app = [_inputs(desired, f"user-service-app-subnet-{index}") for index in (1, 2)]
+    data_flags = [
+        _inputs(desired, f"user-service-data-subnet-{index}").get("mapPublicIpOnLaunch")
+        for index in (1, 2)
+    ]
+    require(
+        [row.get("cidrBlock") for row in app] == expected
+        and all(row.get("mapPublicIpOnLaunch") is False for row in app)
+        and all(flag is None or flag is False for flag in data_flags),
+        "workload-private-subnet-inputs",
+    )
+
+
+def _managed_data_inputs(desired):
+    """Reject unencrypted DocumentDB or Redis in a matching plan and preview."""
+    expected = {
+        "user-service-documentdb-cluster": {
+            "engine": "docdb",
+            "engineVersion": "5.0.0",
+            "storageEncrypted": True,
+            "enabledCloudwatchLogsExports": ["audit", "profiler"],
+        },
+        "user-service-redis": {
+            "engine": "redis",
+            "engineVersion": "7.1",
+            "atRestEncryptionEnabled": True,
+            "transitEncryptionEnabled": True,
+            "transitEncryptionMode": "required",
+            "authTokenUpdateStrategy": "ROTATE",
+        },
+    }
+    for name, fields in expected.items():
+        inputs = _inputs(desired, name)
+        require(
+            unchanged._same({key: inputs.get(key) for key in fields}, fields),
+            "workload-managed-data-inputs",
+        )
+    docdb = _inputs(desired, "user-service-documentdb-cluster")
+    redis = _inputs(desired, "user-service-redis")
+    require(
+        type(docdb.get("backupRetentionPeriod")) is int
+        and docdb["backupRetentionPeriod"] >= 7
+        and type(redis.get("snapshotRetentionLimit")) is int
+        and redis["snapshotRetentionLimit"] >= 7,
+        "workload-managed-data-retention",
+    )
+
+
+def _encrypted_queue_inputs(desired):
+    """Require the fixed six queues to use AWS-managed SQS encryption."""
+    for name in (
+        "send-email",
+        "failed-send-email",
+        "insert-user-batch",
+        "domain-events",
+        "failed-domain-events",
+        "health-check",
+    ):
+        inputs = _inputs(desired, f"user-service-{name}")
+        require(
+            unchanged._same(
+                {
+                    key: inputs.get(key)
+                    for key in (
+                        "kmsMasterKeyId",
+                        "receiveWaitTimeSeconds",
+                        "visibilityTimeoutSeconds",
+                    )
+                },
+                {
+                    "kmsMasterKeyId": "alias/aws/sqs",
+                    "receiveWaitTimeSeconds": 20,
+                    "visibilityTimeoutSeconds": 120,
+                },
+            ),
+            "workload-encrypted-queue-inputs",
+        )
 
 
 def _fargate_service_inputs(desired):

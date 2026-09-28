@@ -54,9 +54,12 @@ The first-plan gate binds both private application subnet CIDRs to the admitted
 trusted-proxy networks, rejects public IP assignment on application/data subnets,
 requires encrypted DocumentDB and Redis with retained backups/snapshots, and
 requires all six SQS queues to keep AWS-managed KMS encryption, long polling and
-their fixed visibility timeout. These checks operate on the saved native plan and
-preview together; live resource identifiers and effective cloud behavior still
-require the accepted-result observer and manual TEST acceptance.
+their fixed visibility timeout. It pins their physical names to the TEST PoC
+defaults, including `health-check-queue`, and binds each application transport DSN
+to its fixed queue name, TEST account, region and `auto_setup=false`. These checks
+operate on the saved native plan and preview together; live resource identifiers
+and effective cloud behavior still require the accepted-result observer and manual
+TEST acceptance.
 
 The source includes a metadata-only first-create secret-history checker. It
 compares the protected checkpoint graph with the registry baseline and reads

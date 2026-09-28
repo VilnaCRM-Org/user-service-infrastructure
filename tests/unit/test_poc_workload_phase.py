@@ -90,6 +90,17 @@ def _generated_outputs(args, values):
     return values
 
 
+def _workload_queue_outputs(args, resource_id, values):
+    """Keep synthetic SQS identities in the contract's TEST account."""
+    if args.typ != "aws:sqs/queue:Queue":
+        return resource_id, values
+    name = args.inputs["name"]
+    resource_id = f"https://sqs.eu-central-1.amazonaws.com/891377212104/{name}"
+    values["id"] = resource_id
+    values["arn"] = f"arn:aws:sqs:eu-central-1:891377212104:{name}"
+    return resource_id, values
+
+
 def _fixture_contract(root, config):
     """Bind synthetic declarations to this exact mocked workload target."""
     contract = json.loads(
@@ -226,7 +237,7 @@ def _probe(root, mode, mutation, coverage_path):
         def new_resource(self, args):
             resource_id, values = super().new_resource(args)
             values = _generated_outputs(args, values)
-            return resource_id, values
+            return _workload_queue_outputs(args, resource_id, values)
 
     recorder = GeneratedMocks()
     mocks.set_mocks(

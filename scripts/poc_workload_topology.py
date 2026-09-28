@@ -49,12 +49,20 @@ CONTAINER_SECRET_NAMES = {
     "OAUTH_PUBLIC_KEY_PEM": "oauth_public_key",
     "REDIS_LOCKOUT_URL": "redis_url",
 }
+QUEUE_NAMES = {
+    "send-email": "send-email",
+    "failed-send-email": "failed-send-email",
+    "insert-user-batch": "insert-user-batch",
+    "domain-events": "domain-events",
+    "failed-domain-events": "failed-domain-events",
+    "health-check": "health-check-queue",
+}
 QUEUE_ENVIRONMENT_NAMES = {
-    "SEND_EMAIL_TRANSPORT_DSN",
-    "FAILED_EMAIL_TRANSPORT_DSN",
-    "INSERT_USER_BATCH_TRANSPORT_DSN",
-    "DOMAIN_EVENTS_TRANSPORT_DSN",
-    "FAILED_DOMAIN_EVENTS_TRANSPORT_DSN",
+    "SEND_EMAIL_TRANSPORT_DSN": "send-email",
+    "FAILED_EMAIL_TRANSPORT_DSN": "failed-send-email",
+    "INSERT_USER_BATCH_TRANSPORT_DSN": "insert-user-batch",
+    "DOMAIN_EVENTS_TRANSPORT_DSN": "domain-events",
+    "FAILED_DOMAIN_EVENTS_TRANSPORT_DSN": "failed-domain-events",
 }
 
 
@@ -580,17 +588,11 @@ def _managed_data_inputs(desired):
 
 def _encrypted_queue_inputs(desired):
     """Require the fixed six queues to use AWS-managed SQS encryption."""
-    for name in (
-        "send-email",
-        "failed-send-email",
-        "insert-user-batch",
-        "domain-events",
-        "failed-domain-events",
-        "health-check",
-    ):
-        inputs = _inputs(desired, f"user-service-{name}")
+    for logical, physical in QUEUE_NAMES.items():
+        inputs = _inputs(desired, f"user-service-{logical}")
         require(
-            unchanged._same(
+            inputs.get("name") == physical
+            and unchanged._same(
                 {
                     key: inputs.get(key)
                     for key in (
@@ -847,25 +849,25 @@ def _container_environment(rows, kind, projection):
         )
     else:
         expected["MESSENGER_CONSUMER_NAME"] = f"{registry.PROJECT}-test-worker-consumer"
-    # These values still need authenticated baseline/config and resolved queue
-    # binding; closed names and known contract values are only prerequisites.
+    # JWT/EMF values still need authenticated baseline/config binding. Native
+    # queue identity and effective policy also need post-apply observation.
     unbound = {
         "JWT_ISSUER",
         "JWT_AUDIENCE",
         "AWS_EMF_NAMESPACE",
-    } | QUEUE_ENVIRONMENT_NAMES
+    } | set(QUEUE_ENVIRONMENT_NAMES)
     require(
         set(actual) == set(expected) | unbound
         and {key: actual[key] for key in expected} == expected,
         label,
     )
-    for name in QUEUE_ENVIRONMENT_NAMES:
+    for name, logical in QUEUE_ENVIRONMENT_NAMES.items():
         require(
-            re.fullmatch(
-                re.escape(f"https://sqs.{region}.amazonaws.com/")
-                + r"[0-9]{12}/[A-Za-z0-9_-]{1,80}"
-                + re.escape(f"?region={region}&auto_setup=false"),
-                actual[name],
+            actual[name]
+            == (
+                f"https://sqs.{region}.amazonaws.com/"
+                f"{projection.contract['account_id']}/{QUEUE_NAMES[logical]}"
+                f"?region={region}&auto_setup=false"
             ),
             label,
         )

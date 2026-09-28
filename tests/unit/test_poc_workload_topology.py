@@ -484,6 +484,18 @@ def test_matching_plan_and_preview_cannot_expose_private_workload(
             0,
             "encrypted-queue-inputs",
         ),
+        (
+            "user-service-send-email",
+            "name",
+            "foreign-queue",
+            "encrypted-queue-inputs",
+        ),
+        (
+            "user-service-health-check",
+            "name",
+            "foreign-health-queue",
+            "encrypted-queue-inputs",
+        ),
     ],
 )
 def test_matching_plan_and_preview_cannot_weaken_private_data_or_queues(
@@ -730,7 +742,11 @@ def test_container_json_is_closed_and_bounded(data, kind, raw):
         ("JWT_ISSUER", gate.registry.UNKNOWN),
         (
             "SEND_EMAIL_TRANSPORT_DSN",
-            "https://sqs.eu-central-1.amazonaws.com/123456789012/send-email?region=eu-central-1&auto_setup=true",
+            "https://sqs.eu-central-1.amazonaws.com/123456789012/send-email?region=eu-central-1&auto_setup=false",
+        ),
+        (
+            "SEND_EMAIL_TRANSPORT_DSN",
+            "https://sqs.eu-central-1.amazonaws.com/891377212104/foreign-queue?region=eu-central-1&auto_setup=false",
         ),
     ],
 )

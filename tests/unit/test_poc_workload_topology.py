@@ -120,6 +120,44 @@ def test_exact_composition_topology_matches_and_cannot_authorize_execution(data)
     assert data == before
 
 
+@pytest.mark.parametrize(
+    "owner,target",
+    [
+        ("user-service-alb", "user-service-alb-sg"),
+        ("user-service-alb", "user-service-app-subnet-1"),
+        ("user-service-alb-sg", "user-service-vpc-link-sg"),
+        ("user-service-vpc-link-sg", "user-service-vpc"),
+        ("user-service-https-listener", "user-service-alb"),
+        ("user-service-web-service", "user-service-web-task"),
+        ("user-service-web-service", "user-service-https-listener"),
+        ("user-service-worker-service", "user-service-worker-task"),
+        ("user-service-worker-service", "user-service-service-sg"),
+    ],
+)
+def test_first_workload_requires_fixed_private_resource_dependencies(
+    data, owner, target
+):
+    owner_urn = next(
+        urn for urn in data["saved_plan"]["resourcePlans"] if urn.endswith("::" + owner)
+    )
+    target_urn = next(
+        urn
+        for urn in data["saved_plan"]["resourcePlans"]
+        if urn.endswith("::" + target)
+    )
+    goal = data["saved_plan"]["resourcePlans"][owner_urn]["goal"]
+    assert target_urn in goal["dependencies"]
+    goal["dependencies"].remove(target_urn)
+    step = next(row for row in data["preview"]["steps"] if row["urn"] == owner_urn)
+    step["newState"]["dependencies"] = [
+        dependency
+        for dependency in step["newState"]["dependencies"]
+        if dependency != target_urn
+    ]
+    with pytest.raises(ValueError, match="workload-first-topology-dependencies"):
+        gate.validate_first_workload_topology(**data)
+
+
 @pytest.mark.parametrize("task", ["web", "worker"])
 @pytest.mark.parametrize(
     "field,value",

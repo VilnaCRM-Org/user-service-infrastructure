@@ -298,6 +298,7 @@ def validate_first_workload_topology(
     for row in desired.values():
         references = {key: value for key, value in row.items() if key != "provider"}
         unchanged._references(references, desired)
+    _dependency_edges(desired)
     _private_gateway_inputs(desired, projection)
     _fargate_service_inputs(desired)
     seen = _validate_workload_steps(preview["steps"], baseline, graph, desired)
@@ -313,6 +314,50 @@ def _inputs(desired, name):
     rows = [row for urn, row in desired.items() if urn.rsplit("::", 1)[-1] == name]
     _check(len(rows) == 1 and type(rows[0].get("inputs")) is dict)
     return rows[0]["inputs"]
+
+
+def _dependency_edges(desired):
+    """Keep the fixed private network and ECS edges in first-create plans.
+
+    Unknown physical IDs still require accepted-result observation. Native
+    dependency edges cannot replace that observation, but their absence is a
+    definite topology mismatch before credentials can reach the child.
+    """
+    names = {urn.rsplit("::", 1)[-1]: urn for urn in desired}
+    required = {
+        "user-service-alb": {
+            "user-service-alb-sg",
+            "user-service-app-subnet-1",
+            "user-service-app-subnet-2",
+        },
+        "user-service-alb-sg": {"user-service-vpc", "user-service-vpc-link-sg"},
+        "user-service-vpc-link-sg": {"user-service-vpc"},
+        "user-service-https-listener": {
+            "user-service-alb",
+            "user-service-target-group",
+        },
+        "user-service-web-service": {
+            "user-service-web-task",
+            "user-service-service-sg",
+            "user-service-app-subnet-1",
+            "user-service-app-subnet-2",
+            "user-service-https-listener",
+            "user-service-target-group",
+        },
+        "user-service-worker-service": {
+            "user-service-worker-task",
+            "user-service-service-sg",
+            "user-service-app-subnet-1",
+            "user-service-app-subnet-2",
+        },
+    }
+    for owner, targets in required.items():
+        dependencies = desired[names[owner]].get("dependencies")
+        require(
+            type(dependencies) is list
+            and {names[name] for name in targets} <= set(dependencies),
+            "workload-first-topology-dependencies",
+        )
 
 
 def _private_gateway_inputs(desired, projection):

@@ -47,6 +47,9 @@ Fargate service settings with circuit-breaker rollback. First-create physical
 IDs are unresolved in the plan; the accepted-result observer must still bind
 their actual subnet, listener and security-group relationships before issuing
 any workload receipt or gateway descriptor.
+The native gate also requires the fixed ALB/subnet/security-group, HTTPS listener,
+and ECS task/service dependency edges. These edges are an early rejection check,
+not proof of the resolved physical relationships.
 
 Live prerequisites remain external: installed central runtime/deployment IAM and
 the exact SSM read grant in bootstrap #219; completed registry proof; authenticated

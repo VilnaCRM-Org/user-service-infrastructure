@@ -92,6 +92,7 @@ known_first_party = [
     "poc_workload_images",
     "poc_workload_materializer",
     "poc_workload_phase_entrypoint",
+    "poc_workload_runner",
     "poc_workload_topology",
     "pulumi_ci_guardrails",
     "pulumi_command_preflight",

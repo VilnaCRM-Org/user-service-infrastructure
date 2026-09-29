@@ -118,12 +118,19 @@ def _version_stages(detail):
 
 
 def _current_version(native, declaration, arn):
-    """Accept one current version and no pending deletion or rotation."""
+    """Accept one current version and no pending deletion or rotation.
+
+    DescribeSecret omits ``RotationEnabled`` for a secret that has never had
+    rotation configured, so an absent field means disabled; any value other
+    than a native ``false`` still rejects.
+    """
     detail = native(declaration["name"])
     _check(type(detail) is dict)
     _check(detail.get("ARN") == arn and detail.get("Name") == declaration["name"])
     _check(detail.get("KmsKeyId") == declaration["kms_key_arn"])
-    _check(detail.get("RotationEnabled") is False and "DeletedDate" not in detail)
+    _check(
+        detail.get("RotationEnabled", False) is False and "DeletedDate" not in detail
+    )
     return _version_stages(detail)
 
 

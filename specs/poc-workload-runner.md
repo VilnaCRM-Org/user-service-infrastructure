@@ -71,7 +71,9 @@ The source includes a metadata-only first-create secret-history checker. It
 compares the protected checkpoint graph with the registry baseline and reads
 Secrets Manager `DescribeSecret` twice for every declared runtime secret. It
 requires the same ARN, name, KMS key and sole current version in checkpoint and
-native metadata, with no pending rotation or deletion. It never calls
+native metadata, with no pending rotation or deletion. `DescribeSecret` omits
+`RotationEnabled` for a never-rotated secret, so an absent field counts as
+disabled; any value other than native `false` rejects. It never calls
 `GetSecretValue`. On its own this checker does not authenticate the checkpoint or
 AWS session. The installed runner composes it with authenticated private
 checkpoint reads after the first saved-plan apply; it still issues no receipt.

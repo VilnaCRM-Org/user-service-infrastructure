@@ -113,6 +113,16 @@ def test_reads_all_native_descriptions_twice_and_returns_only_metadata(data):
     assert (contract, before, after, native) == saved
 
 
+def test_never_rotated_secret_without_rotation_field_is_accepted(data):
+    """DescribeSecret omits RotationEnabled when rotation was never configured."""
+    native = data[-1]
+    for detail in native.values():
+        del detail["RotationEnabled"]
+    result = observe(data)
+    assert set(result) == set(data[0]["workload"]["secret_lifecycle"]["references"])
+    assert result["document_db_password"]["version_id"] == "1".zfill(32)
+
+
 def test_retained_previous_version_does_not_hide_the_current_version(data):
     native = data[-1]
     name = next(iter(native))
@@ -127,6 +137,9 @@ def test_retained_previous_version_does_not_hide_the_current_version(data):
         ("Name", "foreign"),
         ("KmsKeyId", "foreign"),
         ("RotationEnabled", True),
+        ("RotationEnabled", None),
+        ("RotationEnabled", "false"),
+        ("RotationEnabled", 0),
         ("DeletedDate", "2026-01-01T00:00:00Z"),
         ("VersionIdsToStages", {}),
         ("VersionIdsToStages", {"a" * 32: ["AWSPENDING"]}),

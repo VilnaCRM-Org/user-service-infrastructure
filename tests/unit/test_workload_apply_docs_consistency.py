@@ -1,0 +1,140 @@
+"""Workload apply documentation must match the installed worker routing."""
+
+import ast
+import re
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import service_execution_worker as worker  # noqa: E402
+
+# Wording that claims workload apply is disabled. Any match contradicts a worker
+# that routes a workload-phase ``up-plan`` to the protected runner.
+DISABLED_APPLY_CLAIMS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"no (aws|workload) apply is (enabled|admitted)",
+        r"rejects? workload (`?up-plan`?|apply)\b",
+        r"forbids? workload apply",
+        r"apply stops before",
+        r"routes only `?test_preview`?",
+        r"workflow selection remains registry-only",
+        r"execution stops remain",
+        r"does not enable the workload worker",
+        r"preview admission is not apply authority",
+        r"first-topology gate for previews only",
+    )
+)
+HISTORICAL_CLAIMS = (
+    "log storage. No AWS apply is enabled.",
+    "It rejects workload `up-plan` and drift before invoking the runner",
+    "Admit a validated preview; the worker still forbids workload apply.",
+    "[workload admission](poc-workload-admission.md). Apply stops before this path.",
+    "The installed worker routes only `test_preview` to the workload runner.",
+    "Workflow selection remains registry-only until these checks are executable.",
+    "The existing workload execution stops remain enabled.",
+    "rejects workload apply and drift before invoking that runner",
+    "It does not enable the workload worker. Both existing execution stops remain",
+    "No workload apply is admitted; a successful preview is not an acceptance result.",
+)
+
+
+def _documents():
+    """Yield Markdown text and Python docstrings that describe the PoC runner."""
+    for pattern in ("docs/**/*.md", "specs/**/*.md", "*.md"):
+        for path in sorted(ROOT.glob(pattern)):
+            yield path.relative_to(ROOT), path.read_text(encoding="utf-8")
+    for pattern in ("poc_*.py", "service_execution_*.py"):
+        for path in sorted((ROOT / "scripts").glob(pattern)):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(
+                    node,
+                    (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef),
+                ):
+                    docstring = ast.get_docstring(node)
+                    if docstring:
+                        yield path.relative_to(ROOT), docstring
+
+
+def _disabled_apply_claims():
+    claims = []
+    for path, text in _documents():
+        flat = " ".join(text.split())
+        claims.extend(
+            (str(path), match.group(0))
+            for claim in DISABLED_APPLY_CLAIMS
+            for match in claim.finditer(flat)
+        )
+    return claims
+
+
+def _routes_workload(monkeypatch, command):
+    """Return whether the worker hands a workload-phase command to the runner."""
+    for key in (
+        "POC_SOURCE_ARTIFACT_ID",
+        "POC_SOURCE_ARCHIVE_SHA256",
+        "POC_SOURCE_SHA256",
+    ):
+        monkeypatch.setenv(key, "synthetic")
+    monkeypatch.setenv("GITHUB_SHA", "b" * 40)
+    source = {
+        "source": {"head_sha": "a" * 40, "base_sha": "b" * 40},
+        "request": {"target_environment": "test"},
+    }
+    calls = []
+    monkeypatch.setattr(
+        worker.registry.artifact,
+        "load_verified_contract",
+        lambda **_: (source, {"phase": "workload"}),
+    )
+    monkeypatch.setattr(worker.registry, "_review", lambda _: None)
+    monkeypatch.setattr(
+        worker.registry,
+        "execute",
+        lambda *_a, **_k: pytest.fail("registry execution for a workload contract"),
+    )
+    monkeypatch.setattr(
+        worker.workload,
+        "execute",
+        lambda routed, **_: calls.append(routed) or 0,
+    )
+    try:
+        worker._test(None, command, "a" * 40)
+    except ValueError:
+        return False
+    return calls == [command]
+
+
+@pytest.mark.parametrize("sentence", HISTORICAL_CLAIMS)
+def test_disabled_apply_wording_is_recognized(sentence):
+    assert any(claim.search(sentence) for claim in DISABLED_APPLY_CLAIMS)
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "rejects workload drift before invoking it",
+        "Workload drift remains rejected until an accepted-workload receipt exists.",
+        "routes TEST `plan` (`test_preview`) and `up-plan` (`test_apply`)",
+    ],
+)
+def test_enabled_apply_wording_is_not_a_disabled_claim(sentence):
+    assert not any(claim.search(sentence) for claim in DISABLED_APPLY_CLAIMS)
+
+
+def test_documentation_matches_workload_apply_routing(monkeypatch):
+    assert _routes_workload(monkeypatch, "plan") is True
+    assert _routes_workload(monkeypatch, "drift") is False
+    claims = _disabled_apply_claims()
+    if _routes_workload(monkeypatch, "up-plan"):
+        assert claims == [], (
+            "Documentation claims workload apply is disabled while the worker "
+            f"routes workload up-plan to the runner: {claims}"
+        )
+    else:
+        assert claims, "Documentation must state that workload apply is disabled."

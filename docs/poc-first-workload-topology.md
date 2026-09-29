@@ -4,7 +4,8 @@
 the unchanged eleven-resource registry/prerequisite baseline, pinned AWS/Random/TLS providers,
 generated secret resources, network/data/queue planes, ECS Fargate web and worker,
 internal HTTPS ALB for the API Gateway private integration, and service-owned ALB
-log storage. No AWS apply is enabled.
+log storage. The trusted worker applies this graph only through the TEST saved-plan
+`up-plan` path described below.
 
 The prior graph must be the complete registry graph. Its goals retain the existing
 strict registry validator. Every additional owner must have the exact name, type,
@@ -30,24 +31,27 @@ exact Pulumi unknown sentinel. The topology check permits that sentinel only in
 the new resource with mandatory `secretString` secret-output marking. Known values
 require Pulumi secret wrappers. The no-change/prior-state validator is unchanged.
 
-## Preview-only admission
+## Saved-plan admission and apply
 
-`admit_first_workload_plan` accepts the exact validated TEST first-create preview.
-The installed worker routes only `test_preview` to the workload runner. It rejects
-workload `up-plan` and drift before invoking the runner; the runner independently
-requires a result observer before apply. Preview admission is not apply authority.
+`admit_first_workload_plan` accepts the exact validated TEST first-create preview
+and saved plan. When the authenticated contract phase is `workload`, the installed
+worker routes TEST `plan` (`test_preview`) and `up-plan` (`test_apply`) to the
+protected workload runner and rejects workload drift before invoking it. The
+runner rechecks this topology against the saved plan before replay and requires
+the first-result observer after a successful apply.
 
-The preview observation path implements bounded native role/boundary,
-execution-role ECR simulation and certificate prerequisites described in
-[workload admission](poc-workload-admission.md). Apply stops before this path.
-They do not satisfy the complete apply capability/input or accepted-result gate.
+Both plan and apply run the bounded native role/boundary, execution-role ECR
+simulation and certificate prerequisites described in
+[workload admission](poc-workload-admission.md) before the child starts. They are
+prerequisites, not a complete capability/input proof or an accepted-result receipt.
 
 Topology does not establish all workload input semantics, generated unknown
 values, installed runtime/deployer IAM intersection, current native resources,
-artifact provenance, authenticated prior/result receipts or cloud health. Those
-gates and same-run source/checkpoint replay binding must be implemented and
-independently verified before enabling apply. No successful check here is a
-deployment or workload acceptance receipt.
+artifact provenance, authenticated prior/result receipts or cloud health. The
+runner's saved-plan replay binding and first-result observer are described in the
+[workload runner boundary](../specs/poc-workload-runner.md); live TEST acceptance
+is still required. No successful check here is a deployment or workload
+acceptance receipt.
 
 Tests run the actual installed registry/workload composition and Pulumi v3.223.0
 engine against a local backend and three test-only loopback provider transports.

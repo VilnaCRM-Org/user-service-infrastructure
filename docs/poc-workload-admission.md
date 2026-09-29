@@ -2,10 +2,10 @@
 
 The TEST registry plan/apply/drift route is admitted after authenticated source,
 requester and review checks. The trusted service worker distinguishes the phase
-in the authenticated fixed PoC source contract: it routes workload previews
-through the protected runner and rejects workload apply and drift before invoking
-that runner. The prerequisite helpers below remain candidate code for a future
-separately validated apply integration. The TEST
+in the authenticated fixed PoC source contract: it routes workload `plan` and
+`up-plan` through the protected runner and rejects workload drift before invoking
+that runner. The prerequisite helpers below run before both the saved plan and its
+apply. The TEST
 registry completion jobs are connected in reviewed source but await installation
 and live acceptance. PROD remains absent; scheduled drift retains the installed-main path.
 
@@ -89,8 +89,8 @@ The latter pins must be set to reviewed installed workflow revisions. No value
 is inferred from a receipt, PR, dispatch input or current application branch.
 Missing values reject the candidate helper's workload observation. In this PR's
 workflow source, the three TEST execution jobs pass these values through the
-fixed host allowlist to the isolated root worker. The candidate worker still
-rejects workload requests before invoking that helper. The UID 2000 program
+fixed host allowlist to the isolated root worker. The worker invokes that helper
+for workload plan and apply requests. The UID 2000 program
 does not receive these authority values or GitHub credentials. This source is
 not installed on `main` yet.
 
@@ -101,8 +101,8 @@ permission denial fails closed and is not evidence of an empty registry.
 
 ## Remaining enabling work
 
-The preview path calls `poc_workload_capabilities.inspect_capabilities`;
-the installed worker rejects workload apply before reaching this helper.
+The workload plan and apply paths call
+`poc_workload_capabilities.inspect_capabilities` before the child starts.
 It requires the fixed central TEST execution/task role ARNs, native names, root
 paths, IAM role IDs, and exact independently enrolled `issue219/test/boundary/`
 policy ARNs. Execution trust must match the existing central ECS task service
@@ -130,14 +130,14 @@ responses; no AWS validation or successful workload receipt is claimed.
 
 The older `inspect_workload` helper still ends with
 `workload-native-image-capability-and-plan-gates-required`. The protected runner
-uses `observe_workload` and the first-topology gate for previews only. No workload
-apply is admitted; a successful preview is not an acceptance result.
+uses `observe_workload` and the first-topology gate for both the saved plan and
+its replay. A successful plan or first apply is not an acceptance result.
 
-Before enabling the full graph, establish actual runtime pulls, authenticated seed
-inventory/revision and immutable guard/policy installation, full task and deployer
-capabilities and approved endpoint/log/mail metadata,
-the generated-settings child entrypoint, and actual workload saved-plan validation
-and replay bindings. Extend result observation and scheduled drift for the accepted
+Live TEST acceptance of the full graph still needs actual runtime pulls,
+authenticated seed inventory/revision and immutable guard/policy installation,
+full task and deployer capabilities and approved endpoint/log/mail metadata,
+the generated-settings child entrypoint, and live evidence for the workload
+saved-plan validation and replay bindings. Extend result observation and scheduled drift for the accepted
 workload phase, including native secret version history across releases/rollback.
 The current registry completion proof and full TEST+PROD promotion retain their
 existing meanings. Workload-to-registry downgrade remains forbidden.

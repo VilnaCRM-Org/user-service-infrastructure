@@ -49,4 +49,5 @@ identity/boundary/guard intersections must permit this exact additional S3
 resource graph and ALB configuration. Native bucket uniqueness/ownership,
 delivery test object, metadata/default encryption/retention, TLS/public-access
 posture, workload health and saved-plan/replay/drift still need authenticated
-acceptance. The existing workload execution stops remain enabled.
+acceptance. Workload apply runs only through the TEST saved-plan runner once these
+prerequisites pass; workload drift remains rejected.

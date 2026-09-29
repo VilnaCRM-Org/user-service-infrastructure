@@ -119,7 +119,9 @@ The remaining producer/consumer work and acceptance evidence are:
    Reuse the source artifact transport's bounded ZIP/strict metadata checks with
    explicit result member and completed-producer rules; its current in-progress
    `source.json` protocol is not completed registry evidence.
-4. Authenticate the application manifest and both ECR images, then connect the
-   existing workload component, generated configuration and secret-history checks
-   to saved-plan/replay. Workflow selection remains registry-only until these
-   checks are executable. No approval flag or phase-file edit replaces them.
+4. Live-test the connected workload path. For a `workload` phase contract the
+   worker routes TEST `plan` and `up-plan` through the protected runner, which
+   authenticates the application manifest and both ECR images and binds the
+   workload component, generated configuration and secret-history checks to
+   saved-plan/replay. Workload drift remains rejected until an accepted-workload
+   receipt exists. No approval flag or phase-file edit replaces these checks.

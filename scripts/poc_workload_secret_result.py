@@ -246,7 +246,7 @@ def inspect_retained_secret_history(
 
     ``previous`` must come from an authenticated accepted-workload receipt. The
     caller must also authenticate both checkpoints, source and AWS session; this
-    bounded metadata check does not issue a receipt or enable workload apply.
+    bounded metadata check does not issue a receipt or admit a release apply.
     """
     contracts._validate_document(contract)
     _check(contract["phase"] == "workload")

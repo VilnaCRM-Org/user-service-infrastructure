@@ -962,5 +962,5 @@ def _baseline_steps(preview, prior):
 
 
 def admit_first_workload_plan(*args, **kwargs):
-    """Admit a validated preview; the worker still forbids workload apply."""
+    """Admit a validated first-create preview and saved plan for TEST apply."""
     validate_first_workload_topology(*args, **kwargs)

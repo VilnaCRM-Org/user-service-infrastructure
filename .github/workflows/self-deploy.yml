@@ -1,0 +1,819 @@
+# Governed roles: GitHubCiApply-user-service-infrastructure-test
+# Config reader: GitHubCiConfigRead-user-service-infrastructure-test
+name: Service Self Deploy
+
+on:
+  repository_dispatch:
+    types:
+      - pulumi-pr-command
+
+concurrency:
+  group: pulumi-command-${{ github.event.client_payload.pull_request_number || github.event_name }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  preflight:
+    if: github.event_name == 'repository_dispatch'
+    name: Preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+      pull-requests: read
+      statuses: write
+    outputs:
+      command: ${{ steps.resolve.outputs.command }}
+      display_command: ${{ steps.resolve.outputs.display_command }}
+      head_sha: ${{ steps.resolve.outputs.head_sha }}
+      base_sha: ${{ steps.resolve.outputs.base_sha }}
+      source_run_id: ${{ steps.resolve.outputs.source_run_id }}
+      comment_id: ${{ steps.resolve.outputs.comment_id }}
+      pull_request_number: ${{ steps.resolve.outputs.pull_request_number }}
+      target_environment: ${{ steps.resolve.outputs.target_environment }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REQUEST_COMMAND: ${{ github.event.client_payload.command }}
+      REQUEST_HEAD_SHA: ${{ github.event.client_payload.head_sha }}
+      REQUEST_PULL_REQUEST_NUMBER: ${{ github.event.client_payload.pull_request_number }}
+      REQUEST_COMMENT_ID: ${{ github.event.client_payload.comment_id }}
+      REQUEST_SOURCE_RUN_ID: ${{ github.event.client_payload.source_run_id }}
+      REQUEST_TARGET_ENVIRONMENT: ${{ github.event.client_payload.target_environment }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Authenticate immutable intake request and consume comment
+        id: resolve
+        run: python3 scripts/pulumi_command_preflight.py --service
+
+  poc_prepare_source:
+    if: ${{ needs.preflight.result == 'success' && needs.preflight.outputs.target_environment == 'test' }}
+    name: Prepare TEST PoC Source Facts
+    needs:
+      - preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+      pull-requests: read
+    outputs:
+      artifact_id: ${{ steps.source_artifact.outputs.artifact-id }}
+      archive_sha256: ${{ steps.source_artifact.outputs.artifact-digest }}
+      source_sha256: ${{ steps.prepare.outputs.source_sha256 }}
+    steps:
+      - name: Require the TEST-only PoC source route
+        env:
+          TARGET_ENVIRONMENT: ${{ needs.preflight.outputs.target_environment }}
+        run: |
+          if [[ "${TARGET_ENVIRONMENT}" != test ]]; then
+            echo "error: PoC source preparation supports TEST only; PROD promotion is unavailable." >&2
+            exit 1
+          fi
+
+      - name: Check out immutable trusted source adapter
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install the pinned trusted Python runtime
+        env:
+          UV_PYTHON_PREFERENCE: only-managed
+          UV_NO_PROGRESS: "1"
+        run: |
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "${GITHUB_WORKFLOW_SHA}" = "${GITHUB_SHA}"
+          uv_directory="$(mktemp -d "${RUNNER_TEMP}/poc-source-uv.XXXXXX")"
+          uv_archive="${uv_directory}/uv.tar.gz"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            https://github.com/astral-sh/uv/releases/download/0.9.21/uv-x86_64-unknown-linux-gnu.tar.gz \
+            --output "${uv_archive}"
+          echo "0a1ab27383c28ef1c041f85cbbc609d8e3752dfb4b238d2ad97b208a52232baf  ${uv_archive}" \
+            | sha256sum --check --status
+          tar -xzf "${uv_archive}" -C "${uv_directory}" --strip-components=1
+          "${uv_directory}/uv" sync --frozen --no-dev --python 3.11
+
+      - name: Prepare authenticated source facts without phase admission
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_PULL_REQUEST_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          REQUEST_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
+          REQUEST_COMMENT_ID: ${{ needs.preflight.outputs.comment_id }}
+          REQUEST_SOURCE_RUN_ID: ${{ needs.preflight.outputs.source_run_id }}
+          REQUEST_COMMAND: ${{ needs.preflight.outputs.command }}
+          REQUEST_TARGET_ENVIRONMENT: ${{ needs.preflight.outputs.target_environment }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/poc-phase-source"
+          "${GITHUB_WORKSPACE}/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/scripts/poc_phase_source_adapter.py" \
+            > "${RUNNER_TEMP}/poc-phase-source/source.json"
+          source_sha256="$(sha256sum "${RUNNER_TEMP}/poc-phase-source/source.json" | cut -d ' ' -f 1)"
+          echo "source_sha256=${source_sha256}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload immutable same-run source facts
+        id: source_artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: poc-phase-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/poc-phase-source/source.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 7
+
+  test_preview:
+    if: ${{ needs.poc_prepare_source.result == 'success' && needs.preflight.outputs.target_environment == 'test' }}
+    name: Test Preview
+    environment: test-preview
+    runs-on: ubuntu-latest
+    needs:
+      - preflight
+      - poc_prepare_source
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      pull-requests: read
+    env:
+      PULUMI_SKIP_UPDATE_CHECK: "true"
+      GH_TOKEN: ${{ github.token }}
+      REQUEST_PULL_REQUEST_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+      REQUEST_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
+      REQUEST_COMMENT_ID: ${{ needs.preflight.outputs.comment_id }}
+      REQUEST_SOURCE_RUN_ID: ${{ needs.preflight.outputs.source_run_id }}
+      REQUEST_COMMAND: ${{ needs.preflight.outputs.command }}
+      REQUEST_TARGET_ENVIRONMENT: ${{ needs.preflight.outputs.target_environment }}
+      EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+    concurrency:
+      group: pulumi-state-${{ github.repository }}-test-test
+      cancel-in-progress: false
+    steps:
+      - name: Check out trusted credential helper
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          path: .trusted
+          persist-credentials: false
+
+      - name: Install trusted registry runtime before credentials
+        uses: ./.trusted/.github/actions/setup-service-execution
+
+      - name: Recheck exact source, requester and review
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" recheck
+
+      - name: Load test AWS CI configuration
+        id: ci_config
+        uses: ./.trusted/.github/actions/load-aws-ci-env
+        with:
+          environment: test
+          config-role-arn: ${{ vars.AWS_TEST_CI_CONFIG_ROLE_ARN }}
+          expected-account-id: ${{ vars.AWS_TEST_ACCOUNT_ID }}
+          aws-region: ${{ vars.AWS_TEST_REGION }}
+          purpose: PR test preview
+          required-keys: >-
+            AWS_ACCOUNT_ID,AWS_REGION,AWS_PREVIEW_ROLE_ARN,
+            PULUMI_BACKEND_URL,PULUMI_SECRETS_PROVIDER,PULUMI_PREVIEW_STACKS
+
+      - name: Validate test preview prerequisites
+        run: |
+          missing=()
+          for name in \
+            AWS_ACCOUNT_ID \
+            AWS_PREVIEW_ROLE_ARN \
+            PULUMI_BACKEND_URL \
+            PULUMI_SECRETS_PROVIDER \
+            PULUMI_PREVIEW_STACKS; do
+            if [[ -z "${!name}" ]]; then
+              missing+=("${name}")
+            fi
+          done
+          if [[ "${#missing[@]}" -gt 0 ]]; then
+            printf 'error: PR test preview is missing %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+          if [[ ! "${AWS_ACCOUNT_ID}" =~ ^[0-9]{12}$ ]]; then
+            echo "error: AWS_ACCOUNT_ID must be a 12-digit AWS account ID." >&2
+            exit 1
+          fi
+          if [[ "${PULUMI_BACKEND_URL}" != s3://* ]]; then
+            echo "error: PULUMI_BACKEND_URL must use an s3:// backend." >&2
+            exit 1
+          fi
+          if [[ "${PULUMI_SECRETS_PROVIDER}" != awskms://* ]]; then
+            echo "error: PULUMI_SECRETS_PROVIDER must use an awskms:// URI." >&2
+            exit 1
+          fi
+
+      - name: Recheck exact source, requester and review
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" recheck
+
+      - name: Configure AWS preview credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
+        with:
+          role-to-assume: ${{ steps.ci_config.outputs.aws-preview-role-arn }}
+          role-session-name: gha-pr-test-preview-${{ github.run_id }}
+          aws-region: ${{ steps.ci_config.outputs.aws-region }}
+          allowed-account-ids: ${{ vars.AWS_TEST_ACCOUNT_ID }}
+
+      - name: Emit test preview evidence
+        run: |
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          echo "CI config secret: ${CI_CONFIG_SECRET_ID}"
+          echo "Backend type: s3"
+          echo "Commit SHA: ${{ needs.preflight.outputs.head_sha }}"
+          echo "Current AWS account ID: ${account_id}"
+          echo "Role purpose: preview"
+          echo "PR command: ${{ needs.preflight.outputs.display_command }}"
+
+      - name: Recheck exact source, requester and review
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" recheck
+
+      - name: Save test update plan and preview artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
+          POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
+          POC_SOURCE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" execute
+
+      - name: Upload test preview artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: >-
+            pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
+            needs.preflight.outputs.head_sha }}-test-preview
+          path: .trusted/.artifacts/pulumi-preview
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload test plan artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: >-
+            pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
+            needs.preflight.outputs.head_sha }}-test-plan
+          path: .trusted/.artifacts/pulumi-plan
+          if-no-files-found: error
+          retention-days: 7
+
+  test_destructive_diff:
+    name: Test Destructive Diff Gate
+    if: github.event_name == 'repository_dispatch'
+    runs-on: ubuntu-latest
+    needs:
+      - preflight
+      - test_preview
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download test preview artifact
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          name: >-
+            pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
+            needs.preflight.outputs.head_sha }}-test-preview
+          path: .trusted/.artifacts/pulumi-preview
+
+      - name: Enforce destructive diff gate
+        run: |
+          shopt -s nullglob
+          previews=(.trusted/.artifacts/pulumi-preview/*.json)
+          test "${#previews[@]}" -gt 0
+          python3 -I "${GITHUB_WORKSPACE}/scripts/pulumi_ci_guardrails.py" \
+            destructive-gate "${previews[@]}"
+
+  test_apply:
+    name: Test Apply
+    if: ${{ needs.preflight.outputs.command == 'up' && needs.preflight.outputs.target_environment == 'test' }}
+    environment: test
+    runs-on: ubuntu-latest
+    needs:
+      - preflight
+      - poc_prepare_source
+      - test_preview
+      - test_destructive_diff
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      pull-requests: read
+    env:
+      PULUMI_SKIP_UPDATE_CHECK: "true"
+      GH_TOKEN: ${{ github.token }}
+      REQUEST_PULL_REQUEST_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+      REQUEST_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
+      REQUEST_COMMENT_ID: ${{ needs.preflight.outputs.comment_id }}
+      REQUEST_SOURCE_RUN_ID: ${{ needs.preflight.outputs.source_run_id }}
+      REQUEST_COMMAND: ${{ needs.preflight.outputs.command }}
+      REQUEST_TARGET_ENVIRONMENT: ${{ needs.preflight.outputs.target_environment }}
+      EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+    concurrency:
+      group: pulumi-state-${{ github.repository }}-test-test
+      cancel-in-progress: false
+    steps:
+      - name: Check out trusted credential helper
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          path: .trusted
+          persist-credentials: false
+
+      - name: Install trusted registry runtime before credentials
+        uses: ./.trusted/.github/actions/setup-service-execution
+
+      - name: Recheck exact source, requester and review
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" recheck
+
+      - name: Load test AWS CI configuration
+        id: ci_config
+        uses: ./.trusted/.github/actions/load-aws-ci-env
+        with:
+          environment: test
+          config-role-arn: ${{ vars.AWS_TEST_CI_CONFIG_ROLE_ARN }}
+          expected-account-id: ${{ vars.AWS_TEST_ACCOUNT_ID }}
+          aws-region: ${{ vars.AWS_TEST_REGION }}
+          purpose: PR test apply
+          required-keys: >-
+            AWS_ACCOUNT_ID,AWS_REGION,AWS_APPLY_ROLE_ARN,
+            PULUMI_BACKEND_URL,PULUMI_SECRETS_PROVIDER,PULUMI_PREVIEW_STACKS
+
+      - name: Recheck exact source, requester and review
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" recheck
+
+      - name: Configure AWS apply credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
+        with:
+          role-to-assume: ${{ steps.ci_config.outputs.aws-apply-role-arn }}
+          role-session-name: gha-pr-test-apply-${{ github.run_id }}
+          aws-region: ${{ steps.ci_config.outputs.aws-region }}
+          allowed-account-ids: ${{ vars.AWS_TEST_ACCOUNT_ID }}
+
+      - name: Emit test apply evidence
+        run: |
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          echo "CI config secret: ${CI_CONFIG_SECRET_ID}"
+          echo "Backend type: s3"
+          echo "Commit SHA: ${{ needs.preflight.outputs.head_sha }}"
+          echo "Current AWS account ID: ${account_id}"
+          echo "Role purpose: apply"
+          echo "PR command: ${{ needs.preflight.outputs.display_command }}"
+
+      - name: Recheck exact source, requester and review
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" recheck
+
+      - name: Download test plan artifact
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          name: >-
+            pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
+            needs.preflight.outputs.head_sha }}-test-plan
+          path: .trusted/.artifacts/pulumi-plan
+
+      - name: Download test preview for apply revalidation
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          name: >-
+            pr-command-${{ needs.preflight.outputs.pull_request_number }}-${{
+            needs.preflight.outputs.head_sha }}-test-preview
+          path: .trusted/.artifacts/pulumi-preview
+
+      - name: Recheck exact source, requester and review
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" recheck
+
+      - name: Apply saved test plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
+          POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
+          POC_SOURCE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+        run: |
+          # The immutable same-run preview is the diff for this saved plan.
+          shopt -s nullglob
+          previews=(.trusted/.artifacts/pulumi-preview/*.json)
+          found_preview=false
+          for preview in "${previews[@]}"; do
+            if [[ "${preview}" != */pull-request-event.json ]]; then
+              test -s "${preview}"
+              found_preview=true
+            fi
+          done
+          test "${found_preview}" = true
+          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
+          test "$(jq -r '.state' <<< "${pr_json}")" = open
+          test "$(jq -r '.merged' <<< "${pr_json}")" = false
+          test "$(jq -r '.head.sha' <<< "${pr_json}")" = "${EXPECTED_SHA}"
+          test "$(jq -r '.base.ref' <<< "${pr_json}")" = main
+          test "$(jq -r '.base.sha' <<< "${pr_json}")" = "${EXPECTED_BASE_SHA}"
+          test "$(git -C .trusted rev-parse HEAD)" = "${GITHUB_SHA}"
+          # Remove only obsolete event metadata; preserve the original diff files.
+          rm -f .trusted/.artifacts/pulumi-preview/pull-request-event.json
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" execute
+
+  test_post_apply_drift:
+    name: Test Post-Apply Drift
+    if: ${{ needs.preflight.outputs.command == 'up' && needs.preflight.outputs.target_environment == 'test' }}
+    environment: test-preview
+    runs-on: ubuntu-latest
+    needs:
+      - preflight
+      - poc_prepare_source
+      - test_apply
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      pull-requests: read
+    env:
+      PULUMI_SKIP_UPDATE_CHECK: "true"
+      GH_TOKEN: ${{ github.token }}
+      REQUEST_PULL_REQUEST_NUMBER: ${{ needs.preflight.outputs.pull_request_number }}
+      REQUEST_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
+      REQUEST_COMMENT_ID: ${{ needs.preflight.outputs.comment_id }}
+      REQUEST_SOURCE_RUN_ID: ${{ needs.preflight.outputs.source_run_id }}
+      REQUEST_COMMAND: ${{ needs.preflight.outputs.command }}
+      REQUEST_TARGET_ENVIRONMENT: ${{ needs.preflight.outputs.target_environment }}
+      EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+    concurrency:
+      group: pulumi-state-${{ github.repository }}-test-test
+      cancel-in-progress: false
+    steps:
+      - name: Check out trusted credential helper
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          path: .trusted
+          persist-credentials: false
+
+      - name: Install trusted registry runtime before credentials
+        uses: ./.trusted/.github/actions/setup-service-execution
+
+      - name: Recheck exact source, requester and review
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" recheck
+
+      - name: Load test AWS CI configuration
+        id: ci_config
+        uses: ./.trusted/.github/actions/load-aws-ci-env
+        with:
+          environment: test
+          config-role-arn: ${{ vars.AWS_TEST_CI_CONFIG_ROLE_ARN }}
+          expected-account-id: ${{ vars.AWS_TEST_ACCOUNT_ID }}
+          aws-region: ${{ vars.AWS_TEST_REGION }}
+          purpose: PR test registry drift
+          required-keys: >-
+            AWS_ACCOUNT_ID,AWS_REGION,AWS_PREVIEW_ROLE_ARN,
+            PULUMI_BACKEND_URL,PULUMI_SECRETS_PROVIDER,PULUMI_PREVIEW_STACKS
+
+      - name: Recheck exact source, requester and review
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" recheck
+
+      - name: Configure AWS drift credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
+        with:
+          role-to-assume: ${{ steps.ci_config.outputs.aws-preview-role-arn }}
+          role-session-name: gha-pr-test-preview-${{ github.run_id }}
+          aws-region: ${{ steps.ci_config.outputs.aws-region }}
+          allowed-account-ids: ${{ vars.AWS_TEST_ACCOUNT_ID }}
+
+      - name: Recheck exact source, requester and review
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" recheck
+
+      - name: Run test post-apply drift detection
+        env:
+          GH_TOKEN: ${{ github.token }}
+          POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
+          POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
+          POC_SOURCE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" execute
+
+  test_registry_observation:
+    name: Observe TEST Registry Completion
+    if: ${{ needs.preflight.outputs.command == 'up' && needs.preflight.outputs.target_environment == 'test' }}
+    environment: test-preview
+    runs-on: ubuntu-latest
+    needs:
+      - preflight
+      - poc_prepare_source
+      - test_post_apply_drift
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      pull-requests: read
+    outputs:
+      artifact_id: ${{ steps.observation_artifact.outputs.artifact-id }}
+      archive_sha256: ${{ steps.observation_artifact.outputs.artifact-digest }}
+      file_sha256: ${{ steps.observe.outputs.file_sha256 }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
+      POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
+      POC_SOURCE_FILE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
+    concurrency:
+      group: pulumi-state-${{ github.repository }}-test-test
+      cancel-in-progress: false
+    steps:
+      - name: Check out trusted observer
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          path: .trusted
+          persist-credentials: false
+
+      - name: Install trusted observation runtime before credentials
+        uses: ./.trusted/.github/actions/setup-poc-runtime
+
+      - name: Admit exact source and current review before AWS configuration
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_completion.py" admit
+
+      - name: Load test AWS CI configuration
+        id: ci_config
+        uses: ./.trusted/.github/actions/load-aws-ci-env
+        with:
+          environment: test
+          config-role-arn: ${{ vars.AWS_TEST_CI_CONFIG_ROLE_ARN }}
+          expected-account-id: ${{ vars.AWS_TEST_ACCOUNT_ID }}
+          aws-region: ${{ vars.AWS_TEST_REGION }}
+          purpose: PR test registry observation
+          required-keys: >-
+            AWS_ACCOUNT_ID,AWS_REGION,AWS_PREVIEW_ROLE_ARN,
+            PULUMI_BACKEND_URL,PULUMI_SECRETS_PROVIDER,PULUMI_PREVIEW_STACKS
+
+      - name: Recheck source and review before AWS execution credentials
+        run: |
+          "${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I \
+            "${GITHUB_WORKSPACE}/.trusted/scripts/poc_registry_completion.py" admit
+
+      - name: Configure AWS observation credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
+        with:
+          role-to-assume: ${{ steps.ci_config.outputs.aws-preview-role-arn }}
+          role-session-name: gha-pr-test-preview-${{ github.run_id }}
+          aws-region: ${{ steps.ci_config.outputs.aws-region }}
+          allowed-account-ids: ${{ vars.AWS_TEST_ACCOUNT_ID }}
+
+      - name: Observe exact registry graph and native ECR controls
+        id: observe
+        working-directory: .trusted
+        run: |
+          ./.venv/bin/python -I scripts/poc_registry_completion.py observe \
+            >> "${GITHUB_OUTPUT}"
+
+      - name: Upload immutable same-run observation
+        id: observation_artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: poc-registry-observation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .trusted/.artifacts/poc-registry-observation/observation.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 7
+
+  test_registry_proof:
+    name: Publish TEST Registry Completion Proof
+    if: ${{ needs.test_registry_observation.result == 'success' }}
+    environment: governance-evidence
+    runs-on: ubuntu-latest
+    needs:
+      - preflight
+      - poc_prepare_source
+      - test_registry_observation
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      deployments: read
+      pull-requests: read
+    outputs:
+      receipt_id: ${{ steps.publish.outputs.registry_phase_receipt_id }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
+      POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
+      POC_SOURCE_FILE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
+      POC_OBSERVATION_ARTIFACT_ID: ${{ needs.test_registry_observation.outputs.artifact_id }}
+      POC_OBSERVATION_ARCHIVE_SHA256: ${{ needs.test_registry_observation.outputs.archive_sha256 }}
+      POC_OBSERVATION_FILE_SHA256: ${{ needs.test_registry_observation.outputs.file_sha256 }}
+    steps:
+      - name: Check out immutable trusted issuer
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          path: .trusted
+          persist-credentials: false
+
+      - name: Install trusted proof runtime before App credentials
+        uses: ./.trusted/.github/actions/setup-poc-runtime
+
+      - name: Verify producer chain, artifacts, review and issuer environment
+        working-directory: .trusted
+        run: ./.venv/bin/python -I scripts/poc_registry_completion.py prepare
+
+      - name: Create deployment-only registry proof App token
+        id: proof_app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ vars.GOVERNANCE_PROMOTION_APP_ID }}
+          private-key: ${{ secrets.GOVERNANCE_PROMOTION_APP_PRIVATE_KEY }}
+          permission-deployments: write
+          permission-actions: read
+          permission-contents: read
+          permission-pull-requests: read
+
+      - name: Publish and read back separate TEST registry receipt
+        id: publish
+        working-directory: .trusted
+        env:
+          REGISTRY_PROOF_APP_TOKEN: ${{ steps.proof_app.outputs.token }}
+          REGISTRY_PROOF_APP_ID: ${{ vars.GOVERNANCE_PROMOTION_APP_ID }}
+          REGISTRY_PROOF_APP_SLUG: ${{ vars.GOVERNANCE_PROMOTION_APP_SLUG }}
+        run: |
+          ./.venv/bin/python -I scripts/poc_registry_completion.py publish \
+            >> "${GITHUB_OUTPUT}"
+
+  test_registry_dispatch:
+    name: Dispatch TEST Application Publisher
+    if: ${{ needs.test_registry_proof.result == 'success' }}
+    environment: governance-evidence
+    runs-on: ubuntu-latest
+    needs:
+      - preflight
+      - poc_prepare_source
+      - test_registry_observation
+      - test_registry_proof
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      deployments: read
+      pull-requests: read
+    outputs:
+      publisher_run_id: ${{ steps.dispatch.outputs.publisher_run_id }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      POC_SOURCE_ARTIFACT_ID: ${{ needs.poc_prepare_source.outputs.artifact_id }}
+      POC_SOURCE_ARCHIVE_SHA256: ${{ needs.poc_prepare_source.outputs.archive_sha256 }}
+      POC_SOURCE_FILE_SHA256: ${{ needs.poc_prepare_source.outputs.source_sha256 }}
+      POC_OBSERVATION_ARTIFACT_ID: ${{ needs.test_registry_observation.outputs.artifact_id }}
+      POC_OBSERVATION_ARCHIVE_SHA256: ${{ needs.test_registry_observation.outputs.archive_sha256 }}
+      POC_OBSERVATION_FILE_SHA256: ${{ needs.test_registry_observation.outputs.file_sha256 }}
+      POC_REGISTRY_RECEIPT_ID: ${{ needs.test_registry_proof.outputs.receipt_id }}
+      POC_PUBLISHER_WORKFLOW_SHA: ${{ vars.POC_PUBLISHER_WORKFLOW_SHA }}
+    steps:
+      - name: Check out immutable trusted dispatcher
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          path: .trusted
+          persist-credentials: false
+
+      - name: Install trusted dispatcher runtime before App credentials
+        uses: ./.trusted/.github/actions/setup-poc-runtime
+
+      - name: Authenticate registry proof and protected publisher before minting
+        working-directory: .trusted
+        run: ./.venv/bin/python -I scripts/poc_publisher_dispatch.py prepare
+
+      - name: Create application-only Actions dispatch token
+        id: publisher_app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ vars.GOVERNANCE_PROMOTION_APP_ID }}
+          private-key: ${{ secrets.GOVERNANCE_PROMOTION_APP_PRIVATE_KEY }}
+          owner: VilnaCRM-Org
+          repositories: user-service
+          permission-actions: write
+
+      - name: Dispatch once and authenticate native application run
+        id: dispatch
+        working-directory: .trusted
+        env:
+          PUBLISHER_DISPATCH_APP_TOKEN: ${{ steps.publisher_app.outputs.token }}
+        run: |
+          ./.venv/bin/python -I scripts/poc_publisher_dispatch.py dispatch \
+            >> "${GITHUB_OUTPUT}"
+
+  comment_result:
+    name: Comment Result
+    if: always()
+    runs-on: ubuntu-latest
+    needs:
+      - preflight
+      - poc_prepare_source
+      - test_preview
+      - test_destructive_diff
+      - test_apply
+      - test_post_apply_drift
+      - test_registry_observation
+      - test_registry_proof
+      - test_registry_dispatch
+    timeout-minutes: 10
+    permissions:
+      issues: write
+      # Result feedback is posted to the PR conversation; live QA showed
+      # GitHub rejects this with only issues: write on the Actions token.
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      REGISTRY_RECEIPT_ID: ${{ needs.test_registry_proof.outputs.receipt_id }}
+      PUBLISHER_RUN_ID: ${{ needs.test_registry_dispatch.outputs.publisher_run_id }}
+    steps:
+      - name: Post PR command result
+        run: |
+          body_file="$(mktemp)"
+          {
+            echo "## Pulumi PR command result"
+            echo
+            echo "- Command: \`${{ needs.preflight.outputs.display_command || 'preflight' }}\`"
+            echo "- Commit: \`${{ needs.preflight.outputs.head_sha || 'unknown' }}\`"
+            echo "- Workflow run: ${RUN_URL}"
+            echo
+            echo "| Stage | Result |"
+            echo "| --- | --- |"
+            echo "| Preflight | \`${{ needs.preflight.result }}\` |"
+            echo "| TEST PoC source facts | \`${{ needs.poc_prepare_source.result }}\` |"
+            echo "| Test preview | \`${{ needs.test_preview.result }}\` |"
+            echo "| Test destructive diff | \`${{ needs.test_destructive_diff.result }}\` |"
+            echo "| Test apply | \`${{ needs.test_apply.result }}\` |"
+            echo "| Test post-apply drift | \`${{ needs.test_post_apply_drift.result }}\` |"
+            echo "| TEST registry observation | \`${{ needs.test_registry_observation.result }}\` |"
+            echo "| TEST registry proof | \`${{ needs.test_registry_proof.result }}\` |"
+            echo "| TEST publisher dispatch | \`${{ needs.test_registry_dispatch.result }}\` |"
+            if [[ "${{ needs.test_registry_proof.result }}" == success ]]; then
+              if [[ "${REGISTRY_RECEIPT_ID}" =~ ^[1-9][0-9]*$ ]]; then
+                printf '%s\n' "- TEST registry receipt ID: \`${REGISTRY_RECEIPT_ID}\`"
+              fi
+            fi
+            if [[ "${{ needs.test_registry_dispatch.result }}" == success ]]; then
+              if [[ "${PUBLISHER_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+                printf '%s\n' "- Application publisher run: https://github.com/VilnaCRM-Org/user-service/actions/runs/${PUBLISHER_RUN_ID}"
+              fi
+            fi
+            echo
+            echo "TEST registry proof and application publisher dispatch only. Image publication success and workload deployment require separate verification."
+          } > "${body_file}"
+
+          pr_number="${{ needs.preflight.outputs.pull_request_number }}"
+          if [[ -n "${pr_number}" ]]; then
+            jq -Rs '{body: .}' < "${body_file}" \
+              | gh api \
+                --method POST \
+                "repos/${GITHUB_REPOSITORY}/issues/${pr_number}/comments" \
+                --input -
+          else
+            cat "${body_file}"
+          fi

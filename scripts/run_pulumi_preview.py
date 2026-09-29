@@ -110,7 +110,7 @@ def main() -> int:
         env=env,
     )
 
-    stacks = discover_stacks(pulumi_dir, env.get("PULUMI_PREVIEW_STACKS"))
+    stacks = discover_stacks(pulumi_dir, env.get("PULUMI_PREVIEW_STACKS") or "dev")
     if not stacks:
         print(
             f"error: no Pulumi stack configs found under {pulumi_dir}", file=sys.stderr

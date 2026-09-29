@@ -72,8 +72,13 @@ def test_summarize_preview_and_find_destructive_steps(
                 "urn": "urn:pulumi:dev::stack::aws:rds/instance:Instance::db",
                 "newState": {"type": "aws:rds/instance:Instance"},
             },
+            {
+                "op": "delete",
+                "urn": "urn:pulumi:dev::stack::aws:cloudtrail/trail:Trail::audit",
+                "oldState": {"type": "aws:cloudtrail/trail:Trail"},
+            },
         ],
-        summary={"create": 1, "replace": 2},
+        summary={"create": 1, "delete": 1, "replace": 2},
     )
 
     preview = guardrails_module.load_preview(path)
@@ -82,11 +87,12 @@ def test_summarize_preview_and_find_destructive_steps(
     )
     rendered = guardrails_module.summarize_preview(path, stack="dev")
 
-    assert len(destructive) == 1
+    assert len(destructive) == 2
     assert "Pulumi Preview: dev" in rendered
     assert "| create | 1 |" in rendered
-    assert "Destructive-step count: `1`" in rendered
+    assert "Destructive-step count: `2`" in rendered
     assert "aws:rds/instance:Instance" in rendered
+    assert "aws:cloudtrail/trail:Trail" in rendered
 
     empty_path = _write_preview(
         tmp_path / "empty.json",
@@ -95,6 +101,196 @@ def test_summarize_preview_and_find_destructive_steps(
     )
     assert guardrails_module.preview_steps({"steps": "invalid"}) == []
     assert "| none | 0 |" in guardrails_module.summarize_preview(empty_path)
+
+
+def test_cost_proxy_reports_cost_driving_preview_steps(
+    guardrails_module, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Cost proxy should count create/replace operations on cost-driving types."""
+    path = _write_preview(
+        tmp_path / "cost.json",
+        steps=[
+            {
+                "op": "create",
+                "newState": {"type": "aws:s3/bucket:Bucket"},
+            },
+            {
+                "op": "replace",
+                "newState": {"type": "aws:kms/key:Key"},
+            },
+            {
+                "op": "update",
+                "newState": {"type": "aws:sns/topic:Topic"},
+            },
+            {
+                "op": "create",
+                "newState": {"type": "aws:cloudwatch/eventRule:EventRule"},
+            },
+            {
+                "op": "create",
+                "newState": {"type": "aws:cloudtrail/trail:Trail"},
+            },
+            {
+                "op": "create",
+                "newState": {"type": "aws:cloudwatch/logGroup:LogGroup"},
+            },
+            {
+                "op": "create",
+                "newState": {"type": "aws:guardduty/detector:Detector"},
+            },
+            {
+                "op": "create",
+                "newState": {"type": "aws:securityhub/account:Account"},
+            },
+            {
+                "op": "create",
+                "newState": {"type": "aws:cfg/recorder:Recorder"},
+            },
+            {
+                "op": "create",
+                "newState": {"type": "aws:cfg/deliveryChannel:DeliveryChannel"},
+            },
+        ],
+        summary={"create": 2, "replace": 1, "update": 1},
+    )
+
+    report = guardrails_module.cost_proxy_report(guardrails_module.load_preview(path))
+    rendered = guardrails_module.render_cost_proxy_markdown(path, report)
+
+    assert report["weightedChange"] == 20  # nosec B101
+    assert report["categories"]["s3Buckets"] == 1  # nosec B101
+    assert report["categories"]["kmsKeys"] == 1  # nosec B101
+    assert report["categories"]["snsTopics"] == 0  # nosec B101
+    assert report["categories"]["eventRules"] == 1  # nosec B101
+    assert report["categories"]["cloudTrailTrails"] == 1  # nosec B101
+    assert report["categories"]["guardDutyDetectors"] == 1  # nosec B101
+    assert report["categories"]["securityHubAccounts"] == 1  # nosec B101
+    assert report["categories"]["configRecorders"] == 1  # nosec B101
+    assert report["categories"]["configDeliveryChannels"] == 1  # nosec B101
+    assert "Weighted cost/quota change: `20`" in rendered  # nosec B101
+    empty_rendered = guardrails_module.render_cost_proxy_markdown(
+        path,
+        guardrails_module.cost_proxy_report({"steps": []}),
+        stack="empty",
+    )
+    assert (  # nosec B101
+        "No create/replace cost or quota driver changes detected." in empty_rendered
+    )
+    assert "| Category | Count |" in empty_rendered  # nosec B101
+    assert "| none | 0 |" in empty_rendered  # nosec B101
+
+    cost_controls_report = guardrails_module.cost_proxy_report(
+        {
+            "steps": [
+                {"op": "create", "newState": {"type": "aws:budgets/budget:Budget"}},
+                {
+                    "op": "create",
+                    "newState": {
+                        "type": "aws:costexplorer/anomalyMonitor:AnomalyMonitor"
+                    },
+                },
+                {
+                    "op": "create",
+                    "newState": {
+                        "type": (
+                            "aws:costexplorer/anomalySubscription:AnomalySubscription"
+                        )
+                    },
+                },
+                {
+                    "op": "create",
+                    "newState": {
+                        "type": ("aws:costexplorer/costAllocationTag:CostAllocationTag")
+                    },
+                },
+                {
+                    "op": "create",
+                    "newState": {"type": "aws:sns/topicSubscription:TopicSubscription"},
+                },
+                {"op": "create", "newState": {"type": "aws:sqs/queue:Queue"}},
+            ]
+        }
+    )
+    assert cost_controls_report["weightedChange"] == 10  # nosec B101
+    assert cost_controls_report["categories"]["budgets"] == 1  # nosec B101
+    assert (  # nosec B101
+        cost_controls_report["categories"]["costAnomalyMonitors"] == 1
+    )
+    assert (  # nosec B101
+        cost_controls_report["categories"]["costAnomalySubscriptions"] == 1
+    )
+    assert cost_controls_report["categories"]["costAllocationTags"] == 1  # nosec B101
+    assert cost_controls_report["categories"]["snsSubscriptions"] == 1  # nosec B101
+    assert cost_controls_report["categories"]["sqsQueues"] == 1  # nosec B101
+
+    json_path = tmp_path / "cost-proxy.json"
+    markdown_path = tmp_path / "cost-proxy.md"
+    assert (  # nosec B101
+        guardrails_module.cli(
+            [
+                "cost-proxy",
+                "--max-weighted-change",
+                "20",
+                str(path),
+            ]
+        )
+        == 0
+    )
+
+    assert (  # nosec B101
+        guardrails_module.cli(
+            [
+                "cost-proxy",
+                "--max-weighted-change",
+                "11",
+                "--output-json",
+                str(json_path),
+                "--output-md",
+                str(markdown_path),
+                str(path),
+            ]
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert "cost proxy blocked" in captured.err  # nosec B101
+    assert "s3Buckets" in markdown_path.read_text(encoding="utf-8")  # nosec B101
+    assert (  # nosec B101
+        json.loads(json_path.read_text(encoding="utf-8"))[0]["weightedChange"] == 20
+    )
+    iam_inputs_path = tmp_path / "iam-inputs.json"
+    iam_inputs_path.write_text("[]", encoding="utf-8")
+    assert (  # nosec B101
+        guardrails_module.preview_input_files([path, iam_inputs_path]) == [path]
+    )
+    assert (  # nosec B101
+        guardrails_module.cli(
+            [
+                "cost-proxy",
+                "--max-weighted-change",
+                "20",
+                str(path),
+                str(iam_inputs_path),
+            ]
+        )
+        == 0
+    )
+    generated_only_markdown_path = tmp_path / "generated-only.md"
+    assert (  # nosec B101
+        guardrails_module.cli(
+            [
+                "cost-proxy",
+                "--output-md",
+                str(generated_only_markdown_path),
+                str(iam_inputs_path),
+            ]
+        )
+        == 0
+    )
+    assert (  # nosec B101
+        "No Pulumi preview files were available"
+        in generated_only_markdown_path.read_text(encoding="utf-8")
+    )
 
 
 def test_extract_iam_validation_inputs_covers_identity_resource_and_inline_policies(
@@ -202,32 +398,6 @@ def test_extract_iam_validation_inputs_covers_identity_resource_and_inline_polic
         and item["validate_policy_resource_type"] == "AWS::S3::Bucket"
         for item in items
     )
-
-
-def test_load_destructive_override_reads_github_event_payload(
-    guardrails_module, tmp_path: Path
-) -> None:
-    """Respect the explicit destructive-change override label only."""
-    event_path = tmp_path / "event.json"
-    event_path.write_text(
-        json.dumps(
-            {"pull_request": {"labels": [{"name": "allow-destructive-infra-change"}]}}
-        ),
-        encoding="utf-8",
-    )
-    empty_path = tmp_path / "empty.json"
-    empty_path.write_text("{}", encoding="utf-8")
-    invalid_labels_path = tmp_path / "invalid-labels.json"
-    invalid_labels_path.write_text(
-        json.dumps({"pull_request": {"labels": "invalid"}}), encoding="utf-8"
-    )
-
-    assert guardrails_module.load_destructive_override(str(event_path)) is True
-    assert guardrails_module.load_destructive_override(str(empty_path)) is False
-    assert (
-        guardrails_module.load_destructive_override(str(invalid_labels_path)) is False
-    )
-    assert guardrails_module.load_destructive_override(None) is False
 
 
 def test_validate_iam_inputs_handles_success_and_failing_findings(
@@ -495,12 +665,7 @@ def test_cli_commands_cover_summary_destructive_gate_iam_inputs_and_validation(
     assert guardrails_module.cli(["summarize", str(preview_path)]) == 0
     assert "Pulumi Preview" in capsys.readouterr().out
 
-    assert (
-        guardrails_module.cli(
-            ["destructive-gate", str(preview_path), "--event-path", str(event_path)]
-        )
-        == 1
-    )
+    assert guardrails_module.cli(["destructive-gate", str(preview_path)]) == 1
     assert "destructive change blocked" in capsys.readouterr().err
 
     assert (
@@ -515,24 +680,7 @@ def test_cli_commands_cover_summary_destructive_gate_iam_inputs_and_validation(
     assert guardrails_module.cli(["validate-iam", str(preview_path)]) == 0
     assert "Validated 1 IAM policy document" in capsys.readouterr().out
 
-    override_event_path = tmp_path / "override.json"
-    override_event_path.write_text(
-        json.dumps(
-            {"pull_request": {"labels": [{"name": "allow-destructive-infra-change"}]}}
-        ),
-        encoding="utf-8",
-    )
-    assert (
-        guardrails_module.cli(
-            [
-                "destructive-gate",
-                str(preview_path),
-                "--event-path",
-                str(override_event_path),
-            ]
-        )
-        == 0
-    )
+    assert guardrails_module.cli(["destructive-gate", str(preview_path)]) == 1
 
 
 def test_validate_iam_cli_short_circuits_when_no_policies_present(
@@ -624,3 +772,16 @@ def test_main_guard_runs_cli_entrypoint(
         sys.argv = original_argv
 
     assert "No IAM policy documents" in capsys.readouterr().out
+
+
+def test_destructive_gate_cli_accepts_safe_preview(
+    guardrails_module, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A valid creation passes the CLI gate without an override or warning."""
+    preview_path = _write_preview(
+        tmp_path / "safe-preview.json",
+        steps=[{"op": "create", "newState": {"type": "aws:s3/bucket:Bucket"}}],
+        summary={"create": 1},
+    )
+    assert guardrails_module.cli(["destructive-gate", str(preview_path)]) == 0
+    assert capsys.readouterr().err == ""

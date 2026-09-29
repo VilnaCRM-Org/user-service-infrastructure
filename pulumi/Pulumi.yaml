@@ -1,4 +1,4 @@
 name: user-service-infrastructure
 runtime:
   name: python
-description: Base Pulumi stack for the infrastructure template project.
+description: Production-ready Pulumi stack for the user-service AWS infrastructure.

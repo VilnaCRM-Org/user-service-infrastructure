@@ -7,7 +7,7 @@ import json
 import os
 import subprocess  # nosec B404
 import sys
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
@@ -22,13 +22,44 @@ CRITICAL_TYPE_PATTERNS = (
     "aws:iam/",
     "aws:kms/",
     "aws:s3/bucket:Bucket",
+    "aws:cloudtrail/trail:Trail",
     "aws:rds/",
     "aws:secretsmanager/",
     "aws:route53/",
     "aws:eks/",
 )
-DESTRUCTIVE_OVERRIDE_LABEL = "allow-destructive-infra-change"
 FAIL_FINDING_TYPES = frozenset({"ERROR", "SECURITY_WARNING"})
+COST_IMPACT_OPS = frozenset({"create", "replace"})
+COST_DRIVER_TYPE_PATTERNS = (
+    ("s3Buckets", "aws:s3/bucket:Bucket", 4),
+    ("s3ReplicationConfigs", "aws:s3/bucketReplicationConfig:", 2),
+    ("kmsKeys", "aws:kms/key:Key", 5),
+    ("iamRoles", "aws:iam/role:Role", 1),
+    ("backupPlans", "aws:backup/plan:Plan", 2),
+    ("backupVaults", "aws:backup/vault:Vault", 2),
+    ("backupSelections", "aws:backup/selection:Selection", 1),
+    ("ecrRepositories", "aws:ecr/repository:Repository", 2),
+    ("snsTopics", "aws:sns/topic:Topic", 1),
+    ("snsSubscriptions", "aws:sns/topicSubscription:TopicSubscription", 1),
+    ("sqsQueues", "aws:sqs/queue:Queue", 1),
+    ("eventRules", "aws:cloudwatch/eventRule:EventRule", 1),
+    ("cloudTrailTrails", "aws:cloudtrail/trail:Trail", 2),
+    ("budgets", "aws:budgets/budget:Budget", 3),
+    ("costAnomalyMonitors", "aws:costexplorer/anomalyMonitor:AnomalyMonitor", 2),
+    (
+        "costAnomalySubscriptions",
+        "aws:costexplorer/anomalySubscription:AnomalySubscription",
+        2,
+    ),
+    ("costAllocationTags", "aws:costexplorer/costAllocationTag:CostAllocationTag", 1),
+    ("guardDutyDetectors", "aws:guardduty/detector:Detector", 2),
+    ("securityHubAccounts", "aws:securityhub/account:Account", 2),
+    ("configRecorders", "aws:cfg/recorder:Recorder", 2),
+    ("configDeliveryChannels", "aws:cfg/deliveryChannel:DeliveryChannel", 2),
+)
+DEFAULT_MAX_COST_PROXY_WEIGHT = 66
+GENERATED_PREVIEW_ARTIFACT_NAMES = frozenset({"iam-inputs.json"})
+COUNT_TABLE_SEPARATOR = "| --- | ---: |"
 
 
 def load_preview(path: Path) -> dict[str, Any]:
@@ -37,6 +68,11 @@ def load_preview(path: Path) -> dict[str, Any]:
     if isinstance(data, dict):
         return data
     raise ValueError(f"{path} must contain a JSON object preview artifact.")
+
+
+def preview_input_files(paths: Sequence[Path]) -> list[Path]:
+    """Return Pulumi preview artifacts, excluding generated helper JSON files."""
+    return [path for path in paths if path.name not in GENERATED_PREVIEW_ARTIFACT_NAMES]
 
 
 def preview_steps(preview: dict[str, Any]) -> list[dict[str, Any]]:
@@ -55,7 +91,7 @@ def summarize_preview(path: Path, *, stack: str | None = None) -> str:
         f"### Pulumi Preview: {stack or path.stem}",
         "",
         "| Operation | Count |",
-        "| --- | ---: |",
+        COUNT_TABLE_SEPARATOR,
     ]
 
     if isinstance(summary, dict) and summary:
@@ -89,6 +125,82 @@ def find_destructive_steps(steps: Sequence[dict[str, Any]]) -> list[dict[str, An
     return destructive_steps
 
 
+def cost_proxy_report(preview: dict[str, Any]) -> dict[str, object]:
+    """Return a static cost/quota proxy summary for create/replace preview steps."""
+    categories = {
+        category: 0 for category, _pattern, _weight in COST_DRIVER_TYPE_PATTERNS
+    }
+    weighted_change = 0
+    resources: list[dict[str, str | int]] = []
+    for step in preview_steps(preview):
+        operation = str(step.get("op", ""))
+        if operation not in COST_IMPACT_OPS:
+            continue
+        resource_type = step_resource_type(step)
+        for category, pattern, weight in COST_DRIVER_TYPE_PATTERNS:
+            if pattern not in resource_type:
+                continue
+            # First match wins so future overlapping patterns do not double-count
+            # a single preview step.
+            categories[category] += 1
+            weighted_change += weight
+            resources.append(
+                {
+                    "operation": operation,
+                    "resourceType": resource_type,
+                    "category": category,
+                    "weight": weight,
+                }
+            )
+            break
+    return {
+        "weightedChange": weighted_change,
+        "categories": categories,
+        "resources": resources,
+    }
+
+
+def render_cost_proxy_markdown(
+    path: Path, report: Mapping[str, object], *, stack: str | None = None
+) -> str:
+    """Render a Markdown cost/quota proxy summary."""
+    categories = cast(Mapping[str, int], report["categories"])
+    lines = [
+        f"### Pulumi Cost Proxy: {stack or path.stem}",
+        "",
+        f"Weighted cost/quota change: `{report['weightedChange']}`",
+        "",
+    ]
+    if all(count == 0 for count in categories.values()):
+        lines.append("No create/replace cost or quota driver changes detected.")
+        lines.append("")
+        lines.extend(["| Category | Count |", COUNT_TABLE_SEPARATOR])
+        lines.append("| none | 0 |")
+        lines.append("")
+        return "\n".join(lines)
+    lines.extend(["| Category | Count |", COUNT_TABLE_SEPARATOR])
+    for category in sorted(categories):
+        count = categories[category]
+        if count:
+            lines.append(f"| {category} | {count} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_no_cost_proxy_inputs_markdown() -> str:
+    """Render non-empty Markdown when only generated helper files were supplied."""
+    lines = [
+        "### Pulumi Cost Proxy",
+        "",
+        (
+            "No Pulumi preview files were available after excluding generated "
+            "helper artifacts."
+        ),
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def extract_iam_validation_inputs(
     path: Path,
 ) -> list[dict[str, str]]:
@@ -100,63 +212,67 @@ def extract_iam_validation_inputs(
             continue
 
         resource_type = step_resource_type(step)
-        for field_name, policy_type in iam_policy_fields(resource_type):
-            document = parse_policy_document(state.get(field_name))
-            if document is None:
-                continue
-            item = {
-                "urn": str(step.get("urn", "")),
-                "resource_type": resource_type,
-                "field": field_name,
-                "policy_type": policy_type,
-                "policy_document": json.dumps(document, sort_keys=True),
-            }
-            validate_policy_resource_type = _validate_policy_resource_type(
-                resource_type,
-                field_name,
-                policy_type,
-            )
-            if validate_policy_resource_type is not None:
-                item["validate_policy_resource_type"] = validate_policy_resource_type
-            inputs.append(item)
-
-        inline_policies = state.get("inlinePolicies")
-        if isinstance(inline_policies, list):
-            for index, policy in enumerate(inline_policies):
-                if not isinstance(policy, dict):
-                    continue
-                document = parse_policy_document(policy.get("policy"))
-                if document is None:
-                    continue
-                inputs.append(
-                    {
-                        "urn": str(step.get("urn", "")),
-                        "resource_type": resource_type,
-                        "field": f"inlinePolicies[{index}].policy",
-                        "policy_type": "IDENTITY_POLICY",
-                        "policy_document": json.dumps(document, sort_keys=True),
-                    }
-                )
+        inputs.extend(_resource_policy_inputs(step, state, resource_type))
+        inputs.extend(_inline_policy_inputs(step, state, resource_type))
     return inputs
 
 
-def load_destructive_override(event_path: str | None) -> bool:
-    """Return whether the current GitHub event opts into destructive changes."""
-    if not event_path:
-        return False
+def _resource_policy_inputs(
+    step: Mapping[str, object],
+    state: Mapping[str, object],
+    resource_type: str,
+) -> list[dict[str, str]]:
+    """Extract direct IAM policy document fields from one preview step."""
+    inputs: list[dict[str, str]] = []
+    for field_name, policy_type in iam_policy_fields(resource_type):
+        document = parse_policy_document(state.get(field_name))
+        if document is None:
+            continue
+        item = {
+            "urn": str(step.get("urn", "")),
+            "resource_type": resource_type,
+            "field": field_name,
+            "policy_type": policy_type,
+            "policy_document": json.dumps(document, sort_keys=True),
+        }
+        validate_policy_resource_type = _validate_policy_resource_type(
+            resource_type,
+            field_name,
+            policy_type,
+        )
+        if validate_policy_resource_type is not None:
+            item["validate_policy_resource_type"] = validate_policy_resource_type
+        inputs.append(item)
+    return inputs
 
-    event = json.loads(Path(event_path).read_text(encoding="utf-8"))
-    pull_request = event.get("pull_request")
-    if not isinstance(pull_request, dict):
-        return False
 
-    labels = pull_request.get("labels", [])
-    if not isinstance(labels, list):
-        return False
-    return any(
-        isinstance(label, dict) and label.get("name") == DESTRUCTIVE_OVERRIDE_LABEL
-        for label in labels
-    )
+def _inline_policy_inputs(
+    step: Mapping[str, object],
+    state: Mapping[str, object],
+    resource_type: str,
+) -> list[dict[str, str]]:
+    """Extract inline IAM policy documents from one preview step."""
+    inline_policies = state.get("inlinePolicies")
+    if not isinstance(inline_policies, list):
+        return []
+
+    inputs: list[dict[str, str]] = []
+    for index, policy in enumerate(inline_policies):
+        if not isinstance(policy, dict):
+            continue
+        document = parse_policy_document(policy.get("policy"))
+        if document is None:
+            continue
+        inputs.append(
+            {
+                "urn": str(step.get("urn", "")),
+                "resource_type": resource_type,
+                "field": f"inlinePolicies[{index}].policy",
+                "policy_type": "IDENTITY_POLICY",
+                "policy_document": json.dumps(document, sort_keys=True),
+            }
+        )
+    return inputs
 
 
 def validate_iam_inputs(inputs: Sequence[dict[str, str]]) -> list[str]:
@@ -344,7 +460,7 @@ def step_resource_type(step: dict[str, Any]) -> str:
 def write_iam_inputs(path: Path, *, preview_paths: Sequence[Path]) -> None:
     """Serialize IAM validation inputs to disk for CI artifact inspection."""
     items: list[dict[str, str]] = []
-    for preview_path in preview_paths:
+    for preview_path in preview_input_files(preview_paths):
         items.extend(extract_iam_validation_inputs(preview_path))
     path.write_text(json.dumps(items, indent=2, sort_keys=True), encoding="utf-8")
 
@@ -359,10 +475,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
     destructive_parser = subparsers.add_parser("destructive-gate")
     destructive_parser.add_argument("preview_files", nargs="+", type=Path)
-    destructive_parser.add_argument(
-        "--event-path",
-        default=os.environ.get("GITHUB_EVENT_PATH"),
-    )
 
     iam_inputs_parser = subparsers.add_parser("iam-inputs")
     iam_inputs_parser.add_argument("preview_files", nargs="+", type=Path)
@@ -370,31 +482,38 @@ def _build_parser() -> argparse.ArgumentParser:
 
     validate_iam_parser = subparsers.add_parser("validate-iam")
     validate_iam_parser.add_argument("preview_files", nargs="+", type=Path)
+
+    cost_parser = subparsers.add_parser("cost-proxy")
+    cost_parser.add_argument("preview_files", nargs="+", type=Path)
+    cost_parser.add_argument(
+        "--max-weighted-change",
+        type=int,
+        default=DEFAULT_MAX_COST_PROXY_WEIGHT,
+    )
+    cost_parser.add_argument("--output-json", type=Path)
+    cost_parser.add_argument("--output-md", type=Path)
     return parser
 
 
 def _run_summarize(preview_files: Sequence[Path]) -> int:
     """Print Markdown summaries for each preview artifact."""
-    for preview_file in preview_files:
+    for preview_file in preview_input_files(preview_files):
         sys.stdout.write(summarize_preview(preview_file))
     return 0
 
 
-def _run_destructive_gate(
-    preview_files: Sequence[Path], *, event_path: str | None
-) -> int:
-    """Fail unless dangerous preview steps were explicitly approved."""
-    override = load_destructive_override(event_path)
+def _run_destructive_gate(preview_files: Sequence[Path]) -> int:
+    """Reject every dangerous preview step without a label exception."""
     findings: list[str] = []
-    for preview_file in preview_files:
+    for preview_file in preview_input_files(preview_files):
         for step in find_destructive_steps(preview_steps(load_preview(preview_file))):
             findings.append(f"{step.get('op')} {step_resource_type(step)}")
 
-    if findings and not override:
+    if findings:
         for finding in findings:
             print(f"destructive change blocked: {finding}", file=sys.stderr)
         print(
-            f"Apply the `{DESTRUCTIVE_OVERRIDE_LABEL}` label only after manual review.",
+            "Revise the plan to preserve protected resources.",
             file=sys.stderr,
         )
         return 1
@@ -404,7 +523,7 @@ def _run_destructive_gate(
 def _run_validate_iam(preview_files: Sequence[Path]) -> int:
     """Validate every extracted IAM document and surface actionable findings."""
     inputs: list[dict[str, str]] = []
-    for preview_file in preview_files:
+    for preview_file in preview_input_files(preview_files):
         inputs.extend(extract_iam_validation_inputs(preview_file))
 
     if not inputs:
@@ -426,6 +545,60 @@ def _run_validate_iam(preview_files: Sequence[Path]) -> int:
     return 0
 
 
+def _run_cost_proxy(
+    preview_files: Sequence[Path],
+    *,
+    max_weighted_change: int,
+    output_json: Path | None,
+    output_md: Path | None,
+) -> int:
+    """Summarize preview cost/quota proxy and fail on large unexpected fanout."""
+    input_files = preview_input_files(preview_files)
+    reports = [
+        {
+            "path": str(preview_file),
+            **cost_proxy_report(load_preview(preview_file)),
+        }
+        for preview_file in input_files
+    ]
+    markdown = (
+        "\n".join(
+            render_cost_proxy_markdown(
+                Path(cast(str, report["path"])),
+                report,
+            )
+            for report in reports
+        )
+        if reports
+        else render_no_cost_proxy_inputs_markdown()
+    )
+    if output_json is not None:
+        output_json.parent.mkdir(parents=True, exist_ok=True)
+        output_json.write_text(
+            json.dumps(reports, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+    if output_md is not None:
+        output_md.parent.mkdir(parents=True, exist_ok=True)
+        output_md.write_text(markdown, encoding="utf-8")
+    sys.stdout.write(markdown)
+
+    failures = [
+        report
+        for report in reports
+        if cast(int, report["weightedChange"]) > max_weighted_change
+    ]
+    if failures:
+        for report in failures:
+            print(
+                f"cost proxy blocked: {report['path']} weighted change "
+                f"{report['weightedChange']} exceeds {max_weighted_change}",
+                file=sys.stderr,
+            )
+        return 1
+    return 0
+
+
 def cli(argv: Sequence[str] | None = None) -> int:
     """Run the requested guardrail helper command."""
     args = _build_parser().parse_args(argv)
@@ -434,7 +607,7 @@ def cli(argv: Sequence[str] | None = None) -> int:
         return _run_summarize(args.preview_files)
 
     if args.command == "destructive-gate":
-        return _run_destructive_gate(args.preview_files, event_path=args.event_path)
+        return _run_destructive_gate(args.preview_files)
 
     if args.command == "iam-inputs":
         write_iam_inputs(args.output, preview_paths=args.preview_files)
@@ -442,6 +615,14 @@ def cli(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "validate-iam":
         return _run_validate_iam(args.preview_files)
+
+    if args.command == "cost-proxy":
+        return _run_cost_proxy(
+            args.preview_files,
+            max_weighted_change=args.max_weighted_change,
+            output_json=args.output_json,
+            output_md=args.output_md,
+        )
 
     raise AssertionError(f"Unhandled command: {args.command}")  # pragma: no cover
 

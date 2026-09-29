@@ -13,7 +13,9 @@ This document records the implemented Python tooling changes from
 ## Runtime model
 
 The Docker workspace keeps its `uv` virtual environment outside the bind-mounted
-repository tree at `/home/dev/.venvs/user-service-infrastructure`.
+repository tree at `/home/dev/.venvs/bootstrap-infrastructure`, matching the
+pinned scaffold image. The image retains its bootstrap-origin environment name;
+the Pulumi project remains `user-service-infrastructure`, with unchanged stack names.
 
 That design matters for two reasons:
 

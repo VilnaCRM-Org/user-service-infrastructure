@@ -51,16 +51,8 @@ def discover_stacks(pulumi_dir: Path, configured_stacks: str | None) -> list[str
     return sorted(
         path.name.removeprefix("Pulumi.").removesuffix(".yaml")
         for path in pulumi_dir.glob("Pulumi.*.yaml")
-        if path.name != "Pulumi.yaml"
+        if path.name not in {"Pulumi.yaml", "Pulumi.example.yaml"}
     )
-
-
-def ensure_empty_passphrase_for_file_backend(env: dict[str, str]) -> dict[str, str]:
-    """Keep file backends non-interactive without touching shared backends."""
-    backend_url = env.get("PULUMI_BACKEND_URL", "")
-    if backend_url.startswith("file://") and "PULUMI_CONFIG_PASSPHRASE" not in env:
-        env["PULUMI_CONFIG_PASSPHRASE"] = ""  # nosec B105
-    return env
 
 
 def ensure_file_backend_directory(backend_url: str) -> None:
@@ -105,3 +97,11 @@ def policy_import_probe(root_dir: Path) -> list[str]:
         "import policy.pack\n"
     )
     return ["-c", probe]
+
+
+def ensure_empty_passphrase_for_file_backend(env: dict[str, str]) -> dict[str, str]:
+    """Keep file backends non-interactive without touching shared backends."""
+    backend_url = env.get("PULUMI_BACKEND_URL", "")
+    if backend_url.startswith("file://") and "PULUMI_CONFIG_PASSPHRASE" not in env:
+        env["PULUMI_CONFIG_PASSPHRASE"] = ""  # nosec B105
+    return env

@@ -152,3 +152,116 @@ ENABLE_AWS_CREDENTIALS=1 make pulumi-preview
 ## Security
 
 Please disclose any vulnerabilities found responsibly – report security issues to the maintainers privately.
+
+
+## Service infrastructure scaffold
+
+Generate a complete repository from the bootstrap repository root:
+
+```sh
+uv run python scripts/scaffold_infrastructure_repository.py \
+  --repository user-service-infrastructure \
+  --destination /tmp/new-user-service-infrastructure
+```
+
+The destination must not exist. The generator never merges into or overwrites an
+existing service repository. Review the generated files before publishing them.
+Copying this template directory alone is insufficient: the generator includes the
+pinned Docker runtime, frozen `uv.lock`, shared Python helper closure, local CI
+configuration action, policy pack, Make targets, authenticated comment intake,
+and saved-plan runner. `scaffold-manifest.json` records every generated file hash,
+the project name, CLI pin and initial capability limit. Keep the manifest with the
+reviewed onboarding artifact; it records generation, not future repository edits.
+
+The baseline exports configuration metadata only. Governance owns its S3 backend,
+KMS key, config secrets and OIDC roles. Operator-owned `github-ci-bootstrap`
+provisions the immutable permission boundary. Deploying
+actual service workloads requires separately reviewed capability and boundary
+changes. Catalog membership grants no general AWS infrastructure authority.
+
+## Governed TEST and PROD deployment
+
+Before granting privileges, create or inspect the actual service GitHub repository
+and pin its immutable repository ID and owner ID in the governance catalog. Never
+replace these identities with name-only trust. Then provision the catalog entry and bootstrap
+boundary inventory in both accounts. Configure the service repository variables
+from governance `githubVariables`, including independent `AWS_TEST_ACCOUNT_ID`
+and `AWS_PROD_ACCOUNT_ID` pins. Create protected `test`, `prod`, `test-preview`
+and `prod-preview` environments with Kravalg as sole reviewer, self-review
+prevention, administrator bypass disabled, and exactly one custom deployment
+rule for the `main` branch. Verify the separate deployment branch-policy API;
+"Protected branches only" can allow every branch. CODEOWNERS covers every file.
+Service applies trust `test` or `prod`; the central governor's `governance`
+environment belongs to the bootstrap repository.
+
+Provision a dedicated evidence GitHub App installed only on this service
+repository. Grant statuses/deployments write and actions/contents/pull-requests
+read, with no AWS or repository-administration permission. Store its signing key
+as `GOVERNANCE_PROMOTION_APP_PRIVATE_KEY` only in the `governance-evidence`
+environment, restricted to exactly the `main` branch with no tags or administrator
+bypass. This environment needs no reviewer gate; it only publishes results from
+the protected jobs. Set `GOVERNANCE_PROMOTION_APP_ID` and
+`GOVERNANCE_PROMOTION_APP_SLUG`, and bind the required `Governance Promotion`
+status to that App ID. Preserve code-owner review, current-push approval, stale
+review dismissal, all required CI checks, and test/prod deployment requirements.
+Use a separate App key per repository to keep signing authority isolated.
+
+Publish the reviewed scaffold to trusted `main`, then dispatch **Initialize
+Service Stack** once for `test` and once for `prod`, approving the corresponding
+protected environment. It verifies the pinned project, CLI, account, backend and
+KMS provider. A successful project-scoped stack listing must confirm absence
+before `stack init`; existing stacks are selected, and API/authorization errors
+fail closed. Initialization never runs the Pulumi program or any resource update.
+Its receipt records the trusted SHA and whether it created backend stack metadata.
+
+After initialization, open a same-repository PR and comment `/pulumi test plan`,
+`/pulumi test up`, `/pulumi prod plan` or `/pulumi prod up`. Maintainers can request
+plans; protected environment approval remains required before credentials are
+issued. Commands bind the original unedited comment, intake run, current PR SHA,
+current permissions and immutable request artifact. A prod plan does not apply
+test. Prod up requires the same-run successful test saved-plan apply and drift,
+then a production saved-plan apply and drift. The service runtime has no IAM
+Access Analyzer grant; local policy and destructive-diff gates still run.
+The trusted final publisher validates both saved-plan artifacts and all apply
+and drift results before recording deployments on the exact PR head. It carries
+the original comment, intake run and base SHA in the evidence. Failed, skipped,
+test-only and plan-only runs cannot publish promotion success.
+
+`make start` builds the pinned local runtime. Every workflow Make target exists
+in the generated checkout; OIDC session variables are forwarded only to the
+container at execution time. No static credential file or value is generated.
+The test account is 891377212104, production is 933245420672, in eu-central-1.
+
+Apply comments and Initialize Service Stack dispatches must be requested by a
+maintainer other than sole environment reviewer Kravalg. Kravalg approves the
+protected environment; the original apply commenter cannot also be the approver.
+
+## Existing template compatibility
+
+The original development metadata component and its four exports remain intact.
+Local integration fixtures use disposable, credential-free file state only for
+stub resources; they do not provide authoritative TEST or PROD state. Shared
+stacks require the governance-owned S3 backend, AWS KMS provider and temporary
+OIDC credentials. No shared passphrase or Pulumi Cloud token is configured.
+
+The old direct-PR `AWS_OIDC_ROLE_ARN` jobs and generic nightly cloud drift job
+are retired. Ordinary PR guardrails preview only the local `dev` metadata program.
+Shared previews, saved-plan applies and post-apply drift use Service Self Deploy.
+Existing quality, security, mutation, release and template-sync automation remains.
+Earlier template documentation describing the generic OIDC/token path is
+historical; the governed TEST/PROD contract above governs shared deployments.
+
+Scheduled TEST and PROD drift runs use Service Scheduled Drift and dedicated main-only `test-drift` and `prod-drift` environments, with config-reader and drift OIDC roles only. Unattended drift requires these environments without required human reviewers and their narrowly bound read-only OIDC trust statements to be installed; source availability alone does not prove that live prerequisite. Apply trust and approvals remain unchanged.
+
+Preview, saved-plan apply, post-apply drift and scheduled drift share a repository/environment/stack concurrency group. Active state operations are never cancelled by a newer request. GitHub keeps only one pending job per group by default, so a newer pending request can replace an older pending request; this is mutual exclusion, not a FIFO delivery guarantee.
+
+The default Compose service does not load `.env` or forward AWS access keys. Cloud Make commands forward temporary credentials by variable name only in GitHub Actions when a session token exists. Local host credentials remain an explicit `ENABLE_AWS_CREDENTIALS=1` opt-in. `pulumi-plan`, `pulumi-up-plan`, `test-drift`, and `initialize-stack` export the selected `PULUMI_STACK`; GitHub tokens are forwarded only for these explicit cloud commands.
+
+The credential-free preview helper (`make test-preview` and
+`scripts/run_pulumi_preview.py`) defaults to the committed `dev` stack when
+`PULUMI_PREVIEW_STACKS` is unset or empty. An explicit stack list overrides that
+local fixture default. Shared TEST/PROD previews use `make pulumi-plan` through
+the protected controller and its exact account-local stack list, backend and KMS
+provider. The general guarded command helper preserves explicit selected-stack
+or multi-stack configuration; the local fixture helper does not silently request
+shared TEST/PROD credentials.

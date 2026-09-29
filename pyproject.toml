@@ -9,23 +9,27 @@ authors = [
     { name = "Mykyta Mozghovoi", email = "n.mozgowoi2017@gmail.com" },
 ]
 dependencies = [
+    "jsonschema==4.26.0",
     "pulumi>=3.200.0,<4",
     "pulumi-aws>=7.0,<8",
     "pulumi-policy>=1.20.0,<2",
+    "pulumi-random==4.19.2",
+    "pulumi-tls==5.3.1",
     "pyyaml>=6,<7",
+    "tomli>=2.0,<3; python_version < '3.11'",
 ]
 
 [dependency-groups]
 dev = [
     "bandit[toml]>=1.8,<2",
-    "cyclonedx-bom>=4.1,<5",
+    "cyclonedx-bom>=5,<6",
     "coverage[toml]>=7.6,<8",
     "deptry>=0.23,<0.24",
     "docstr-coverage>=2.3,<3",
     "import-linter>=2.4,<3",
     "mutmut>=2.4,<3",
     "pip-audit>=2.9,<3",
-    "pytest>=8.0,<9",
+    "pytest>=8.0,<10",
     "pytest-cov>=5.0,<6",
     "radon>=5.1,<6",
     "ruff>=0.15.6,<1",
@@ -54,7 +58,49 @@ targets = ["pulumi", "policy", "scripts"]
 [tool.deptry]
 extend_exclude = [".artifacts", ".pulumi-backend"]
 ignore_notebooks = true
-known_first_party = ["_script_support", "app", "policy"]
+known_first_party = [
+    "_github_environment_controls",
+    "_github_evidence_environment",
+    "_github_repository_controls",
+    "_pulumi_command_support",
+    "_pulumi_stack_config",
+    "governance_paths",
+    "governance_promotion",
+    "poc_backend_observer",
+    "poc_contract",
+    "poc_mail_prerequisite",
+    "poc_phase_admission",
+    "poc_phase_source_adapter",
+    "poc_provider_runtime",
+    "poc_publisher_dispatch",
+    "poc_registry_phase_entrypoint",
+    "poc_registry_plan",
+    "poc_registry_runner",
+    "poc_workload_aliases",
+    "poc_workload_reconciliation",
+    "poc_registry_completion",
+    "service_boundary_worker",
+    "service_execution_process",
+    "service_execution_transport",
+    "service_execution_worker",
+    "service_execution_host",
+    "poc_scheduled_registry_drift",
+    "poc_secret_observation",
+    "poc_source_artifact",
+    "poc_workload_admission",
+    "poc_workload_capabilities",
+    "poc_workload_images",
+    "poc_workload_phase_entrypoint",
+    "pulumi_ci_guardrails",
+    "pulumi_command_preflight",
+    "pulumi_pr_comment",
+    "_script_support",
+    "app",
+    "policy",
+    "reviewed_iam",
+    "reviewed_source_admission",
+    "run_pulumi_command",
+]
 
 [tool.deptry.package_module_name_map]
 pyyaml = ["yaml"]
@@ -109,7 +155,7 @@ allowed_importers = ["app.environment"]
 name = "Pulumi app layering remains one-way"
 type = "layers"
 containers = ["app"]
-layers = ["environment", "guardrails"]
+layers = ["stack", "compute", "data", "messaging", "network", "registry_phase", "registry", "mail_identity", "environment", "guardrails"]
 
 [[tool.importlinter.contracts]]
 name = "Policy pack stays behind the policy entrypoint"
@@ -133,7 +179,7 @@ allowed_importers = ["policy.pack", "policy.guardrails"]
 name = "Policy layering remains one-way"
 type = "layers"
 containers = ["policy"]
-layers = ["pack", "guardrails", "config"]
+layers = ["pack", "guardrails", "reviewed_iam", "config"]
 
 [[tool.importlinter.contracts]]
 name = "Runtime guardrails stay free of Pulumi SDK bindings"

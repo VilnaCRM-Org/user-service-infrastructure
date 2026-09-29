@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import importlib
 import re
+import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -27,162 +30,14 @@ def _triggers(workflow: dict) -> dict:
     return workflow.get("on", workflow.get(True, {}))
 
 
-def test_preview_guardrail_workflow_requires_preview_diff_and_iam_jobs() -> None:
-    """Keep the preview workflow aligned with the repo-local Make entrypoints."""
+def test_preview_guardrail_workflow_remains_credential_free() -> None:
+    """Ordinary PR code cannot request cloud credentials through a legacy path."""
     workflow = _workflow("pulumi-pr-guardrails.yml")
-    jobs = workflow["jobs"]
-    same_repo_with_cloud_config = (
-        "${{ (github.event_name != 'pull_request' || "
-        "github.event.pull_request.head.repo.full_name == github.repository) && "
-        "vars.AWS_OIDC_ROLE_ARN != '' && vars.PULUMI_BACKEND_URL != '' }}"
-    )
-    same_repo_or_skipped = (
-        "${{ always() && needs.preview.result == 'success' && "
-        "(needs.preview_privileged.result == 'success' || "
-        "needs.preview_privileged.result == 'skipped') }}"
-    )
-    destructive_diff_runs = [
-        step.get("run") for step in jobs["destructive_diff"]["steps"] if step.get("run")
-    ]
-    preview_upload_step = next(
-        (
-            step
-            for step in jobs["preview"]["steps"]
-            if step.get("uses", "").startswith("actions/upload-artifact@")
-        ),
-        None,
-    )
-    preview_privileged_upload_step = next(
-        (
-            step
-            for step in jobs["preview_privileged"]["steps"]
-            if step.get("uses", "").startswith("actions/upload-artifact@")
-        ),
-        None,
-    )
-    preview_privileged_oidc_step = next(
-        (
-            step
-            for step in jobs["preview_privileged"]["steps"]
-            if step.get("name") == "Configure AWS credentials via OIDC"
-        ),
-        None,
-    )
-    preview_run_step = next(
-        (
-            step
-            for step in jobs["preview"]["steps"]
-            if step.get("name") == "Run preview guardrail"
-        ),
-        None,
-    )
-    preview_privileged_run_step = next(
-        (
-            step
-            for step in jobs["preview_privileged"]["steps"]
-            if step.get("name") == "Run preview guardrail"
-        ),
-        None,
-    )
-    privileged_download_step = next(
-        (
-            step
-            for step in jobs["destructive_diff"]["steps"]
-            if step.get("name") == "Download privileged preview artifact"
-        ),
-        None,
-    )
-    unprivileged_download_step = next(
-        (
-            step
-            for step in jobs["destructive_diff"]["steps"]
-            if step.get("name") == "Download unprivileged preview artifact"
-        ),
-        None,
-    )
-    iam_download_step = next(
-        (
-            step
-            for step in jobs["iam_validation"]["steps"]
-            if step.get("name") == "Download preview artifact"
-        ),
-        None,
-    )
-    iam_oidc_step = next(
-        (
-            step
-            for step in jobs["iam_validation"]["steps"]
-            if step.get("name") == "Configure AWS credentials via OIDC"
-        ),
-        None,
-    )
-    preview_privileged_if = " ".join(jobs["preview_privileged"]["if"].split())
-    iam_validation_if = " ".join(jobs["iam_validation"]["if"].split())
-    destructive_diff_if = " ".join(jobs["destructive_diff"]["if"].split())
-
-    assert workflow["concurrency"]["cancel-in-progress"] is True
-    assert "if" not in jobs["preview"]
-    assert jobs["preview"]["permissions"] == {"contents": "read"}
-    assert (
-        jobs["preview"]["env"]["PULUMI_BACKEND_URL"]
-        == "file:///workspace/.pulumi-backend"
-    )
-    assert preview_privileged_if == same_repo_with_cloud_config
-    assert jobs["preview_privileged"]["permissions"] == {
-        "contents": "read",
-        "id-token": "write",
-    }
-    assert iam_validation_if == same_repo_with_cloud_config
-    assert destructive_diff_if == same_repo_or_skipped
-    assert set(jobs["destructive_diff"]["needs"]) == {"preview", "preview_privileged"}
-    assert set(jobs["iam_validation"]["needs"]) == {"preview", "preview_privileged"}
-    assert preview_privileged_oidc_step is not None, "preview OIDC step not found"
-    assert iam_oidc_step is not None, "IAM validation OIDC step not found"
-    assert preview_run_step is not None, "preview run step not found"
-    assert preview_privileged_run_step is not None, (
-        "privileged preview run step not found"
-    )
-    assert preview_upload_step is not None, "preview artifact upload step not found"
-    assert preview_upload_step["with"]["name"] == "pulumi-preview-unprivileged"
-    assert preview_privileged_upload_step is not None, (
-        "preview privileged artifact upload step not found"
-    )
-    assert preview_privileged_upload_step["with"]["name"] == "pulumi-preview-privileged"
-    assert "if" not in preview_privileged_oidc_step
-    assert "if" not in iam_oidc_step
-    assert preview_run_step["run"] == "make publish-pulumi-preview-summary"
-    assert preview_privileged_run_step["run"] == "make publish-pulumi-preview-summary"
-    assert preview_privileged_run_step["env"] == {
-        "PULUMI_REQUIRE_SHARED_BACKEND": "true"
-    }
-    assert any(step.get("run") == "make start" for step in jobs["preview"]["steps"])
-    assert any(
-        step.get("run") == "make start" for step in jobs["preview_privileged"]["steps"]
-    )
-    assert privileged_download_step is not None
-    assert privileged_download_step["if"] == (
-        "${{ needs.preview_privileged.result == 'success' }}"
-    )
-    assert privileged_download_step["with"]["name"] == "pulumi-preview-privileged"
-    assert unprivileged_download_step is not None
-    assert unprivileged_download_step["if"] == (
-        "${{ needs.preview_privileged.result != 'success' }}"
-    )
-    assert unprivileged_download_step["with"]["name"] == "pulumi-preview-unprivileged"
-    assert iam_download_step is not None
-    assert iam_download_step["with"]["name"] == "pulumi-preview-privileged"
-    assert any(
-        step.get("run") == "make test-destructive-diff"
-        for step in jobs["destructive_diff"]["steps"]
-    )
-    assert any(
-        'cp "${GITHUB_EVENT_PATH}" .artifacts/github-event.json' in run
-        for run in destructive_diff_runs
-    )
-    assert any(
-        step.get("run") == "make test-iam-validation"
-        for step in jobs["iam_validation"]["steps"]
-    )
+    assert set(workflow["jobs"]) == {"preview", "destructive_diff"}
+    assert workflow["jobs"]["preview"]["env"]["PULUMI_PREVIEW_STACKS"] == "dev"
+    assert "id-token" not in str(workflow)
+    assert "configure-aws-credentials" not in str(workflow)
+    assert workflow["jobs"]["destructive_diff"]["needs"] == ["preview"]
 
 
 def test_security_scan_workflow_runs_repo_make_targets() -> None:
@@ -234,41 +89,16 @@ def test_codeql_workflow_covers_python_and_github_actions() -> None:
     assert any("github/codeql-action/analyze@" in uses for uses in uses_steps)
 
 
-def test_nightly_guardrails_workflow_covers_drift_and_scorecard() -> None:
-    """Keep the scheduled guardrail workflow focused and discoverable."""
+def test_nightly_guardrails_preserves_scorecard_without_legacy_cloud_path() -> None:
+    """Shared drift belongs to protected self-deploy, not generic token variables."""
     workflow = _workflow("nightly-guardrails.yml")
-    jobs = workflow["jobs"]
-    triggers = _triggers(workflow)
-    scorecard_uses = [
-        step.get("uses") for step in jobs["scorecard"]["steps"] if step.get("uses")
-    ]
-    drift_steps = jobs["drift_detection"]["steps"]
-    preflight_step = next(
-        (
-            step
-            for step in drift_steps
-            if step.get("name") == "Validate drift detection prerequisites"
-        ),
-        None,
+    assert set(workflow["jobs"]) == {"scorecard"}
+    assert "PULUMI_ACCESS_TOKEN" not in str(workflow)
+    assert "configure-aws-credentials" not in str(workflow)
+    assert "test_post_apply_drift" in _workflow("self-deploy.yml")["jobs"]
+    assert not any(
+        job.startswith("prod_") for job in _workflow("self-deploy.yml")["jobs"]
     )
-
-    assert "schedule" in triggers
-    assert "workflow_dispatch" in triggers
-    assert workflow["concurrency"]["cancel-in-progress"] is False
-    assert jobs["drift_detection"]["permissions"] == {
-        "contents": "read",
-        "id-token": "write",
-    }
-    assert (
-        jobs["drift_detection"]["env"]["PULUMI_ACCESS_TOKEN"]
-        == "${{ secrets.PULUMI_ACCESS_TOKEN }}"
-    )
-    assert preflight_step is not None, "drift preflight step not found"
-    assert "vars.AWS_OIDC_ROLE_ARN" in preflight_step["run"]
-    assert "vars.PULUMI_BACKEND_URL" in preflight_step["run"]
-    assert any(step.get("run") == "make test-drift" for step in drift_steps)
-    assert any("ossf/scorecard-action@" in uses for uses in scorecard_uses)
-    assert any("upload-sarif@" in uses for uses in scorecard_uses)
 
 
 def test_new_guardrail_scripts_and_configs_are_present() -> None:
@@ -310,9 +140,9 @@ def test_guardrail_docs_are_indexed_from_root_docs() -> None:
     assert GUARDRAILS_DOC.exists()
     assert "ci-guardrails.md" in docs_index
     assert "docs/ci-guardrails.md" in root_readme
-    assert "AWS_OIDC_ROLE_ARN" in content
-    assert "<BRANCH_REF>" in content
-    assert "allowed branch" in content
+    assert "AWS_TEST_CI_CONFIG_ROLE_ARN" in content
+    assert "Service Scheduled Drift" in content
+    assert "credential-free previews" in content
     assert "allow-destructive-infra-change" in content
     assert "CodeQL" in content
     assert "Gitleaks" in content
@@ -335,3 +165,382 @@ def test_new_workflows_keep_actions_pinned_to_full_shas() -> None:
                 assert ACTION_SHA_REF.match(uses), (
                     f"{workflow_name} must pin `{uses}` to a full commit SHA"
                 )
+
+
+def test_scheduled_drift_uses_only_protected_main_read_roles():
+    """Scheduled runs cannot enter comment apply or promotion jobs."""
+    workflow = _workflow("scheduled-drift.yml")
+    dispatch = _workflow("self-deploy.yml")
+    assert set(_triggers(workflow)) == {"schedule"}
+    assert _triggers(workflow)["schedule"] == [{"cron": "17 3 * * *"}]
+    assert set(_triggers(dispatch)) == {"repository_dispatch"}
+    assert set(workflow["jobs"]) == {"scheduled_test_drift", "scheduled_prod_drift"}
+    assert not set(workflow["jobs"]) & set(dispatch["jobs"])
+    assert workflow["name"] == "Service Scheduled Drift"
+    assert dispatch["name"] == "Service Self Deploy"
+    assert workflow["concurrency"] == {
+        "group": "pulumi-command-schedule",
+        "cancel-in-progress": False,
+    }
+    assert "needs.preflight" not in str(workflow)
+    assert "client_payload" not in str(workflow)
+    assert (
+        dispatch["jobs"]["preflight"]["if"]
+        == "github.event_name == 'repository_dispatch'"
+    )
+    for environment in ("test", "prod"):
+        job = workflow["jobs"][f"scheduled_{environment}_drift"]
+        assert (
+            job["if"]
+            == "github.event_name == 'schedule' && github.ref == 'refs/heads/main'"
+        )
+        assert job["environment"] == f"{environment}-drift"
+        assert "needs" not in job
+        assert job["permissions"]["id-token"] == "write"
+        steps = job["steps"]
+        checkouts = [
+            step
+            for step in steps
+            if step.get("uses", "").startswith("actions/checkout@")
+        ]
+        assert all(step["with"]["ref"] == "${{ github.sha }}" for step in checkouts)
+        guard_index = next(
+            i
+            for i, step in enumerate(steps)
+            if step.get("name")
+            == "Verify trusted scheduled revision before credentials"
+        )
+        loader_index = next(
+            i for i, step in enumerate(steps) if step.get("id") == "ci_config"
+        )
+        assert guard_index < loader_index
+        loader = steps[loader_index]["with"]
+        assert loader["environment"] == (
+            "prod-preview" if environment == "prod" else "test"
+        )
+        role_variable = (
+            "AWS_PROD_PREVIEW_CI_CONFIG_ROLE_ARN"
+            if environment == "prod"
+            else "AWS_TEST_CI_CONFIG_ROLE_ARN"
+        )
+        assert loader["config-role-arn"] == "${{ vars." + role_variable + " }}"
+        assert "AWS_DRIFT_ROLE_ARN" in loader["required-keys"]
+        assert "AWS_APPLY_ROLE_ARN" not in loader["required-keys"]
+        role = next(
+            step
+            for step in steps
+            if step.get("uses", "").startswith("aws-actions/configure-aws-credentials@")
+        )
+        assert (
+            role["with"]["role-to-assume"]
+            == "${{ steps.ci_config.outputs.aws-drift-role-arn }}"
+        )
+        assert (
+            role["with"]["allowed-account-ids"]
+            == "${{ vars.AWS_" + environment.upper() + "_ACCOUNT_ID }}"
+        )
+        assert steps[-1]["run"] == "make test-drift"
+        assert "pulumi-up" not in str(job) and "deployments: write" not in str(job)
+
+
+def test_pr_destructive_gates_exclude_scheduled_execution():
+    """The TEST diff gate requires dispatch and the disabled preview dependency."""
+    jobs = _workflow("self-deploy.yml")["jobs"]
+    assert "prod_destructive_diff" not in jobs
+    job = jobs["test_destructive_diff"]
+    assert job["if"] == "github.event_name == 'repository_dispatch'"
+    assert job["needs"] == ["preflight", "test_preview"]
+    assert "id-token" not in job.get("permissions", {})
+    assert "configure-aws-credentials" not in str(job)
+    assert "destructive-gate" in job["steps"][-1]["run"]
+
+
+def test_test_controller_admits_only_reviewed_registry_graph():
+    """TEST registry execution stays behind source and account admission."""
+    workflow = _workflow("self-deploy.yml")
+    jobs = workflow["jobs"]
+    assert set(jobs) == {
+        "preflight",
+        "poc_prepare_source",
+        "test_preview",
+        "test_destructive_diff",
+        "test_apply",
+        "test_post_apply_drift",
+        "test_registry_observation",
+        "test_registry_proof",
+        "test_registry_dispatch",
+        "comment_result",
+    }
+    preflight = jobs["preflight"]
+    assert "id-token" not in preflight["permissions"]
+    assert "configure-aws-credentials" not in str(preflight)
+    assert preflight["steps"][-1]["run"] == (
+        "python3 scripts/pulumi_command_preflight.py --service"
+    )
+    guards = {
+        "poc_prepare_source": (
+            "${{ needs.preflight.result == 'success' && "
+            "needs.preflight.outputs.target_environment == 'test' }}"
+        ),
+        "test_preview": (
+            "${{ needs.poc_prepare_source.result == 'success' && "
+            "needs.preflight.outputs.target_environment == 'test' }}"
+        ),
+        "test_apply": (
+            "${{ needs.preflight.outputs.command == 'up' && "
+            "needs.preflight.outputs.target_environment == 'test' }}"
+        ),
+        "test_post_apply_drift": (
+            "${{ needs.preflight.outputs.command == 'up' && "
+            "needs.preflight.outputs.target_environment == 'test' }}"
+        ),
+        "test_registry_observation": (
+            "${{ needs.preflight.outputs.command == 'up' && "
+            "needs.preflight.outputs.target_environment == 'test' }}"
+        ),
+    }
+    for name, condition in guards.items():
+        assert jobs[name]["if"] == condition
+        assert "preflight" in jobs[name]["needs"]
+    credential_jobs = {
+        name
+        for name, job in jobs.items()
+        if job.get("permissions", {}).get("id-token") == "write"
+        or "configure-aws-credentials" in str(job)
+        or "load-aws-ci-env" in str(job)
+    }
+    assert credential_jobs == {
+        "test_preview",
+        "test_apply",
+        "test_post_apply_drift",
+        "test_registry_observation",
+    }
+    assert "test_destructive_diff" in jobs["test_apply"]["needs"]
+    assert "test_apply" in jobs["test_post_apply_drift"]["needs"]
+    assert "TEST registry proof and application publisher dispatch only" in str(
+        jobs["comment_result"]
+    )
+    assert "workload deployment require separate verification" in str(
+        jobs["comment_result"]
+    )
+
+
+def test_state_operations_share_cross_workflow_stack_mutex():
+    """A cron drift and a PR state operation cannot hold the same stack at once."""
+    load = _workflow
+    workflows = {
+        name: load(name) for name in ("self-deploy.yml", "scheduled-drift.yml")
+    }
+    operations = {"make pulumi-plan", "make pulumi-up-plan", "make test-drift"}
+    state_jobs = {
+        name: (workflow, job)
+        for workflow in workflows.values()
+        for name, job in workflow["jobs"].items()
+        if any(
+            operations.intersection(step.get("run", "").splitlines())
+            or 'service_execution_host.py" execute' in step.get("run", "")
+            for step in job["steps"]
+        )
+    }
+    assert set(state_jobs) == {
+        "test_preview",
+        "test_apply",
+        "test_post_apply_drift",
+        "scheduled_test_drift",
+        "scheduled_prod_drift",
+    }
+    groups = {}
+    for name, (workflow, job) in state_jobs.items():
+        environment = "test" if "test" in name else "prod"
+        group = (
+            "pulumi-state-${{ github.repository }}-" + environment + "-" + environment
+        )
+        assert job["concurrency"] == {"group": group, "cancel-in-progress": False}
+        assert workflow["concurrency"]["group"] != group
+        if name.startswith("scheduled_"):
+            assert job["environment"] == environment + "-drift"
+        else:
+            assert job["environment"] in {environment, environment + "-preview"}
+        groups.setdefault(environment, set()).add(group)
+    assert len(groups["test"]) == len(groups["prod"]) == 1
+    assert groups["test"].isdisjoint(groups["prod"])
+
+
+def _assert_credential_guards(steps):
+    """Every credential hop immediately follows the isolated trusted recheck."""
+    expected_guard = (
+        '"${GITHUB_WORKSPACE}/.trusted/.venv/bin/python" -I '
+        '"${GITHUB_WORKSPACE}/.trusted/scripts/service_execution_host.py" recheck'
+    )
+    for index, step in enumerate(steps):
+        if "load-aws-ci-env" in step.get(
+            "uses", ""
+        ) or "configure-aws-credentials" in step.get("uses", ""):
+            guard = steps[index - 1]
+            assert (
+                " ".join(guard["run"].replace(chr(92) + chr(10), " ").split())
+                == expected_guard
+            )
+            assert "if" not in guard and "continue-on-error" not in guard
+
+
+@pytest.mark.parametrize(
+    "job_id",
+    [
+        "test_preview",
+        "test_apply",
+        "test_post_apply_drift",
+    ],
+)
+@pytest.mark.parametrize(
+    "change,accepted",
+    [
+        ("none", True),
+        ("retarget", False),
+        ("base_moved", False),
+        ("base_missing", False),
+        ("head_moved", False),
+        ("closed", False),
+        ("merged", False),
+        ("checkout_moved", False),
+    ],
+)
+def test_credential_jobs_recheck_authenticated_pr_base(
+    tmp_path, monkeypatch, job_id, change, accepted
+):
+    """Real host and review checks reject moved source before every credential hop."""
+    workflow = _workflow("self-deploy.yml")
+    assert (
+        workflow["jobs"]["preflight"]["outputs"]["base_sha"]
+        == "${{ steps.resolve.outputs.base_sha }}"
+    )
+    job = workflow["jobs"][job_id]
+    steps = job["steps"]
+    assert job["env"]["EXPECTED_BASE_SHA"] == "${{ needs.preflight.outputs.base_sha }}"
+    assert job["env"]["REQUEST_HEAD_SHA"] == "${{ needs.preflight.outputs.head_sha }}"
+    _assert_credential_guards(steps)
+    checkout = steps[0]["with"]
+    assert checkout == {
+        "ref": "${{ github.sha }}",
+        "path": ".trusted",
+        "persist-credentials": False,
+    }
+
+    monkeypatch.syspath_prepend(str(PROJECT_ROOT / "scripts"))
+    host = importlib.import_module("service_execution_host")
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "fixture",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip()
+    head = "a" * 40
+    monkeypatch.setattr(host, "ROOT", tmp_path)
+    for key, value in {
+        "GITHUB_JOB": job_id,
+        "GITHUB_REPOSITORY": "org/repo",
+        "GITHUB_REF": "refs/heads/main",
+        "GITHUB_SHA": base,
+        "GITHUB_WORKFLOW_SHA": base,
+        "EXPECTED_BASE_SHA": base,
+        "REQUEST_HEAD_SHA": head,
+        "REQUEST_PULL_REQUEST_NUMBER": "39",
+        "REQUEST_TARGET_ENVIRONMENT": "test",
+        "REQUEST_COMMAND": "up",
+        "REQUEST_COMMENT_ID": "123",
+        "REQUEST_SOURCE_RUN_ID": "456",
+    }.items():
+        monkeypatch.setenv(key, value)
+    if change == "checkout_moved":
+        monkeypatch.setenv("GITHUB_SHA", "c" * 40)
+        monkeypatch.setenv("GITHUB_WORKFLOW_SHA", "c" * 40)
+    # Intake transport is covered by preflight tests; keep the real review and
+    # installed-checkout validators in this workflow-to-host contract.
+    requester_calls = []
+    monkeypatch.setattr(host.preflight, "revalidate_requester", requester_calls.append)
+    pr = {
+        "number": 39,
+        "state": "OPEN",
+        "isDraft": False,
+        "headRefOid": head,
+        "baseRefOid": base,
+        "baseRefName": "main",
+        "reviewDecision": "APPROVED",
+        "headRepository": {"nameWithOwner": "org/repo"},
+        "baseRepository": {"nameWithOwner": "org/repo"},
+        "author": {"__typename": "User", "id": "U_author", "login": "author"},
+        "latestOpinionatedReviews": {
+            "totalCount": 1,
+            "pageInfo": {"hasNextPage": False, "hasPreviousPage": False},
+            "nodes": [
+                {
+                    "id": "R_review",
+                    "state": "APPROVED",
+                    "commit": {"oid": head},
+                    "author": {
+                        "__typename": "User",
+                        "id": "U_reviewer",
+                        "login": "reviewer",
+                    },
+                }
+            ],
+        },
+    }
+    changes = {
+        "retarget": ("baseRefName", "unprotected"),
+        "base_moved": ("baseRefOid", "c" * 40),
+        "head_moved": ("headRefOid", "c" * 40),
+        "closed": ("state", "CLOSED"),
+        "merged": ("state", "MERGED"),
+    }
+    if change in changes:
+        key, value = changes[change]
+        pr[key] = value
+    elif change == "base_missing":
+        del pr["baseRefOid"]
+
+    def gh(path, *args):
+        if path == "graphql":
+            assert "number=39" in args
+            return {
+                "data": {"repository": {"nameWithOwner": "org/repo", "pullRequest": pr}}
+            }
+        if path == "repos/org/repo/rules/branches/main?per_page=100":
+            return [
+                {
+                    "type": "pull_request",
+                    "parameters": {
+                        "required_approving_review_count": 2,
+                        "require_code_owner_review": True,
+                        "require_last_push_approval": True,
+                        "dismiss_stale_reviews_on_push": True,
+                        "required_review_thread_resolution": True,
+                    },
+                }
+            ]
+        assert path == "repos/org/repo/collaborators/reviewer/permission"
+        return {
+            "permission": "write",
+            "user": {"node_id": "U_reviewer", "login": "reviewer", "type": "User"},
+        }
+
+    monkeypatch.setattr(host.preflight, "gh", gh)
+    assert (host.main(["recheck"]) == 0) is accepted
+    if change != "checkout_moved":
+        assert len(requester_calls) == 1
+        assert requester_calls[0]["head_sha"] == head

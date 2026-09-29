@@ -1,0 +1,9 @@
+# Stage 1 contains no cloud SDK, deployment program, credentials or PR source.
+FROM python:3.11.15-slim-bookworm@sha256:cd67330292a51e2963156f74ff340455d66b2172e9190e99f40dff9357471177
+COPY scripts/service_execution_process.py scripts/service_boundary_worker.py /trusted/scripts/
+WORKDIR /trusted
+# Root PID 1 owns verification; only the fixed smoke child runs as UID 2000.
+# hadolint ignore=DL3002
+USER root
+ENTRYPOINT ["python", "-I", "/trusted/scripts/service_boundary_worker.py"]
+CMD ["disabled"]

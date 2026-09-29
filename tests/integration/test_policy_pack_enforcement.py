@@ -17,10 +17,8 @@ MAIN_PY_TEMPLATE = """import pulumi
 
 class BucketStub(pulumi.ComponentResource):
     def __init__(self, name: str) -> None:
-        super().__init__(
-            "tests:s3/bucket:Bucket",
-            name,
-            {{
+        props = {{
+                "bucket": "bucket",
                 "acl": "{acl}",
                 "logging": {{"targetBucket": "audit-logs", "targetPrefix": "bucket/"}},
                 "serverSideEncryptionConfiguration": {{
@@ -36,9 +34,9 @@ class BucketStub(pulumi.ComponentResource):
                     "Owner": "platform",
                     "CostCenter": "engineering",
                 }},
-            }},
-        )
-        self.register_outputs({{}})
+            }}
+        super().__init__("tests:s3/bucket:Bucket", name, props)
+        self.register_outputs(props)
 
 
 BucketStub("bucket")

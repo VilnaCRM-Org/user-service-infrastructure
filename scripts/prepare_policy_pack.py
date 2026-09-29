@@ -18,7 +18,7 @@ def _link_policy_venv(policy_venv: Path, policy_link: Path) -> None:
         print(
             (
                 "hint: remove the existing path and rerun "
-                "uv run python scripts/prepare_policy_pack.py"
+                "python3 scripts/prepare_policy_pack.py"
             ),
             file=sys.stderr,
         )
@@ -42,8 +42,9 @@ def _imports_available(policy_python: Path, root_dir: Path) -> bool:
 def main() -> int:
     root_dir = repo_root(__file__)
     policy_dir = root_dir / "policy"
-    default_policy_venv = Path.home() / ".venvs" / "user-service-infrastructure"
-    policy_venv = Path(os.environ.get("POLICY_VENV", str(default_policy_venv)))
+    policy_venv = Path(
+        os.environ.get("POLICY_VENV", f"{Path.home()}/.venvs/bootstrap-infrastructure")
+    )
     policy_link = policy_dir / ".venv"
     policy_python = policy_venv / "bin" / "python"
     requirements_file = policy_dir / "requirements.txt"

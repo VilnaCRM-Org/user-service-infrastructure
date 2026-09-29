@@ -291,17 +291,14 @@ def _s3_encryption_rule_items(props: Mapping[str, Any]) -> list[Mapping[str, Any
     return rule_items
 
 
-def _is_sequence(value: object) -> bool:
-    """Return True for list-shaped provider values, never for text."""
-    return isinstance(value, Sequence) and not isinstance(value, (str, bytes))
-
-
 def _singular_and_plural(
     props: Mapping[str, Any], singular: str, plural: str
 ) -> list[object]:
     """Return a V1 singular block followed by the V2 list-shaped blocks."""
     values = props.get(plural)
-    return [props.get(singular), *(values if _is_sequence(values) else ())]
+    if isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
+        return [props.get(singular), *values]
+    return [props.get(singular)]
 
 
 def _has_default_s3_encryption_rule(props: Mapping[str, Any]) -> bool:

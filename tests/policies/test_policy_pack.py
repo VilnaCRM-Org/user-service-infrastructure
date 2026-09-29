@@ -2013,6 +2013,82 @@ def test_production_database_violations_only_apply_to_production_like_stacks(
     )
 
 
+def test_production_documentdb_requires_retention_and_pulumi_protection(
+    policy_runtime: SimpleNamespace,
+) -> None:
+    """DocumentDB clusters and instances are production databases too."""
+    config = _custom_config(policy_runtime)
+    cluster = "aws:docdb/cluster:Cluster"
+    instance = "aws:docdb/clusterInstance:ClusterInstance"
+    prod = {"tags": {"Environment": "prod"}}
+    safe_cluster = {**prod, "deletionProtection": True, "skipFinalSnapshot": False}
+
+    assert policy_runtime.production_database_violations(
+        cluster,
+        {**prod, "deletionProtection": False, "skipFinalSnapshot": True},
+        config,
+    ) == [
+        "Production databases must enable deletion protection.",
+        "Production databases must keep final snapshots enabled.",
+    ]
+    assert policy_runtime.production_database_violations(
+        cluster, safe_cluster, config, protect=False
+    ) == ["Production DocumentDB resources must be Pulumi-protected."]
+    assert (
+        policy_runtime.production_database_violations(
+            cluster, safe_cluster, config, protect=True
+        )
+        == []
+    )
+    assert policy_runtime.production_database_violations(
+        instance, prod, config, protect=False
+    ) == ["Production DocumentDB resources must be Pulumi-protected."]
+    for protect in (True, None):
+        assert (
+            policy_runtime.production_database_violations(
+                instance, prod, config, protect=protect
+            )
+            == []
+        )
+    assert (
+        policy_runtime.production_database_violations(
+            cluster,
+            {"tags": {"Environment": "test"}, "deletionProtection": False},
+            config,
+            protect=False,
+        )
+        == []
+    )
+    assert (
+        policy_runtime.production_database_violations(
+            "aws:rds/instance:Instance",
+            {**prod, "deletionProtection": True, "skipFinalSnapshot": False},
+            config,
+            protect=False,
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize("protect", [False, True, None])
+def test_production_database_pack_validator_reads_pulumi_protection(
+    policy_runtime: SimpleNamespace, protect: bool | None
+) -> None:
+    """The pack passes the engine's protect option to the DocumentDB check."""
+    violations: list[str] = []
+    args = SimpleNamespace(
+        resource_type="aws:docdb/clusterInstance:ClusterInstance",
+        props={"tags": {"Environment": "prod"}},
+        opts=SimpleNamespace(protect=protect),
+    )
+    policy_runtime.require_production_database_safety(args, violations.append)
+    assert violations == (
+        ["Production DocumentDB resources must be Pulumi-protected."]
+        if protect is False
+        else []
+    )
+
+
 def test_open_admin_ports_covers_supported_security_group_shapes(
     policy_runtime: SimpleNamespace,
 ) -> None:

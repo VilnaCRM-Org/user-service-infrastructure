@@ -50,6 +50,14 @@ EBS_VOLUME_TYPE_SUFFIX = "ec2/volume:Volume"
 EFS_FILE_SYSTEM_TYPE_SUFFIX = "efs/fileSystem:FileSystem"
 RDS_CLUSTER_TYPE_SUFFIX = "rds/cluster:Cluster"
 RDS_INSTANCE_TYPE_SUFFIX = "rds/instance:Instance"
+DOCDB_CLUSTER_TYPE_SUFFIX = "docdb/cluster:Cluster"
+DOCDB_CLUSTER_INSTANCE_TYPE_SUFFIX = "docdb/clusterInstance:ClusterInstance"
+DOCDB_TYPE_SUFFIXES = (DOCDB_CLUSTER_TYPE_SUFFIX, DOCDB_CLUSTER_INSTANCE_TYPE_SUFFIX)
+PRODUCTION_DATABASE_TYPE_SUFFIXES = (
+    RDS_CLUSTER_TYPE_SUFFIX,
+    RDS_INSTANCE_TYPE_SUFFIX,
+    *DOCDB_TYPE_SUFFIXES,
+)
 LOAD_BALANCER_TYPE_SUFFIX = "lb/loadBalancer:LoadBalancer"
 SECURITY_GROUP_RULE_TYPE_SUFFIX = "ec2/securityGroupRule:SecurityGroupRule"
 SECURITY_GROUP_TYPE_SUFFIX = "ec2/securityGroup:SecurityGroup"
@@ -493,11 +501,16 @@ def production_database_violations(
     resource_type: str,
     props: Mapping[str, Any],
     config: PolicyConfig = CONFIG,
+    *,
+    protect: bool | None = None,
 ) -> list[str]:
-    """Enforce safer database defaults for production-like environments."""
-    if not _matches_any_resource_type(
-        resource_type, (RDS_CLUSTER_TYPE_SUFFIX, RDS_INSTANCE_TYPE_SUFFIX)
-    ):
+    """Enforce safer database defaults for production-like environments.
+
+    ``protect`` is the Pulumi resource option when the engine supplies it.
+    DocumentDB instances have no deletion-protection or final-snapshot fields;
+    their cluster owns those settings, so instances only require protection.
+    """
+    if not _matches_any_resource_type(resource_type, PRODUCTION_DATABASE_TYPE_SUFFIXES):
         return []
 
     environment = _string_value((extract_tags(props) or {}).get("Environment"))
@@ -505,6 +518,12 @@ def production_database_violations(
         return []
 
     violations: list[str] = []
+    if protect is False and _matches_any_resource_type(
+        resource_type, DOCDB_TYPE_SUFFIXES
+    ):
+        violations.append("Production DocumentDB resources must be Pulumi-protected.")
+    if _matches_resource_type(resource_type, DOCDB_CLUSTER_INSTANCE_TYPE_SUFFIX):
+        return violations
     if not _truthy(props.get("deletionProtection")):
         violations.append("Production databases must enable deletion protection.")
     if _truthy(props.get("skipFinalSnapshot")):

@@ -48,6 +48,7 @@ def _native_numbers(kind, inputs):
             "snapshotRetentionLimit",
         ),
         "aws:sqs/queue:Queue": (
+            "messageRetentionSeconds",
             "receiveWaitTimeSeconds",
             "visibilityTimeoutSeconds",
         ),
@@ -55,6 +56,12 @@ def _native_numbers(kind, inputs):
         # The native saved-plan JSON keeps these integer settings.
         assert type(inputs[field]) is float and inputs[field].is_integer()
         inputs[field] = int(inputs[field])
+
+
+def _native_timeouts(timeouts):
+    """Pulumi saved plans record SDK duration strings as seconds."""
+    units = {"s": 1, "m": 60, "h": 3600}
+    return {key: int(value[:-1]) * units[value[-1]] for key, value in timeouts.items()}
 
 
 @pytest.fixture
@@ -133,6 +140,8 @@ def data(captured):
             "additionalSecretOutputs": row.get("additional_secret_outputs", []),
             "structuredAliases": gate._sdk_aliases(kind),
         }
+        if row.get("custom_timeouts"):
+            goal["customTimeouts"] = _native_timeouts(row["custom_timeouts"])
         value["saved_plan"]["resourcePlans"][urn] = {
             "goal": goal,
             "steps": ["create"],
@@ -1146,4 +1155,269 @@ def test_first_workload_rejects_unreviewed_or_partial_graph(data, mutation):
     }
     mutations[mutation]()
     with pytest.raises(ValueError):
+        gate.validate_first_workload_topology(**data)
+
+
+def _plan_urn(data, name):
+    return next(
+        urn for urn in data["saved_plan"]["resourcePlans"] if urn.endswith(f"::{name}")
+    )
+
+
+def _lifecycle_policy(**selection):
+    return {
+        "rules": [
+            {
+                "rulePriority": 1,
+                "description": (
+                    "Expire untagged images; tagged sha- release images are retained."
+                ),
+                "selection": {
+                    "tagStatus": "untagged",
+                    "countType": "sinceImagePushed",
+                    "countUnit": "days",
+                    "countNumber": 14,
+                    **selection,
+                },
+                "action": {"type": "expire"},
+            }
+        ]
+    }
+
+
+@pytest.mark.parametrize("kind", ["web", "worker"])
+@pytest.mark.parametrize(
+    "policy",
+    [
+        json.dumps(_lifecycle_policy(tagStatus="any")),
+        json.dumps(_lifecycle_policy(tagStatus="tagged", tagPrefixList=["sha-"])),
+        json.dumps(
+            _lifecycle_policy(countType="imageCountMoreThan", countNumber=30)
+        ).replace('"countUnit": "days", ', ""),
+        json.dumps(_lifecycle_policy(countNumber=1)),
+        json.dumps({"rules": []}),
+        "{",
+        gate.registry.UNKNOWN,
+        None,
+    ],
+)
+def test_repository_lifecycle_never_expires_tagged_release_images(data, kind, policy):
+    name = f"user-service-{kind}-repository-lifecycle"
+    assert (
+        json.loads(
+            data["saved_plan"]["resourcePlans"][_plan_urn(data, name)]["goal"][
+                "inputDiff"
+            ]["adds"]["policy"]
+        )
+        == _lifecycle_policy()
+    )
+    _set_matching_input(data, name, ("policy",), policy)
+    with pytest.raises(ValueError, match="workload-repository-lifecycle-inputs"):
+        gate.validate_first_workload_topology(**data)
+
+
+@pytest.mark.parametrize("kind", ["web", "worker"])
+@pytest.mark.parametrize("value", [False, None, "true", 1])
+def test_services_must_wait_for_steady_state(data, kind, value):
+    _set_matching_input(
+        data, f"user-service-{kind}-service", ("waitForSteadyState",), value
+    )
+    with pytest.raises(ValueError, match="private-fargate-service-inputs"):
+        gate.validate_first_workload_topology(**data)
+
+
+@pytest.mark.parametrize(
+    "name,timeouts",
+    [
+        ("user-service-web-service", None),
+        ("user-service-web-service", {}),
+        ("user-service-worker-service", {"create": 600}),
+        ("user-service-worker-service", {"create": 1200, "update": 600}),
+        ("user-service-worker-service", {"create": 600, "update": 600, "delete": 1}),
+        ("user-service-web-service", {"create": 600.5, "update": 600}),
+        ("user-service-send-email", {"create": 600}),
+        ("user-service-documentdb-cluster", {"delete": 60}),
+    ],
+)
+def test_only_services_bound_their_steady_state_wait(data, name, timeouts):
+    goal = data["saved_plan"]["resourcePlans"][_plan_urn(data, name)]["goal"]
+    if timeouts is None:
+        goal.pop("customTimeouts", None)
+    else:
+        goal["customTimeouts"] = timeouts
+    with pytest.raises(ValueError, match="workload-first-topology"):
+        gate.validate_first_workload_topology(**data)
+
+
+def test_service_timeouts_are_seconds_for_create_and_update(data):
+    for kind in ("web", "worker"):
+        goal = data["saved_plan"]["resourcePlans"][
+            _plan_urn(data, f"user-service-{kind}-service")
+        ]["goal"]
+        assert goal["customTimeouts"] == {"create": 600, "update": 600}
+
+
+def _redrive(arn, count=3):
+    return json.dumps({"deadLetterTargetArn": arn, "maxReceiveCount": count})
+
+
+@pytest.mark.parametrize(
+    "work_queue,dead_letter",
+    [
+        ("send-email", "failed-send-email"),
+        ("insert-user-batch", "failed-insert-user-batch"),
+        ("domain-events", "failed-domain-events"),
+    ],
+)
+@pytest.mark.parametrize(
+    "fault", ["dependency", "target", "count", "missing", "dlq-redrive", "retention"]
+)
+def test_work_queues_redrive_to_their_retained_dead_letter_queue(
+    data, work_queue, dead_letter, fault
+):
+    arn = "arn:aws:sqs:eu-central-1:891377212104:"
+    name = f"user-service-{work_queue}"
+    if fault == "dependency":
+        target = _plan_urn(data, f"user-service-{dead_letter}")
+        urn = _plan_urn(data, name)
+        goal = data["saved_plan"]["resourcePlans"][urn]["goal"]
+        goal["dependencies"] = [row for row in goal["dependencies"] if row != target]
+        step = next(row for row in data["preview"]["steps"] if row["urn"] == urn)
+        step["newState"]["dependencies"] = list(goal["dependencies"])
+    elif fault == "target":
+        _set_matching_input(
+            data, name, ("redrivePolicy",), _redrive(arn + "failed-domain-events-x")
+        )
+    elif fault == "count":
+        _set_matching_input(
+            data, name, ("redrivePolicy",), _redrive(arn + dead_letter, count=10)
+        )
+    elif fault == "missing":
+        _set_matching_input(data, name, ("redrivePolicy",), None)
+    elif fault == "dlq-redrive":
+        _set_matching_input(
+            data,
+            f"user-service-{dead_letter}",
+            ("redrivePolicy",),
+            _redrive(arn + work_queue),
+        )
+    else:
+        _set_matching_input(
+            data, f"user-service-{dead_letter}", ("messageRetentionSeconds",), 345600
+        )
+    with pytest.raises(ValueError, match="workload-queue-redrive-inputs"):
+        gate.validate_first_workload_topology(**data)
+
+
+def test_first_create_unknown_redrive_document_keeps_dependency_binding(data):
+    assert json.loads(
+        data["saved_plan"]["resourcePlans"][
+            _plan_urn(data, "user-service-insert-user-batch")
+        ]["goal"]["inputDiff"]["adds"]["redrivePolicy"]
+    ) == {
+        "deadLetterTargetArn": (
+            "arn:aws:sqs:eu-central-1:891377212104:failed-insert-user-batch"
+        ),
+        "maxReceiveCount": 3,
+    }
+    for work_queue in ("send-email", "insert-user-batch", "domain-events"):
+        _set_matching_input(
+            data,
+            f"user-service-{work_queue}",
+            ("redrivePolicy",),
+            gate.registry.UNKNOWN,
+        )
+    gate.validate_first_workload_topology(**data)
+
+
+@pytest.mark.parametrize("kind", ["web", "worker"])
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        (("readonlyRootFilesystem",), False),
+        (("readonlyRootFilesystem",), None),
+        (("mountPoints", 0, "readOnly"), True),
+        (("mountPoints", 0, "containerPath"), "/"),
+        (("mountPoints", 0, "sourceVolume"), "host-root"),
+        (("linuxParameters", "capabilities", "drop"), []),
+        (("linuxParameters", "capabilities", "add"), ["SYS_ADMIN"]),
+        (("linuxParameters", "initProcessEnabled"), True),
+        (("user",), "0"),
+    ],
+)
+def test_containers_keep_read_only_root_and_dropped_capabilities(
+    data, kind, path, value
+):
+    _set_container_field(data, kind, path, value)
+    with pytest.raises(ValueError, match="workload-task-container-runtime"):
+        gate.validate_first_workload_topology(**data)
+
+
+def test_container_hardening_is_exact_per_workload(data):
+    web, worker = (_task_containers(data, kind)[0] for kind in ("web", "worker"))
+    assert web["readonlyRootFilesystem"] is worker["readonlyRootFilesystem"] is True
+    assert worker["linuxParameters"] == {"capabilities": {"drop": ["ALL"]}}
+    dropped = web["linuxParameters"]["capabilities"]["drop"]
+    assert {"NET_BIND_SERVICE", "SETUID", "SETGID"}.isdisjoint(dropped)
+    assert len(dropped) == 11
+    assert [row["containerPath"] for row in web["mountPoints"]] == [
+        "/srv/app/var",
+        "/data",
+        "/config",
+    ]
+    assert [row["containerPath"] for row in worker["mountPoints"]] == [
+        "/srv/app/var",
+        "/run",
+    ]
+    assert "-l /srv/app/var/log/supervisord.log" in worker["command"][-1]
+    environment = {row["name"]: row["value"] for row in worker["environment"]}
+    assert environment["TMPDIR"] == "/srv/app/var/tmp"
+    assert "install -d -m 1777 /srv/app/var/tmp;" in web["command"][-1]
+
+
+@pytest.mark.parametrize("kind", ["web", "worker"])
+@pytest.mark.parametrize(
+    "mutation", ["extra", "missing", "host", "efs", "unknown", "duplicate"]
+)
+def test_task_volumes_are_only_named_ephemeral_storage(data, kind, mutation):
+    urn = _plan_urn(data, f"user-service-{kind}-task")
+    volumes = copy.deepcopy(
+        data["saved_plan"]["resourcePlans"][urn]["goal"]["inputDiff"]["adds"]["volumes"]
+    )
+    if mutation == "extra":
+        volumes.append({"name": "tmp"})
+    elif mutation == "missing":
+        volumes.pop()
+    elif mutation == "host":
+        volumes[0]["hostPath"] = "/"
+    elif mutation == "efs":
+        volumes[0]["efsVolumeConfiguration"] = {"fileSystemId": "fs-1"}
+    elif mutation == "unknown":
+        volumes = gate.registry.UNKNOWN
+    else:
+        volumes.append(copy.deepcopy(volumes[0]))
+    _set_matching_input(data, f"user-service-{kind}-task", ("volumes",), volumes)
+    with pytest.raises(ValueError, match="workload-task-definition-inputs"):
+        gate.validate_first_workload_topology(**data)
+
+
+def test_task_volume_order_is_not_significant(data):
+    for kind in ("web", "worker"):
+        urn = _plan_urn(data, f"user-service-{kind}-task")
+        volumes = data["saved_plan"]["resourcePlans"][urn]["goal"]["inputDiff"]["adds"][
+            "volumes"
+        ]
+        _set_matching_input(
+            data, f"user-service-{kind}-task", ("volumes",), list(reversed(volumes))
+        )
+    gate.validate_first_workload_topology(**data)
+
+
+def test_tmpdir_stays_inside_the_application_volume(data):
+    rows = _task_containers(data, "web")[0]["environment"]
+    rows = [row for row in rows if row["name"] != "TMPDIR"] + [
+        {"name": "TMPDIR", "value": "/tmp"}
+    ]
+    _set_container_field(data, "web", ("environment",), rows)
+    with pytest.raises(ValueError, match="workload-task-container-environment"):
         gate.validate_first_workload_topology(**data)

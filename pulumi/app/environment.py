@@ -113,6 +113,7 @@ class QueueSettings:
     send_email: str
     failed_send_email: str
     insert_user_batch: str
+    failed_insert_user_batch: str
     domain_events: str
     failed_domain_events: str
     health_check: str
@@ -769,6 +770,11 @@ def resolve_stack_settings(
             None,
             config.get("insertUserBatchQueueName"),
             default="insert-user-batch",
+        ),
+        failed_insert_user_batch=resolve_config_value(
+            None,
+            config.get("failedInsertUserBatchQueueName"),
+            default="failed-insert-user-batch",
         ),
         domain_events=resolve_config_value(
             None,

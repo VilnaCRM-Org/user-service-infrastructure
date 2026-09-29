@@ -25,6 +25,60 @@ from app.runtime_secrets import RuntimeSecrets
 
 __all__ = ["ComputePlane"]
 
+# Release images are pushed with immutable sha- tags and stay available for
+# rollback; only untagged leftovers (failed or superseded pushes) expire.
+UNTAGGED_IMAGE_EXPIRY_DAYS = 14
+# Apply fails when ECS never reaches steady state instead of reporting success
+# with flapping tasks. Ten minutes leaves headroom inside the 30-minute TEST apply
+# job after the data plane has been created.
+SERVICE_STEADY_STATE_TIMEOUT = "10m"
+# Docker's default Linux capability set, which Fargate grants unless dropped.
+DEFAULT_CAPABILITIES = (
+    "AUDIT_WRITE",
+    "CHOWN",
+    "DAC_OVERRIDE",
+    "FOWNER",
+    "FSETID",
+    "KILL",
+    "MKNOD",
+    "NET_BIND_SERVICE",
+    "NET_RAW",
+    "SETFCAP",
+    "SETGID",
+    "SETPCAP",
+    "SETUID",
+    "SYS_CHROOT",
+)
+# The FrankenPHP binary carries cap_net_bind_service=+ep to bind :80, and PHP
+# preloads as opcache.preload_user=www-data, which needs SETUID/SETGID. Fargate can
+# add back only SYS_PTRACE, so the web container drops every other default
+# capability; the PHP CLI worker drops them all.
+WEB_REQUIRED_CAPABILITIES = frozenset({"NET_BIND_SERVICE", "SETGID", "SETUID"})
+WEB_DROPPED_CAPABILITIES = [
+    capability
+    for capability in DEFAULT_CAPABILITIES
+    if capability not in WEB_REQUIRED_CAPABILITIES
+]
+WORKER_DROPPED_CAPABILITIES = ["ALL"]
+# The root filesystem is read-only. These ephemeral task-storage volumes cover
+# every path the image entrypoint, PHP, Caddy and supervisord write; PHP and
+# supervisord temporary files use TMPDIR inside the application var volume.
+APPLICATION_TMPDIR = "/srv/app/var/tmp"
+WEB_WRITABLE_PATHS = (
+    ("app-var", "/srv/app/var"),
+    ("caddy-data", "/data"),
+    ("caddy-config", "/config"),
+)
+WORKER_WRITABLE_PATHS = (
+    ("app-var", "/srv/app/var"),
+    ("run", "/run"),
+)
+# supervisord otherwise writes its log and pid file into the read-only WORKDIR.
+WORKER_RUNTIME_COMMAND = (
+    "/usr/bin/supervisord -c /etc/supervisor/supervisord.conf "
+    "-l /srv/app/var/log/supervisord.log -j /srv/app/var/run/supervisord.pid"
+)
+
 
 @dataclass(frozen=True)
 class ComputeOutputs:
@@ -37,6 +91,20 @@ class ComputeOutputs:
     worker_repository_url: pulumi.Input[str]
     web_service_name: pulumi.Input[str]
     worker_service_name: pulumi.Input[str]
+
+
+def _task_volumes(
+    writable_paths: tuple[tuple[str, str], ...],
+) -> list[aws.ecs.TaskDefinitionVolumeArgs]:
+    """Declare one Fargate ephemeral volume per writable container path."""
+    return [aws.ecs.TaskDefinitionVolumeArgs(name=name) for name, _ in writable_paths]
+
+
+def _service_timeouts() -> pulumi.CustomTimeouts:
+    """Bound ECS steady-state waits for service creation and deployments."""
+    return pulumi.CustomTimeouts(
+        create=SERVICE_STEADY_STATE_TIMEOUT, update=SERVICE_STEADY_STATE_TIMEOUT
+    )
 
 
 class ComputePlane(pulumi.ComponentResource):
@@ -237,6 +305,7 @@ class ComputePlane(pulumi.ComponentResource):
             ),
             execution_role_arn=settings.runtime.execution_role_arn,
             task_role_arn=settings.runtime.task_role_arn,
+            volumes=_task_volumes(WEB_WRITABLE_PATHS),
             container_definitions=self._web_container_definitions(
                 settings=settings,
                 image=web_image,
@@ -260,6 +329,7 @@ class ComputePlane(pulumi.ComponentResource):
             ),
             execution_role_arn=settings.runtime.execution_role_arn,
             task_role_arn=settings.runtime.task_role_arn,
+            volumes=_task_volumes(WORKER_WRITABLE_PATHS),
             container_definitions=self._worker_container_definitions(
                 settings=settings,
                 image=worker_image,
@@ -299,8 +369,12 @@ class ComputePlane(pulumi.ComponentResource):
                     target_group_arn=target_group.arn,
                 )
             ],
-            wait_for_steady_state=False,
-            opts=pulumi.ResourceOptions(parent=self, depends_on=[http_listener]),
+            wait_for_steady_state=True,
+            opts=pulumi.ResourceOptions(
+                parent=self,
+                depends_on=[http_listener],
+                custom_timeouts=_service_timeouts(),
+            ),
         )
 
         worker_service = aws.ecs.Service(
@@ -323,8 +397,10 @@ class ComputePlane(pulumi.ComponentResource):
                 security_groups=[network.outputs.service_security_group_id],
                 subnets=network.outputs.app_subnet_ids,
             ),
-            wait_for_steady_state=False,
-            opts=pulumi.ResourceOptions(parent=self),
+            wait_for_steady_state=True,
+            opts=pulumi.ResourceOptions(
+                parent=self, custom_timeouts=_service_timeouts()
+            ),
         )
 
         return ComputeOutputs(
@@ -343,7 +419,7 @@ class ComputePlane(pulumi.ComponentResource):
         logical_name: str,
         repository_name: pulumi.Input[str],
     ) -> None:
-        """Retain existing image lifecycle policy without owning the repository."""
+        """Expire only untagged images; tagged sha- releases stay for rollback."""
         aws.ecr.LifecyclePolicy(
             f"user-service-{logical_name}-lifecycle",
             repository=repository_name,
@@ -352,11 +428,15 @@ class ComputePlane(pulumi.ComponentResource):
                     "rules": [
                         {
                             "rulePriority": 1,
-                            "description": "Retain the most recent production images.",
+                            "description": (
+                                "Expire untagged images; tagged sha- release "
+                                "images are retained."
+                            ),
                             "selection": {
-                                "tagStatus": "any",
-                                "countType": "imageCountMoreThan",
-                                "countNumber": 30,
+                                "tagStatus": "untagged",
+                                "countType": "sinceImagePushed",
+                                "countUnit": "days",
+                                "countNumber": UNTAGGED_IMAGE_EXPIRY_DAYS,
                             },
                             "action": {"type": "expire"},
                         }
@@ -513,6 +593,8 @@ class ComputePlane(pulumi.ComponentResource):
                     "protocol": "tcp",
                 }
             ],
+            writable_paths=WEB_WRITABLE_PATHS,
+            dropped_capabilities=WEB_DROPPED_CAPABILITIES,
         )
 
     def _trusted_proxy_environment(self) -> list[dict[str, pulumi.Input[str]]]:
@@ -556,9 +638,7 @@ class ComputePlane(pulumi.ComponentResource):
             command=[
                 "/bin/sh",
                 "-ec",
-                self._bootstrap_command(
-                    "/usr/bin/supervisord -c /etc/supervisor/supervisord.conf"
-                ),
+                self._bootstrap_command(WORKER_RUNTIME_COMMAND),
             ],
             image=image,
             region=settings.region,
@@ -570,6 +650,8 @@ class ComputePlane(pulumi.ComponentResource):
             ),
             secrets=self._common_secrets(data, runtime_secret_arns),
             port_mappings=None,
+            writable_paths=WORKER_WRITABLE_PATHS,
+            dropped_capabilities=WORKER_DROPPED_CAPABILITIES,
             health_check=(
                 {
                     "command": [
@@ -597,9 +679,11 @@ class ComputePlane(pulumi.ComponentResource):
         environment: list[dict[str, pulumi.Input[str]]],
         secrets: list[dict[str, pulumi.Input[str]]],
         port_mappings: list[dict[str, Any]] | None,
+        writable_paths: tuple[tuple[str, str], ...],
+        dropped_capabilities: list[str],
         health_check: dict[str, Any] | None = None,
     ) -> pulumi.Output[str]:
-        """Serialize a single-container task definition."""
+        """Serialize a hardened single-container task definition."""
         return pulumi.Output.all(
             image,
             pulumi.Output.from_input(environment),
@@ -616,6 +700,18 @@ class ComputePlane(pulumi.ComponentResource):
                         "environment": parts[1],
                         "secrets": parts[2],
                         "portMappings": port_mappings or [],
+                        "readonlyRootFilesystem": True,
+                        "mountPoints": [
+                            {
+                                "sourceVolume": volume,
+                                "containerPath": path,
+                                "readOnly": False,
+                            }
+                            for volume, path in writable_paths
+                        ],
+                        "linuxParameters": {
+                            "capabilities": {"drop": dropped_capabilities}
+                        },
                         **({"healthCheck": health_check} if health_check else {}),
                         "logConfiguration": {
                             "logDriver": "awslogs",
@@ -648,6 +744,7 @@ class ComputePlane(pulumi.ComponentResource):
             {"name": "JWT_ISSUER", "value": settings.runtime.jwt_issuer},
             {"name": "JWT_AUDIENCE", "value": settings.runtime.jwt_audience},
             {"name": "AWS_EMF_NAMESPACE", "value": settings.runtime.emf_namespace},
+            {"name": "TMPDIR", "value": APPLICATION_TMPDIR},
             {"name": "AWS_SQS_VERSION", "value": "latest"},
             {"name": "AWS_SQS_REGION", "value": settings.region},
             {
@@ -830,6 +927,7 @@ class ComputePlane(pulumi.ComponentResource):
         return (
             "set -eu; "
             "install -d -m 700 /srv/app/var/run/secrets; "
+            f"install -d -m 1777 {APPLICATION_TMPDIR}; "
             'printf "%s" "$OAUTH_PRIVATE_KEY_PEM"'
             " > /srv/app/var/run/secrets/oauth-private.pem; "
             'printf "%s" "$OAUTH_PUBLIC_KEY_PEM"'

@@ -223,6 +223,11 @@ def _probe(root, mode, mutation, coverage_path):
                 "dependencies": list(request.dependencies),
                 "version": request.version,
                 "additional_secret_outputs": list(request.additionalSecretOutputs),
+                "custom_timeouts": {
+                    key: getattr(request.customTimeouts, key)
+                    for key in ("create", "update", "delete")
+                    if getattr(request.customTimeouts, key)
+                },
             }
             return result
 

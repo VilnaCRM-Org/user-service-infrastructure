@@ -61,13 +61,27 @@ protection and a fixed final snapshot. The DocumentDB cluster must use its own
 `docdb5.0` parameter group with `tls`, `audit_logs` and `profiler` enabled
 (`profiler_threshold_ms` 100) and depend on pre-created `/aws/docdb/<cluster>/audit`
 and `/aws/docdb/<cluster>/profiler` log groups with 30-day retention. It also
-requires all six SQS queues to keep AWS-managed KMS encryption, long polling and
+requires all seven SQS queues to keep AWS-managed KMS encryption, long polling and
 their fixed visibility timeout. It pins their physical names to the TEST PoC
 defaults, including `health-check-queue`, and binds each application transport DSN
-to its fixed queue name, TEST account, region and `auto_setup=false`. These checks
-operate on the saved native plan and preview together; live resource identifiers
-and effective cloud behavior still require the accepted-result observer and manual
-TEST acceptance.
+to its fixed queue name, TEST account, region and `auto_setup=false`. The
+`send-email`, `insert-user-batch` and `domain-events` queues must depend on and
+redrive to their own 14-day dead-letter queue (`failed-send-email`,
+`failed-insert-user-batch`, `failed-domain-events`) with `maxReceiveCount` 3; a
+first-create redrive document may still be unknown. Both ECR lifecycle policies
+may expire only untagged images after 14 days, so tagged `sha-` release images
+stay available for rollback. Both ECS services must wait for steady state with
+10-minute create/update timeouts, so an apply fails instead of reporting success
+while tasks never become healthy. Both containers run with a read-only root
+filesystem: web writes only `/srv/app/var`, `/data` and `/config`, worker writes
+only `/srv/app/var` and `/run`, PHP/supervisord temporary files use
+`TMPDIR=/srv/app/var/tmp`, and the task definitions declare only those named
+ephemeral volumes. The worker drops all Linux capabilities. The web container
+drops every Docker default except `NET_BIND_SERVICE` (FrankenPHP binds `:80`
+through a file capability) and `SETUID`/`SETGID` (PHP preloads as
+`opcache.preload_user=www-data`). These checks operate on the saved native plan
+and preview together; live resource identifiers and effective cloud behavior
+still require the accepted-result observer and manual TEST acceptance.
 The generated configuration also fixes the application's JWT issuer/audience and
 metrics namespace to its TEST runtime contract. The protected config overlay and
 native task-definition gate reject changes to those three public values.
@@ -82,6 +96,16 @@ disabled; any value other than native `false` rejects. It never calls
 `GetSecretValue`. On its own this checker does not authenticate the checkpoint or
 AWS session. The installed runner composes it with authenticated private
 checkpoint reads after the first saved-plan apply; it still issues no receipt.
+
+Two container follow-ups need a `user-service` image change rather than a task
+definition change. The image has no non-root user and keeps root-owned
+application files, so the containers still run as root. Dropping all web
+capabilities also needs FrankenPHP without its `cap_net_bind_service` file
+capability on an unprivileged port and no `opcache.preload_user` switch. The
+worker image's `worker-healthcheck` calls `supervisorctl` without `-c`, so it
+reads Alpine's `/etc/supervisord.conf` socket path instead of the running
+`/run/supervisor.sock`; with steady-state waiting, a declared health command
+that uses it keeps the worker unhealthy and fails the apply.
 
 Live prerequisites remain external: installed central runtime/deployment IAM and
 the exact SSM read grant in bootstrap #219; completed registry proof; authenticated

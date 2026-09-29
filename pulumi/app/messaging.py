@@ -23,7 +23,7 @@ class MessagingOutputs:
 
 
 class MessagingPlane(pulumi.ComponentResource):
-    """Provision application queues, including the read-only health-check target."""
+    """Provision application queues, dead-letter queues and the health target."""
 
     outputs: MessagingOutputs
 
@@ -77,7 +77,7 @@ class MessagingPlane(pulumi.ComponentResource):
         )
 
     def _build_managed_outputs(self, settings: StackSettings) -> MessagingOutputs:
-        """Create the six queues without service-owned IAM or credentials."""
+        """Create the seven queues without service-owned IAM or credentials."""
         failed_send_email = self._create_queue(
             logical_name="failed-send-email",
             queue_name=settings.queues.failed_send_email,
@@ -87,6 +87,12 @@ class MessagingPlane(pulumi.ComponentResource):
         failed_domain_events = self._create_queue(
             logical_name="failed-domain-events",
             queue_name=settings.queues.failed_domain_events,
+            retention_seconds=1_209_600,
+            settings=settings,
+        )
+        failed_insert_user_batch = self._create_queue(
+            logical_name="failed-insert-user-batch",
+            queue_name=settings.queues.failed_insert_user_batch,
             retention_seconds=1_209_600,
             settings=settings,
         )
@@ -100,6 +106,7 @@ class MessagingPlane(pulumi.ComponentResource):
             logical_name="insert-user-batch",
             queue_name=settings.queues.insert_user_batch,
             settings=settings,
+            redrive_policy=self._redrive_policy(failed_insert_user_batch.arn),
         )
         domain_events = self._create_queue(
             logical_name="domain-events",
@@ -117,6 +124,7 @@ class MessagingPlane(pulumi.ComponentResource):
             "sendEmail": send_email.id,
             "failedSendEmail": failed_send_email.id,
             "insertUserBatch": insert_user_batch.id,
+            "failedInsertUserBatch": failed_insert_user_batch.id,
             "domainEvents": domain_events.id,
             "failedDomainEvents": failed_domain_events.id,
             "healthCheck": health_check.id,
@@ -125,6 +133,7 @@ class MessagingPlane(pulumi.ComponentResource):
             "sendEmail": send_email.arn,
             "failedSendEmail": failed_send_email.arn,
             "insertUserBatch": insert_user_batch.arn,
+            "failedInsertUserBatch": failed_insert_user_batch.arn,
             "domainEvents": domain_events.arn,
             "failedDomainEvents": failed_domain_events.arn,
             "healthCheck": health_check.arn,
@@ -162,6 +171,7 @@ class MessagingPlane(pulumi.ComponentResource):
             "sendEmail": settings.queues.send_email,
             "failedSendEmail": settings.queues.failed_send_email,
             "insertUserBatch": settings.queues.insert_user_batch,
+            "failedInsertUserBatch": settings.queues.failed_insert_user_batch,
             "domainEvents": settings.queues.domain_events,
             "failedDomainEvents": settings.queues.failed_domain_events,
             "healthCheck": settings.queues.health_check,

@@ -53,6 +53,7 @@ QUEUE_NAMES = {
     "send-email": "send-email",
     "failed-send-email": "failed-send-email",
     "insert-user-batch": "insert-user-batch",
+    "failed-insert-user-batch": "failed-insert-user-batch",
     "domain-events": "domain-events",
     "failed-domain-events": "failed-domain-events",
     "health-check": "health-check-queue",
@@ -67,6 +68,60 @@ DOCUMENTDB_PARAMETERS = [
         ("tls", "enabled"),
     )
 ]
+# Every consumed work queue redrives to its own retained dead-letter queue.
+QUEUE_DEAD_LETTERS = {
+    "send-email": "failed-send-email",
+    "insert-user-batch": "failed-insert-user-batch",
+    "domain-events": "failed-domain-events",
+}
+DEAD_LETTER_RETENTION_SECONDS = 1_209_600
+QUEUE_MAX_RECEIVE_COUNT = 3
+# Tagged sha- release images stay available for rollback; only untagged expire.
+REPOSITORY_LIFECYCLE_POLICY = {
+    "rules": [
+        {
+            "rulePriority": 1,
+            "description": (
+                "Expire untagged images; tagged sha- release images are retained."
+            ),
+            "selection": {
+                "tagStatus": "untagged",
+                "countType": "sinceImagePushed",
+                "countUnit": "days",
+                "countNumber": 14,
+            },
+            "action": {"type": "expire"},
+        }
+    ]
+}
+# Read-only containers write only to per-task ephemeral volumes.
+CONTAINER_WRITABLE_PATHS = {
+    "web": (
+        ("app-var", "/srv/app/var"),
+        ("caddy-data", "/data"),
+        ("caddy-config", "/config"),
+    ),
+    "worker": (("app-var", "/srv/app/var"), ("run", "/run")),
+}
+# Web keeps only NET_BIND_SERVICE, SETUID and SETGID from Docker's defaults.
+CONTAINER_DROPPED_CAPABILITIES = {
+    "web": [
+        "AUDIT_WRITE",
+        "CHOWN",
+        "DAC_OVERRIDE",
+        "FOWNER",
+        "FSETID",
+        "KILL",
+        "MKNOD",
+        "NET_RAW",
+        "SETFCAP",
+        "SETPCAP",
+        "SYS_CHROOT",
+    ],
+    "worker": ["ALL"],
+}
+# Native saved plans record custom timeouts in seconds.
+SERVICE_CUSTOM_TIMEOUTS = {"create": 600, "update": 600}
 QUEUE_ENVIRONMENT_NAMES = {
     "SEND_EMAIL_TRANSPORT_DSN": "send-email",
     "FAILED_EMAIL_TRANSPORT_DSN": "failed-send-email",
@@ -207,14 +262,7 @@ def _application_graph(add, planes):
             protect=kind
             in ("docdb/cluster:Cluster", "docdb/clusterInstance:ClusterInstance"),
         )
-    for name in (
-        "send-email",
-        "failed-send-email",
-        "insert-user-batch",
-        "domain-events",
-        "failed-domain-events",
-        "health-check",
-    ):
+    for name in QUEUE_NAMES:
         add(f"user-service-{name}", "aws:sqs/queue:Queue", planes["messaging"])
     compute = {
         "ecs-cluster": "ecs/cluster:Cluster",
@@ -273,13 +321,14 @@ def _new_goal(urn, plan, graph, provider_id):
     _check(
         not any(
             goal.get(key)
-            for key in (
-                "aliases",
-                "id",
-                "ignoreChanges",
-                "deleteBeforeReplace",
-                "customTimeouts",
-            )
+            for key in ("aliases", "id", "ignoreChanges", "deleteBeforeReplace")
+        )
+    )
+    # Only ECS services bound their steady-state wait; nothing else overrides.
+    _check(
+        unchanged._same(
+            goal.get("customTimeouts") or {},
+            SERVICE_CUSTOM_TIMEOUTS if kind == "aws:ecs/service:Service" else {},
         )
     )
     _check(unchanged._same(goal.get("structuredAliases", []), _sdk_aliases(kind)))
@@ -356,6 +405,8 @@ def validate_first_workload_topology(
     _managed_data_inputs(desired)
     _documentdb_observability_inputs(desired)
     _encrypted_queue_inputs(desired)
+    _queue_redrive_inputs(desired, projection)
+    _repository_lifecycle_inputs(desired)
     _fargate_service_inputs(desired)
     seen = _validate_workload_steps(preview["steps"], baseline, graph, desired)
     required = {
@@ -642,7 +693,7 @@ def _documentdb_observability_inputs(desired):
 
 
 def _encrypted_queue_inputs(desired):
-    """Require the fixed six queues to use AWS-managed SQS encryption."""
+    """Require the fixed seven queues to use AWS-managed SQS encryption."""
     for logical, physical in QUEUE_NAMES.items():
         inputs = _inputs(desired, f"user-service-{logical}")
         require(
@@ -666,6 +717,59 @@ def _encrypted_queue_inputs(desired):
         )
 
 
+def _queue_redrive_inputs(desired, projection):
+    """Bind each work queue to its retained dead-letter queue.
+
+    A first-create dead-letter ARN is unknown, so the redrive document may be the
+    whole-value unknown sentinel; the dependency edge must still be present.
+    """
+    label = "workload-queue-redrive-inputs"
+    names = {urn.rsplit("::", 1)[-1]: urn for urn in desired}
+    prefix = f"arn:aws:sqs:{projection.contract['region']}:"
+    prefix += f"{projection.contract['account_id']}:"
+    for source, dead_letter in QUEUE_DEAD_LETTERS.items():
+        row = desired[names[f"user-service-{source}"]]
+        dependencies = row.get("dependencies")
+        require(
+            type(dependencies) is list
+            and names[f"user-service-{dead_letter}"] in dependencies,
+            label,
+        )
+        raw = row["inputs"].get("redrivePolicy")
+        if raw != registry.UNKNOWN:
+            require(
+                unchanged._same(
+                    _json_value(raw, label),
+                    {
+                        "deadLetterTargetArn": prefix + QUEUE_NAMES[dead_letter],
+                        "maxReceiveCount": QUEUE_MAX_RECEIVE_COUNT,
+                    },
+                ),
+                label,
+            )
+        target = _inputs(desired, f"user-service-{dead_letter}")
+        require(
+            "redrivePolicy" not in target
+            and unchanged._same(
+                target.get("messageRetentionSeconds"), DEAD_LETTER_RETENTION_SECONDS
+            ),
+            label,
+        )
+
+
+def _repository_lifecycle_inputs(desired):
+    """Never expire tagged release images that rollback may still need."""
+    label = "workload-repository-lifecycle-inputs"
+    for kind in ("web", "worker"):
+        raw = _inputs(desired, f"user-service-{kind}-repository-lifecycle").get(
+            "policy"
+        )
+        require(
+            unchanged._same(_json_value(raw, label), REPOSITORY_LIFECYCLE_POLICY),
+            label,
+        )
+
+
 def _fargate_service_inputs(desired):
     """Require private, noninteractive Fargate services with rollback enabled."""
     for kind in ("web", "worker"):
@@ -674,7 +778,8 @@ def _fargate_service_inputs(desired):
             inputs.get("launchType") == "FARGATE"
             and type(inputs.get("desiredCount")) is int
             and inputs["desiredCount"] > 0
-            and inputs.get("enableExecuteCommand") is False,
+            and inputs.get("enableExecuteCommand") is False
+            and inputs.get("waitForSteadyState") is True,
             "workload-private-fargate-service-inputs",
         )
         _fargate_breaker(inputs.get("deploymentCircuitBreaker"))
@@ -741,11 +846,13 @@ def _task_container_inputs(desired, projection):
                 "networkMode",
                 "requiresCompatibilities",
                 "runtimePlatform",
+                "volumes",
                 "containerDefinitions",
             }
             and inputs.get("family") == f"{registry.PROJECT}-test-{kind}",
             "workload-task-definition-inputs",
         )
+        _task_volumes(inputs.get("volumes"), kind)
         for field in ("cpu", "memory"):
             # Exact capacity is baseline configuration, absent from this projection.
             require(
@@ -766,6 +873,22 @@ def _task_container_inputs(desired, projection):
         _container_secrets(container["secrets"], projection)
 
 
+def _task_volumes(volumes, kind):
+    """Allow only named ephemeral task storage, never host or network mounts."""
+    label = "workload-task-definition-inputs"
+    require(type(volumes) is list and all(type(row) is dict for row in volumes), label)
+    require(
+        unchanged._same(
+            sorted(volumes, key=lambda row: str(row.get("name"))),
+            sorted(
+                ({"name": name} for name, _ in CONTAINER_WRITABLE_PATHS[kind]),
+                key=lambda row: row["name"],
+            ),
+        ),
+        label,
+    )
+
+
 def _container_dependencies(desired, kind):
     names = {urn.rsplit("::", 1)[-1]: urn for urn in desired}
     targets = {f"user-service-{kind}-logs"}
@@ -779,17 +902,22 @@ def _container_dependencies(desired, kind):
     )
 
 
-def _container_json(raw):
-    label = "workload-task-container-json"
+def _json_value(raw, label):
+    """Parse one bounded JSON input with duplicate keys and NaN rejected."""
     require(type(raw) is str and 0 < len(raw.encode()) <= 65536, label)
     try:
-        containers = json.loads(
+        return json.loads(
             raw,
             object_pairs_hook=poc_contract._pairs,
             parse_constant=poc_contract._reject_nonfinite,
         )
     except (ValueError, RecursionError):
         raise ValueError(label) from None
+
+
+def _container_json(raw):
+    label = "workload-task-container-json"
+    containers = _json_value(raw, label)
     require(
         type(containers) is list
         and len(containers) == 1
@@ -806,6 +934,14 @@ def _container_runtime(container, kind, desired, projection):
         "essential": True,
         "command": _container_command(kind),
         "portMappings": [],
+        "readonlyRootFilesystem": True,
+        "mountPoints": [
+            {"sourceVolume": volume, "containerPath": path, "readOnly": False}
+            for volume, path in CONTAINER_WRITABLE_PATHS[kind]
+        ],
+        "linuxParameters": {
+            "capabilities": {"drop": CONTAINER_DROPPED_CAPABILITIES[kind]}
+        },
         "logConfiguration": {
             "logDriver": "awslogs",
             "options": {
@@ -841,10 +977,14 @@ def _container_runtime(container, kind, desired, projection):
 def _container_command(kind):
     runtime = {
         "web": "frankenphp run --config /etc/caddy/Caddyfile",
-        "worker": "/usr/bin/supervisord -c /etc/supervisor/supervisord.conf",
+        "worker": (
+            "/usr/bin/supervisord -c /etc/supervisor/supervisord.conf "
+            "-l /srv/app/var/log/supervisord.log -j /srv/app/var/run/supervisord.pid"
+        ),
     }[kind]
     bootstrap = (
         "set -eu; install -d -m 700 /srv/app/var/run/secrets; "
+        "install -d -m 1777 /srv/app/var/tmp; "
         'printf "%s" "$OAUTH_PRIVATE_KEY_PEM"'
         " > /srv/app/var/run/secrets/oauth-private.pem; "
         'printf "%s" "$OAUTH_PUBLIC_KEY_PEM"'
@@ -891,6 +1031,7 @@ def _container_environment(rows, kind, projection):
         "JWT_ISSUER": "vilnacrm-user-service",
         "JWT_AUDIENCE": "vilnacrm-api",
         "AWS_EMF_NAMESPACE": "UserService/BusinessMetrics",
+        "TMPDIR": "/srv/app/var/tmp",
         "SOCIAL_OAUTH_ENABLED": "false",
         "OAUTH_ENCRYPTION_KEY_TYPE": "plain",
         "AWS_SQS_VERSION": "latest",

@@ -1608,7 +1608,7 @@ def test_registry_full_stack_owner_and_images() -> None:
         "healthcheck-secret" in str(row["name"]) for row in recorder.resources
     )
     queues = [row for row in recorder.resources if row["type"] == "aws:sqs/queue:Queue"]
-    assert len(queues) == 6
+    assert len(queues) == 7
     assert "health-check-queue" in {row["inputs"]["name"] for row in queues}
     for resource in tasks:
         container = json.loads(resource["inputs"]["containerDefinitions"])[0]
@@ -1976,3 +1976,165 @@ def test_documentdb_retention_does_not_depend_on_environment(environment) -> Non
         f"user-service-{environment}-docdb-final"
     )
     assert monitor.options["user-service-documentdb-cluster"]["protect"] is True
+
+
+def test_managed_queues_redrive_every_work_queue_to_a_dead_letter_queue() -> None:
+    resources, monitor = _managed_registrations(
+        {"failedInsertUserBatchQueueName": "custom-failed-batch"}
+    )
+    queues = {
+        name: row["inputs"]
+        for name, row in resources.items()
+        if row["type"] == "aws:sqs/queue:Queue"
+    }
+    assert len(queues) == 7
+    dead_letter = queues["user-service-failed-insert-user-batch"]
+    assert dead_letter["name"] == "custom-failed-batch"
+    assert dead_letter["messageRetentionSeconds"] == 1_209_600
+    assert "redrivePolicy" not in dead_letter
+    for source, target in (
+        ("send-email", "failed-send-email"),
+        ("insert-user-batch", "failed-insert-user-batch"),
+        ("domain-events", "failed-domain-events"),
+    ):
+        inputs = queues[f"user-service-{source}"]
+        assert inputs["messageRetentionSeconds"] == 345_600
+        assert json.loads(inputs["redrivePolicy"]) == {
+            "deadLetterTargetArn": (
+                "arn:aws:sqs:eu-central-1:123456789012:"
+                + queues[f"user-service-{target}"]["name"]
+            ),
+            "maxReceiveCount": 3,
+        }
+        assert (
+            monitor.urns[f"user-service-{target}"]
+            in (monitor.options[f"user-service-{source}"]["dependencies"])
+        )
+    assert "redrivePolicy" not in queues["user-service-health-check"]
+
+
+def test_offline_preview_exports_the_insert_batch_dead_letter_queue() -> None:
+    def program() -> None:
+        stack_component = UserServiceStack("offline-dlq")
+        _assert_output_value(
+            pulumi.Output.from_input(
+                stack_component.messaging.outputs.queue_urls["failedInsertUserBatch"]
+            ),
+            "https://sqs.eu-central-1.amazonaws.com/preview/failed-insert-user-batch",
+        )
+        _assert_output_value(
+            pulumi.Output.from_input(
+                stack_component.messaging.outputs.queue_arns["failedInsertUserBatch"]
+            ),
+            "arn:aws:sqs:eu-central-1:preview:failed-insert-user-batch",
+        )
+
+    with mocked_pulumi_context({"deploymentMode": "preview"}):
+        _run_pulumi_program(program)
+
+
+def test_ecr_lifecycle_expires_only_untagged_images() -> None:
+    resources, _ = _managed_registrations()
+    for kind in ("web", "worker"):
+        lifecycle = resources[f"user-service-{kind}-repository-lifecycle"]
+        assert json.loads(lifecycle["inputs"]["policy"]) == {
+            "rules": [
+                {
+                    "rulePriority": 1,
+                    "description": (
+                        "Expire untagged images; tagged sha- release images are "
+                        "retained."
+                    ),
+                    "selection": {
+                        "tagStatus": "untagged",
+                        "countType": "sinceImagePushed",
+                        "countUnit": "days",
+                        "countNumber": 14,
+                    },
+                    "action": {"type": "expire"},
+                }
+            ]
+        }
+
+
+def test_managed_services_wait_for_steady_state_with_bounded_timeouts() -> None:
+    resources, monitor = _managed_registrations()
+    for kind in ("web", "worker"):
+        name = f"user-service-{kind}-service"
+        assert resources[name]["inputs"]["waitForSteadyState"] is True
+        assert monitor.options[name]["customTimeouts"] == {
+            "create": "10m",
+            "update": "10m",
+            "delete": "",
+        }
+    assert all(
+        options["customTimeouts"] == {"create": "", "update": "", "delete": ""}
+        for name, options in monitor.options.items()
+        if name not in {"user-service-web-service", "user-service-worker-service"}
+    )
+
+
+def test_managed_containers_run_read_only_with_dropped_capabilities() -> None:
+    resources, _ = _managed_registrations()
+    expected = {
+        "web": (
+            [
+                ("app-var", "/srv/app/var"),
+                ("caddy-data", "/data"),
+                ("caddy-config", "/config"),
+            ],
+            [
+                "AUDIT_WRITE",
+                "CHOWN",
+                "DAC_OVERRIDE",
+                "FOWNER",
+                "FSETID",
+                "KILL",
+                "MKNOD",
+                "NET_RAW",
+                "SETFCAP",
+                "SETPCAP",
+                "SYS_CHROOT",
+            ],
+            "frankenphp run --config /etc/caddy/Caddyfile",
+        ),
+        "worker": (
+            [("app-var", "/srv/app/var"), ("run", "/run")],
+            ["ALL"],
+            "/usr/bin/supervisord -c /etc/supervisor/supervisord.conf "
+            "-l /srv/app/var/log/supervisord.log -j /srv/app/var/run/supervisord.pid",
+        ),
+    }
+    for kind, (paths, dropped, runtime) in expected.items():
+        task = resources[f"user-service-{kind}-task"]["inputs"]
+        assert task["volumes"] == [{"name": name} for name, _ in paths]
+        container = json.loads(task["containerDefinitions"])[0]
+        assert container["readonlyRootFilesystem"] is True
+        assert container["mountPoints"] == [
+            {"sourceVolume": name, "containerPath": path, "readOnly": False}
+            for name, path in paths
+        ]
+        assert container["linuxParameters"] == {"capabilities": {"drop": dropped}}
+        assert container["command"] == [
+            "/bin/sh",
+            "-ec",
+            "set -eu; install -d -m 700 /srv/app/var/run/secrets; "
+            "install -d -m 1777 /srv/app/var/tmp; "
+            'printf "%s" "$OAUTH_PRIVATE_KEY_PEM"'
+            " > /srv/app/var/run/secrets/oauth-private.pem; "
+            'printf "%s" "$OAUTH_PUBLIC_KEY_PEM"'
+            " > /srv/app/var/run/secrets/oauth-public.pem; "
+            "chmod 600 /srv/app/var/run/secrets/oauth-private.pem; "
+            "chmod 644 /srv/app/var/run/secrets/oauth-public.pem; "
+            f"exec {runtime}",
+        ]
+        environment = {row["name"]: row["value"] for row in container["environment"]}
+        assert environment["TMPDIR"] == "/srv/app/var/tmp"
+    from app.compute import DEFAULT_CAPABILITIES
+
+    assert len(DEFAULT_CAPABILITIES) == len(set(DEFAULT_CAPABILITIES)) == 14
+    assert set(expected["web"][1]) == set(DEFAULT_CAPABILITIES) - {
+        "NET_BIND_SERVICE",
+        "SETGID",
+        "SETUID",
+    }

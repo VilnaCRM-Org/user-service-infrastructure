@@ -57,6 +57,16 @@ QUEUE_NAMES = {
     "failed-domain-events": "failed-domain-events",
     "health-check": "health-check-queue",
 }
+DOCUMENTDB_CLUSTER = f"{registry.PROJECT}-test-docdb"
+DOCUMENTDB_PARAMETERS = [
+    {"name": name, "value": value, "applyMethod": "pending-reboot"}
+    for name, value in (
+        ("audit_logs", "enabled"),
+        ("profiler", "enabled"),
+        ("profiler_threshold_ms", "100"),
+        ("tls", "enabled"),
+    )
+]
 QUEUE_ENVIRONMENT_NAMES = {
     "SEND_EMAIL_TRANSPORT_DSN": "send-email",
     "FAILED_EMAIL_TRANSPORT_DSN": "failed-send-email",
@@ -180,13 +190,23 @@ def _network_graph(add, planes):
 def _application_graph(add, planes):
     for name, kind in {
         "documentdb-subnets": "docdb/subnetGroup:SubnetGroup",
+        "documentdb-parameters": "docdb/clusterParameterGroup:ClusterParameterGroup",
+        "documentdb-audit-logs": "cloudwatch/logGroup:LogGroup",
+        "documentdb-profiler-logs": "cloudwatch/logGroup:LogGroup",
         "documentdb-cluster": "docdb/cluster:Cluster",
         "documentdb-instance-1": "docdb/clusterInstance:ClusterInstance",
         "documentdb-instance-2": "docdb/clusterInstance:ClusterInstance",
         "redis-subnets": "elasticache/subnetGroup:SubnetGroup",
         "redis": "elasticache/replicationGroup:ReplicationGroup",
     }.items():
-        add(f"user-service-{name}", f"aws:{kind}", planes["data"])
+        # DocumentDB owns durable data; Pulumi must refuse to delete it.
+        add(
+            f"user-service-{name}",
+            f"aws:{kind}",
+            planes["data"],
+            protect=kind
+            in ("docdb/cluster:Cluster", "docdb/clusterInstance:ClusterInstance"),
+        )
     for name in (
         "send-email",
         "failed-send-email",
@@ -334,6 +354,7 @@ def validate_first_workload_topology(
     _task_container_inputs(desired, projection)
     _private_subnet_inputs(desired, projection)
     _managed_data_inputs(desired)
+    _documentdb_observability_inputs(desired)
     _encrypted_queue_inputs(desired)
     _fargate_service_inputs(desired)
     seen = _validate_workload_steps(preview["steps"], baseline, graph, desired)
@@ -368,6 +389,11 @@ def _dependency_edges(desired):
         "user-service-alb-sg": {"user-service-vpc", "user-service-vpc-link-sg"},
         "user-service-vpc-link-sg": {"user-service-vpc"},
         "user-service-target-group": {"user-service-vpc"},
+        "user-service-documentdb-cluster": {
+            "user-service-documentdb-parameters",
+            "user-service-documentdb-audit-logs",
+            "user-service-documentdb-profiler-logs",
+        },
         "user-service-https-listener": {
             "user-service-alb",
             "user-service-target-group",
@@ -559,6 +585,10 @@ def _managed_data_inputs(desired):
             "engineVersion": "5.0.0",
             "storageEncrypted": True,
             "enabledCloudwatchLogsExports": ["audit", "profiler"],
+            "dbClusterParameterGroupName": f"{DOCUMENTDB_CLUSTER}-params",
+            "deletionProtection": True,
+            "skipFinalSnapshot": False,
+            "finalSnapshotIdentifier": f"{DOCUMENTDB_CLUSTER}-final",
         },
         "user-service-redis": {
             "engine": "redis",
@@ -584,6 +614,31 @@ def _managed_data_inputs(desired):
         and redis["snapshotRetentionLimit"] >= 7,
         "workload-managed-data-retention",
     )
+
+
+def _documentdb_observability_inputs(desired):
+    """Require explicit TLS/audit/profiler parameters and retained export groups."""
+    label = "workload-documentdb-observability-inputs"
+    group = _inputs(desired, "user-service-documentdb-parameters")
+    parameters = group.get("parameters")
+    require(
+        group.get("name") == f"{DOCUMENTDB_CLUSTER}-params"
+        and group.get("family") == "docdb5.0"
+        and type(parameters) is list
+        and all(type(row) is dict for row in parameters)
+        and unchanged._same(
+            sorted(parameters, key=lambda row: str(row.get("name"))),
+            DOCUMENTDB_PARAMETERS,
+        ),
+        label,
+    )
+    for export in ("audit", "profiler"):
+        logs = _inputs(desired, f"user-service-documentdb-{export}-logs")
+        require(
+            logs.get("name") == f"/aws/docdb/{DOCUMENTDB_CLUSTER}/{export}"
+            and unchanged._same(logs.get("retentionInDays"), 30),
+            label,
+        )
 
 
 def _encrypted_queue_inputs(desired):

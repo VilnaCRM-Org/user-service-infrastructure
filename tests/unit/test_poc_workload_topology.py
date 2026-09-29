@@ -43,6 +43,7 @@ def _native_numbers(kind, inputs):
             inputs["healthCheck"][field] = int(inputs["healthCheck"][field])
     for field in {
         "aws:docdb/cluster:Cluster": ("backupRetentionPeriod",),
+        "aws:cloudwatch/logGroup:LogGroup": ("retentionInDays",),
         "aws:elasticache/replicationGroup:ReplicationGroup": (
             "snapshotRetentionLimit",
         ),
@@ -167,6 +168,9 @@ def test_exact_composition_topology_admits_preview_without_mutating_inputs(data)
         ("user-service-vpc-link-sg", "user-service-vpc"),
         ("user-service-https-listener", "user-service-alb"),
         ("user-service-target-group", "user-service-vpc"),
+        ("user-service-documentdb-cluster", "user-service-documentdb-parameters"),
+        ("user-service-documentdb-cluster", "user-service-documentdb-audit-logs"),
+        ("user-service-documentdb-cluster", "user-service-documentdb-profiler-logs"),
         ("user-service-web-service", "user-service-web-task"),
         ("user-service-web-service", "user-service-https-listener"),
         ("user-service-worker-service", "user-service-worker-task"),
@@ -415,6 +419,78 @@ def test_matching_plan_and_preview_cannot_expose_private_workload(
         ),
         (
             "user-service-documentdb-cluster",
+            "deletionProtection",
+            False,
+            "managed-data-inputs",
+        ),
+        (
+            "user-service-documentdb-cluster",
+            "skipFinalSnapshot",
+            True,
+            "managed-data-inputs",
+        ),
+        (
+            "user-service-documentdb-cluster",
+            "finalSnapshotIdentifier",
+            None,
+            "managed-data-inputs",
+        ),
+        (
+            "user-service-documentdb-cluster",
+            "dbClusterParameterGroupName",
+            "default.docdb5.0",
+            "managed-data-inputs",
+        ),
+        (
+            "user-service-documentdb-parameters",
+            "family",
+            "docdb4.0",
+            "documentdb-observability-inputs",
+        ),
+        (
+            "user-service-documentdb-parameters",
+            "name",
+            "foreign-params",
+            "documentdb-observability-inputs",
+        ),
+        (
+            "user-service-documentdb-parameters",
+            "parameters",
+            [],
+            "documentdb-observability-inputs",
+        ),
+        (
+            "user-service-documentdb-parameters",
+            "parameters",
+            gate.registry.UNKNOWN,
+            "documentdb-observability-inputs",
+        ),
+        (
+            "user-service-documentdb-parameters",
+            "parameters",
+            ["tls"],
+            "documentdb-observability-inputs",
+        ),
+        (
+            "user-service-documentdb-audit-logs",
+            "retentionInDays",
+            0,
+            "documentdb-observability-inputs",
+        ),
+        (
+            "user-service-documentdb-profiler-logs",
+            "retentionInDays",
+            True,
+            "documentdb-observability-inputs",
+        ),
+        (
+            "user-service-documentdb-profiler-logs",
+            "name",
+            "/aws/docdb/foreign/profiler",
+            "documentdb-observability-inputs",
+        ),
+        (
+            "user-service-documentdb-cluster",
             "backupRetentionPeriod",
             0,
             "managed-data-retention",
@@ -510,6 +586,67 @@ def test_matching_plan_and_preview_cannot_weaken_private_data_or_queues(
     for inputs in (goal, preview):
         inputs[field] = copy.deepcopy(value)
     with pytest.raises(ValueError, match=error):
+        gate.validate_first_workload_topology(**data)
+
+
+def _goal_and_preview_inputs(data, name):
+    urn = next(
+        urn for urn in data["saved_plan"]["resourcePlans"] if urn.endswith(f"::{name}")
+    )
+    goal = data["saved_plan"]["resourcePlans"][urn]["goal"]["inputDiff"]["adds"]
+    preview = next(
+        step["newState"]["inputs"]
+        for step in data["preview"]["steps"]
+        if step["urn"] == urn
+    )
+    return goal, preview
+
+
+@pytest.mark.parametrize(
+    "parameter", ["tls", "audit_logs", "profiler", "profiler_threshold_ms"]
+)
+@pytest.mark.parametrize("fault", ["value", "apply", "missing", "duplicate"])
+def test_documentdb_parameters_cannot_drop_tls_audit_or_profiler(
+    data, parameter, fault
+):
+    for inputs in _goal_and_preview_inputs(data, "user-service-documentdb-parameters"):
+        rows = inputs["parameters"]
+        row = next(row for row in rows if row["name"] == parameter)
+        if fault == "value":
+            row["value"] = "disabled"
+        elif fault == "apply":
+            row["applyMethod"] = "immediate"
+        elif fault == "missing":
+            rows.remove(row)
+        else:
+            rows.append(copy.deepcopy(row))
+    with pytest.raises(ValueError, match="documentdb-observability-inputs"):
+        gate.validate_first_workload_topology(**data)
+
+
+def test_documentdb_parameter_order_is_not_significant(data):
+    for inputs in _goal_and_preview_inputs(data, "user-service-documentdb-parameters"):
+        inputs["parameters"].reverse()
+    gate.validate_first_workload_topology(**data)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "user-service-documentdb-cluster",
+        "user-service-documentdb-instance-1",
+        "user-service-documentdb-instance-2",
+    ],
+)
+def test_documentdb_owners_must_stay_pulumi_protected(data, name):
+    urn = next(
+        urn for urn in data["saved_plan"]["resourcePlans"] if urn.endswith(f"::{name}")
+    )
+    assert gate.expected_graph()[urn][3] is True
+    data["saved_plan"]["resourcePlans"][urn]["goal"]["protect"] = False
+    step = next(row for row in data["preview"]["steps"] if row["urn"] == urn)
+    step["newState"]["protect"] = False
+    with pytest.raises(ValueError, match="workload-first-topology"):
         gate.validate_first_workload_topology(**data)
 
 

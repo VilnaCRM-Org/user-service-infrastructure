@@ -206,18 +206,45 @@ class RecordingMocks(SimpleMocks):
         return super().new_resource(args)
 
 
+class OptionRecordingMonitor(mocks.MockMonitor):
+    """Mock monitor that also retains resource options sent by the SDK."""
+
+    def __init__(self, test_mocks: mocks.Mocks) -> None:
+        """Initialize the option log for the supplied mocks."""
+        super().__init__(test_mocks)
+        self.options: dict[str, dict[str, object]] = {}
+        self.urns: dict[str, str] = {}
+
+    def RegisterResource(self, request):  # noqa: N802 - gRPC method name.
+        """Record protection, dependencies and custom timeouts per resource."""
+        result = super().RegisterResource(request)
+        timeouts = request.customTimeouts
+        self.urns[request.name] = result.urn
+        self.options[request.name] = {
+            "protect": request.protect,
+            "dependencies": list(request.dependencies),
+            "customTimeouts": {
+                "create": timeouts.create,
+                "update": timeouts.update,
+                "delete": timeouts.delete,
+            },
+        }
+        return result
+
+
 def _run_pulumi_program(
     program: Callable[[], None],
     *,
     test_mocks: mocks.Mocks | None = None,
     captured_urns: list[str] | None = None,
+    monitor: mocks.MockMonitor | None = None,
 ) -> None:
     """Execute a Pulumi program with mocks."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
         test_mocks = test_mocks or SimpleMocks()
-        monitor = mocks.MockMonitor(test_mocks)
+        monitor = monitor or mocks.MockMonitor(test_mocks)
         mocks.set_mocks(
             test_mocks,
             project="user-service-infrastructure",
@@ -1826,3 +1853,126 @@ def test_offline_preview_keeps_local_app_and_queue_configuration():
     ):
         _run_pulumi_program(program, test_mocks=recorder)
     assert not any(str(row["type"]).startswith("aws:") for row in recorder.resources)
+
+
+MANAGED_STACK_CONFIG = {
+    "deploymentMode": "managed",
+    "executionRoleArn": CENTRAL_EXECUTION_ROLE,
+    "taskRoleArn": CENTRAL_TASK_ROLE,
+    "serviceName": "user-service",
+    "accessLogsBucketName": "shared-alb-access-logs",
+    "documentDbPassword": "mongo-secret",
+    "redisAuthToken": "redis-secret",
+    "appSecret": "app-secret",
+    "mailerDsn": "smtp://mail.example.com:587",
+    "oauthEncryptionKey": "oauth-encryption-key",
+    "oauthPassphrase": "oauth-passphrase",
+    "twoFactorEncryptionKey": "two-factor-key",
+    "oauthPrivateKeyPem": "private-key",
+    "oauthPublicKeyPem": "public-key",
+}
+
+
+def _managed_registrations(
+    config: dict[str, object] | None = None,
+) -> tuple[dict[str, dict[str, object]], OptionRecordingMonitor]:
+    """Register a managed stack and return inputs and options by logical name."""
+    recorder = RecordingMocks()
+    monitor = OptionRecordingMonitor(recorder)
+
+    def program() -> None:
+        UserServiceStack("managed-stack")
+
+    with mocked_pulumi_context(
+        {**MANAGED_STACK_CONFIG, **(config or {})},
+        aws_config_values={
+            "region": "eu-central-1",
+            "allowedAccountIds": ["123456789012"],
+        },
+    ):
+        _run_pulumi_program(program, test_mocks=recorder, monitor=monitor)
+    resources = {str(row["name"]): row for row in recorder.resources}
+    assert len(resources) == len(recorder.resources)
+    return resources, monitor
+
+
+def test_documentdb_parameter_family_follows_engine_major_minor() -> None:
+    from app.data import _documentdb_parameter_family
+
+    assert _documentdb_parameter_family("5.0.0") == "docdb5.0"
+    assert _documentdb_parameter_family("4.0.0") == "docdb4.0"
+    assert _documentdb_parameter_family("8.0") == "docdb8.0"
+
+
+def test_managed_documentdb_is_protected_retained_and_audited() -> None:
+    """DocumentDB keeps its data, TLS, audit/profiler events and log retention."""
+    resources, monitor = _managed_registrations()
+    parameters = resources["user-service-documentdb-parameters"]
+    assert parameters["type"] == "aws:docdb/clusterParameterGroup:ClusterParameterGroup"
+    assert parameters["inputs"] == {
+        "name": "user-service-dev-docdb-params",
+        "family": "docdb5.0",
+        "description": "User service DocumentDB TLS, audit and profiler settings.",
+        "parameters": [
+            {"name": "tls", "value": "enabled", "applyMethod": "pending-reboot"},
+            {"name": "audit_logs", "value": "enabled", "applyMethod": "pending-reboot"},
+            {"name": "profiler", "value": "enabled", "applyMethod": "pending-reboot"},
+            {
+                "name": "profiler_threshold_ms",
+                "value": "100",
+                "applyMethod": "pending-reboot",
+            },
+        ],
+    }
+    log_groups = {}
+    for export in ("audit", "profiler"):
+        group = resources[f"user-service-documentdb-{export}-logs"]
+        assert group["type"] == "aws:cloudwatch/logGroup:LogGroup"
+        assert group["inputs"] == {
+            "name": f"/aws/docdb/user-service-dev-docdb/{export}",
+            "retentionInDays": 30,
+        }
+        log_groups[export] = monitor.urns[f"user-service-documentdb-{export}-logs"]
+    cluster = resources["user-service-documentdb-cluster"]["inputs"]
+    assert cluster["clusterIdentifier"] == "user-service-dev-docdb"
+    assert cluster["dbClusterParameterGroupName"] == "user-service-dev-docdb-params"
+    assert cluster["enabledCloudwatchLogsExports"] == ["audit", "profiler"]
+    assert cluster["storageEncrypted"] is True
+    assert cluster["deletionProtection"] is True
+    assert cluster["skipFinalSnapshot"] is False
+    assert cluster["finalSnapshotIdentifier"] == "user-service-dev-docdb-final"
+    options = monitor.options["user-service-documentdb-cluster"]
+    assert options["protect"] is True
+    assert {
+        monitor.urns["user-service-documentdb-parameters"],
+        *log_groups.values(),
+    } <= set(options["dependencies"])
+    for index in (1, 2):
+        assert (
+            monitor.options[f"user-service-documentdb-instance-{index}"]["protect"]
+            is True
+        )
+    assert monitor.options["user-service-documentdb-parameters"]["protect"] is False
+    assert all(
+        monitor.options[f"user-service-documentdb-{export}-logs"]["protect"] is False
+        for export in ("audit", "profiler")
+    )
+
+
+@pytest.mark.parametrize("environment", ["dev", "test", "prod"])
+def test_documentdb_retention_does_not_depend_on_environment(environment) -> None:
+    role = "arn:aws:iam::123456789012:role/user-service-infrastructure-{}-Ecs{}"
+    resources, monitor = _managed_registrations(
+        {
+            "environment": environment,
+            "executionRoleArn": role.format(environment, "Execution"),
+            "taskRoleArn": role.format(environment, "Task"),
+        }
+    )
+    cluster = resources["user-service-documentdb-cluster"]["inputs"]
+    assert cluster["deletionProtection"] is True
+    assert cluster["skipFinalSnapshot"] is False
+    assert cluster["finalSnapshotIdentifier"] == (
+        f"user-service-{environment}-docdb-final"
+    )
+    assert monitor.options["user-service-documentdb-cluster"]["protect"] is True

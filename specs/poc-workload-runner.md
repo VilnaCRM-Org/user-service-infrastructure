@@ -56,6 +56,11 @@ not proof of the resolved physical relationships.
 The first-plan gate binds both private application subnet CIDRs to the admitted
 trusted-proxy networks, rejects public IP assignment on application/data subnets,
 requires encrypted DocumentDB and Redis with retained backups/snapshots, and
+requires a Pulumi-protected DocumentDB cluster and instances with deletion
+protection and a fixed final snapshot. The DocumentDB cluster must use its own
+`docdb5.0` parameter group with `tls`, `audit_logs` and `profiler` enabled
+(`profiler_threshold_ms` 100) and depend on pre-created `/aws/docdb/<cluster>/audit`
+and `/aws/docdb/<cluster>/profiler` log groups with 30-day retention. It also
 requires all six SQS queues to keep AWS-managed KMS encryption, long polling and
 their fixed visibility timeout. It pins their physical names to the TEST PoC
 defaults, including `health-check-queue`, and binds each application transport DSN

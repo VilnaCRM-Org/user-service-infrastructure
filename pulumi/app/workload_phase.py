@@ -34,6 +34,7 @@ TAGGABLE_TYPES = frozenset(
         "aws:cloudwatch/logGroup:LogGroup",
         "aws:docdb/cluster:Cluster",
         "aws:docdb/clusterInstance:ClusterInstance",
+        "aws:docdb/clusterParameterGroup:ClusterParameterGroup",
         "aws:docdb/subnetGroup:SubnetGroup",
         "aws:ec2/eip:Eip",
         "aws:ec2/internetGateway:InternetGateway",

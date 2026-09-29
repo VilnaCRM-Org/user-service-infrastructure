@@ -507,20 +507,39 @@ def production_database_violations(
     DocumentDB instances have no deletion-protection or final-snapshot fields;
     their cluster owns those settings, so instances only require protection.
     """
-    if not _matches_any_resource_type(resource_type, PRODUCTION_DATABASE_TYPE_SUFFIXES):
+    if not _matches_any_resource_type(
+        resource_type, PRODUCTION_DATABASE_TYPE_SUFFIXES
+    ) or not _is_production_resource(props, config):
         return []
 
+    violations = _documentdb_protection_violations(resource_type, protect)
+    if _matches_resource_type(resource_type, DOCDB_CLUSTER_INSTANCE_TYPE_SUFFIX):
+        return violations
+    return violations + _database_retention_violations(props)
+
+
+def _is_production_resource(props: Mapping[str, Any], config: PolicyConfig) -> bool:
+    """Return True when the resource's Environment tag is production-like."""
     environment = _string_value((extract_tags(props) or {}).get("Environment"))
-    if environment is None or environment.lower() not in config.production_environments:
-        return []
+    return environment is not None and (
+        environment.lower() in config.production_environments
+    )
 
-    violations: list[str] = []
+
+def _documentdb_protection_violations(
+    resource_type: str, protect: bool | None
+) -> list[str]:
+    """Require Pulumi protection for DocumentDB when the engine reports it."""
     if protect is False and _matches_any_resource_type(
         resource_type, DOCDB_TYPE_SUFFIXES
     ):
-        violations.append("Production DocumentDB resources must be Pulumi-protected.")
-    if _matches_resource_type(resource_type, DOCDB_CLUSTER_INSTANCE_TYPE_SUFFIX):
-        return violations
+        return ["Production DocumentDB resources must be Pulumi-protected."]
+    return []
+
+
+def _database_retention_violations(props: Mapping[str, Any]) -> list[str]:
+    """Return deletion, final-snapshot and public-access issues for a database."""
+    violations: list[str] = []
     if not _truthy(props.get("deletionProtection")):
         violations.append("Production databases must enable deletion protection.")
     if _truthy(props.get("skipFinalSnapshot")):

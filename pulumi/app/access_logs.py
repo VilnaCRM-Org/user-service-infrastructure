@@ -9,6 +9,14 @@ import pulumi_aws as aws
 import pulumi
 from app.environment import StackSettings, build_resource_name
 
+# A log-delivery destination cannot usefully log to itself, and a second
+# server-access-log bucket would need the same exemption. The policy pack
+# accepts this reviewed exemption only with a stated reason.
+LOGGING_EXEMPTION = {
+    "LoggingExempt": "true",
+    "LoggingExemptReason": "ALB access-log destination bucket",
+}
+
 
 class AlbAccessLogs(pulumi.ComponentResource):
     """Keep delivery, encryption and retention under the existing compute owner."""
@@ -30,7 +38,7 @@ class AlbAccessLogs(pulumi.ComponentResource):
             "user-service-alb-logs",
             bucket=bucket_name,
             force_destroy=False,
-            tags=settings.default_tags,
+            tags={**settings.default_tags, **LOGGING_EXEMPTION},
             opts=pulumi.ResourceOptions(parent=self, protect=True),
         )
         child = pulumi.ResourceOptions(parent=self)

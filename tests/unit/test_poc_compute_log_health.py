@@ -19,7 +19,11 @@ def test_generated_workload_owns_protected_log_delivery_before_alb(tmp_path):
     assert bucket["inputs"]["bucket"] == expected_name
     assert bucket["inputs"]["forceDestroy"] is False
     assert bucket["protect"] is True
-    assert bucket["inputs"]["tags"] == TAGS
+    assert bucket["inputs"]["tags"] == {
+        **TAGS,
+        "LoggingExempt": "true",
+        "LoggingExemptReason": "ALB access-log destination bucket",
+    }
     assert bucket["parent"] == rows["access-logs"]["urn"]
     assert rows["access-logs"]["parent"] == rows["compute"]["urn"]
     assert rows["user-service-alb-logs-ownership"]["inputs"]["rule"] == {

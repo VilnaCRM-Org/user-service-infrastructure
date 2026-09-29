@@ -433,10 +433,14 @@ def test_workload_extends_actual_registry_registrations_without_changing_baselin
     )
     for name in ("user-service-web-repository", "user-service-worker-repository"):
         assert workload[name]["inputs"]["tags"] == TAGS
+    from app.access_logs import LOGGING_EXEMPTION
     from app.workload_phase import TAGGABLE_TYPES
 
-    for row in workload.values():
-        if row["type"] in TAGGABLE_TYPES:
+    for name, row in workload.items():
+        if name == "user-service-alb-logs":
+            # The log destination keeps its reviewed server-access-log exemption.
+            assert row["inputs"]["tags"] == {**LOGGING_EXEMPTION, **TAGS}
+        elif row["type"] in TAGGABLE_TYPES:
             assert row["inputs"]["tags"] == TAGS
         elif row["type"] not in (
             "aws:ecr/repository:Repository",

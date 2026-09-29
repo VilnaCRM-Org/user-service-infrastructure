@@ -33,12 +33,16 @@ POSITIVE_PUBLIC_ACCESS_OPERATORS = frozenset(
     {"ArnEquals", "ArnLike", "IpAddress", "StringEquals", "StringLike"}
 )
 AWS_PROVIDER_TYPE_SUFFIX = "pulumi:providers:aws"
-S3_BUCKET_TYPE_SUFFIX = "s3/bucket:Bucket"
+# Pulumi AWS v7 still registers the deprecated BucketV2 token separately.
+S3_BUCKET_TYPE_SUFFIXES = ("s3/bucket:Bucket", "s3/bucketV2:BucketV2")
 S3_BUCKET_ENCRYPTION_TYPE_SUFFIXES = (
     "s3/bucketServerSideEncryptionConfiguration:BucketServerSideEncryptionConfiguration",
     "s3/bucketServerSideEncryptionConfigurationV2:BucketServerSideEncryptionConfigurationV2",
 )
-S3_BUCKET_LOGGING_TYPE_SUFFIXES = ("s3/bucketLogging:BucketLogging",)
+S3_BUCKET_LOGGING_TYPE_SUFFIXES = (
+    "s3/bucketLogging:BucketLogging",
+    "s3/bucketLoggingV2:BucketLoggingV2",
+)
 S3_BUCKET_ACL_TYPE_SUFFIX = "s3/bucketAcl:BucketAcl"
 S3_BUCKET_ACL_V2_TYPE_SUFFIX = "s3/bucketAclV2:BucketAclV2"
 S3_BUCKET_POLICY_TYPE_SUFFIX = "s3/bucketPolicy:BucketPolicy"
@@ -100,7 +104,7 @@ def has_public_s3_acl(resource_type: str, props: Mapping[str, Any]) -> bool:
     return _matches_any_resource_type(
         resource_type,
         (
-            S3_BUCKET_TYPE_SUFFIX,
+            *S3_BUCKET_TYPE_SUFFIXES,
             S3_BUCKET_ACL_TYPE_SUFFIX,
             S3_BUCKET_ACL_V2_TYPE_SUFFIX,
         ),
@@ -110,7 +114,7 @@ def has_public_s3_acl(resource_type: str, props: Mapping[str, Any]) -> bool:
 def has_public_s3_bucket_policy(resource_type: str, props: Mapping[str, Any]) -> bool:
     """Detect bucket policies that allow public access."""
     if not _matches_any_resource_type(
-        resource_type, (S3_BUCKET_POLICY_TYPE_SUFFIX, S3_BUCKET_TYPE_SUFFIX)
+        resource_type, (S3_BUCKET_POLICY_TYPE_SUFFIX, *S3_BUCKET_TYPE_SUFFIXES)
     ):
         return False
 
@@ -158,12 +162,10 @@ def storage_encryption_violations(
     """Return storage encryption issues for critical persistent resources."""
     violations: list[str] = []
 
-    if _matches_resource_type(resource_type, S3_BUCKET_TYPE_SUFFIX):
-        encryption = props.get("serverSideEncryptionConfiguration")
-        if not isinstance(encryption, Mapping) or not _has_default_s3_encryption_rule(
-            encryption
-        ):
-            violations.append("S3 buckets must enable default server-side encryption.")
+    if _matches_any_resource_type(
+        resource_type, S3_BUCKET_TYPE_SUFFIXES
+    ) and not _has_inline_s3_encryption(props):
+        violations.append("S3 buckets must enable default server-side encryption.")
 
     if _matches_resource_type(resource_type, EBS_VOLUME_TYPE_SUFFIX) and not _truthy(
         props.get("encrypted")
@@ -214,13 +216,10 @@ def logging_violations(resource_type: str, props: Mapping[str, Any]) -> list[str
     """Return logging configuration issues for supported resource types."""
     violations: list[str] = []
 
-    if _matches_resource_type(resource_type, S3_BUCKET_TYPE_SUFFIX):
+    if _matches_any_resource_type(resource_type, S3_BUCKET_TYPE_SUFFIXES):
         if _bucket_logging_exempt(props):
             return violations
-        logging_config = props.get("logging")
-        if not isinstance(logging_config, Mapping) or not _s3_concrete_bucket_name(
-            logging_config.get("targetBucket")
-        ):
+        if not _has_inline_s3_logging(props):
             violations.append("S3 buckets must send access logs to a target bucket.")
 
     if _matches_resource_type(resource_type, LOAD_BALANCER_TYPE_SUFFIX):
@@ -284,20 +283,59 @@ def _s3_encryption_rule_items(props: Mapping[str, Any]) -> list[Mapping[str, Any
     return rule_items
 
 
+def _is_sequence(value: object) -> bool:
+    """Return True for list-shaped provider values, never for text."""
+    return isinstance(value, Sequence) and not isinstance(value, (str, bytes))
+
+
+def _singular_and_plural(
+    props: Mapping[str, Any], singular: str, plural: str
+) -> list[object]:
+    """Return a V1 singular block followed by the V2 list-shaped blocks."""
+    values = props.get(plural)
+    return [props.get(singular), *(values if _is_sequence(values) else ())]
+
+
 def _has_default_s3_encryption_rule(props: Mapping[str, Any]) -> bool:
     """Require a supported concrete SSE algorithm, never an RPC unknown value."""
     for candidate in _s3_encryption_rule_items(props):
-        default_encryption = candidate.get("applyServerSideEncryptionByDefault")
-        if not isinstance(default_encryption, Mapping):
-            continue
-        if _string_value(default_encryption.get("sseAlgorithm")) in {
-            "AES256",
-            "aws:fsx",
-            "aws:kms",
-            "aws:kms:dsse",
-        }:
-            return True
+        for default_encryption in _singular_and_plural(
+            candidate,
+            "applyServerSideEncryptionByDefault",
+            "applyServerSideEncryptionByDefaults",
+        ):
+            if not isinstance(default_encryption, Mapping):
+                continue
+            if _string_value(default_encryption.get("sseAlgorithm")) in {
+                "AES256",
+                "aws:fsx",
+                "aws:kms",
+                "aws:kms:dsse",
+            }:
+                return True
     return False
+
+
+def _has_inline_s3_encryption(props: Mapping[str, Any]) -> bool:
+    """Accept Bucket's mapping and BucketV2's list-shaped inline encryption."""
+    return any(
+        isinstance(configuration, Mapping)
+        and _has_default_s3_encryption_rule(configuration)
+        for configuration in _singular_and_plural(
+            props,
+            "serverSideEncryptionConfiguration",
+            "serverSideEncryptionConfigurations",
+        )
+    )
+
+
+def _has_inline_s3_logging(props: Mapping[str, Any]) -> bool:
+    """Accept Bucket's mapping and BucketV2's list-shaped inline access logging."""
+    return any(
+        isinstance(configuration, Mapping)
+        and bool(_s3_concrete_bucket_name(configuration.get("targetBucket")))
+        for configuration in _singular_and_plural(props, "logging", "loggings")
+    )
 
 
 def _s3_concrete_bucket_name(value: object) -> str | None:
@@ -329,7 +367,7 @@ def _s3_encryption_targets(resources: Sequence[Any]) -> tuple[set[str], set[str]
 
         for dependency in _resource_dependencies(resource, "bucket"):
             dependency_type = getattr(dependency, "resource_type", "")
-            if _matches_resource_type(dependency_type, S3_BUCKET_TYPE_SUFFIX):
+            if _matches_any_resource_type(dependency_type, S3_BUCKET_TYPE_SUFFIXES):
                 dependency_urn = getattr(dependency, "urn", "")
                 encrypted_bucket_urns.update(filter(None, (dependency_urn,)))
 
@@ -344,11 +382,10 @@ def _s3_bucket_is_covered(
     encrypted_bucket_urns: set[str],
 ) -> bool:
     """Return True when an S3 bucket is protected by inline or split encryption."""
-    if not _matches_resource_type(resource_type, S3_BUCKET_TYPE_SUFFIX):
+    if not _matches_any_resource_type(resource_type, S3_BUCKET_TYPE_SUFFIXES):
         return False
 
-    encryption = props.get("serverSideEncryptionConfiguration")
-    if isinstance(encryption, Mapping) and _has_default_s3_encryption_rule(encryption):
+    if _has_inline_s3_encryption(props):
         return True
 
     bucket_name = _s3_concrete_bucket_name(props.get("bucket"))
@@ -380,7 +417,7 @@ def _s3_logging_targets(resources: Sequence[Any]) -> tuple[set[str], set[str]]:
 
         for dependency in _resource_dependencies(resource, "bucket"):
             dependency_type = getattr(dependency, "resource_type", "")
-            if _matches_resource_type(dependency_type, S3_BUCKET_TYPE_SUFFIX):
+            if _matches_any_resource_type(dependency_type, S3_BUCKET_TYPE_SUFFIXES):
                 dependency_urn = getattr(dependency, "urn", "")
                 logged_bucket_urns.update(filter(None, (dependency_urn,)))
 
@@ -395,16 +432,10 @@ def _s3_bucket_logging_is_covered(
     logged_bucket_urns: set[str],
 ) -> bool:
     """Return True when an S3 bucket has inline or split access logging."""
-    if not _matches_resource_type(resource_type, S3_BUCKET_TYPE_SUFFIX):
+    if not _matches_any_resource_type(resource_type, S3_BUCKET_TYPE_SUFFIXES):
         return False
 
-    if _bucket_logging_exempt(props):
-        return True
-
-    logging_config = props.get("logging")
-    if isinstance(logging_config, Mapping) and _s3_concrete_bucket_name(
-        logging_config.get("targetBucket")
-    ):
+    if _bucket_logging_exempt(props) or _has_inline_s3_logging(props):
         return True
 
     bucket_name = _s3_concrete_bucket_name(props.get("bucket"))

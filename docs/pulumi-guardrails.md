@@ -32,7 +32,11 @@ most likely to catch risky AI-generated changes:
 - S3 buckets must not become public through ACLs or bucket policies unless they
   are explicitly allowlisted
 - critical storage resources must enable encryption at rest
-- supported S3 buckets and load balancers must enable access logging
+- supported S3 buckets and load balancers must enable access logging; a bucket
+  may instead carry `LoggingExempt=true` with a non-empty `LoggingExemptReason`
+- the S3 checks cover both `aws:s3/bucket:Bucket` and the separately registered
+  `aws:s3/bucketV2:BucketV2`, including their split encryption and logging
+  resources
 - IAM policies must not use wildcard permissions unless a narrow allowlist and
   justification tag are present
 - production-like RDS resources must enable deletion protection, keep final

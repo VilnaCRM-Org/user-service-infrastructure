@@ -9,9 +9,13 @@ composition; legacy manual deployments keep their existing bucket setting.
 `AlbAccessLogs` is a child of the existing ComputePlane, using the inherited AWS
 provider. It creates one protected bucket (`force_destroy=False`), bucket-owner
 enforced object ownership, all four public-access blocks, SSE-S3 encryption,
-versioning, a lifecycle policy and a delivery policy. Objects under the ALB log
-prefix expire after 90 days; noncurrent versions expire after 30 days and
-incomplete multipart uploads abort after seven days. Bucket deletion/replacement
+versioning, a lifecycle policy and a delivery policy. The bucket carries the
+reviewed `LoggingExempt=true` tag with `LoggingExemptReason` set to
+`ALB access-log destination bucket`: a log destination cannot usefully log to
+itself, and a second server-access-log bucket would need the same exemption.
+The policy pack accepts that exemption only with a stated reason. Objects under
+the ALB log prefix expire after 90 days; noncurrent versions expire after 30 days
+and incomplete multipart uploads abort after seven days. Bucket deletion/replacement
 requires an explicit later reviewed lifecycle decision; this unit does not
 disable protection or empty a bucket.
 

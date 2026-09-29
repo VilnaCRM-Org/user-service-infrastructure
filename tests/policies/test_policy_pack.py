@@ -1237,6 +1237,179 @@ def test_logging_cannot_bind_buckets_by_an_empty_dependency_urn(
     ]
 
 
+BUCKET_V2 = "aws:s3/bucketV2:BucketV2"
+UNKNOWN_OUTPUT = "04da6b54-80e4-46f7-96ec-b56ff0331ba9"
+
+
+def _v2_encryption(algorithm: object) -> dict[str, Any]:
+    """Return BucketV2's list-shaped inline encryption block."""
+    return {
+        "serverSideEncryptionConfigurations": [
+            {
+                "rules": [
+                    {
+                        "applyServerSideEncryptionByDefaults": [
+                            {"sseAlgorithm": algorithm}
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+
+
+def test_bucket_v2_cannot_bypass_public_access_checks(
+    policy_runtime: SimpleNamespace,
+) -> None:
+    """BucketV2 must be evaluated like Bucket for ACLs and inline policies."""
+    public_policy = _json(
+        {"Statement": [{"Effect": "Allow", "Principal": "*", "Action": "s3:GetObject"}]}
+    )
+    assert policy_runtime.has_public_s3_acl(BUCKET_V2, {"acl": "public-read"})
+    assert policy_runtime.has_public_s3_acl(BUCKET_V2, {"acl": "public-read-write"})
+    assert not policy_runtime.has_public_s3_acl(BUCKET_V2, {"acl": "private"})
+    assert policy_runtime.has_public_s3_bucket_policy(
+        BUCKET_V2, {"policy": public_policy}
+    )
+    violations = _collect_violations(
+        policy_runtime.block_public_s3_exposure,
+        resource_type=BUCKET_V2,
+        props={"acl": "public-read", "policy": public_policy},
+    )
+    assert violations == [
+        "S3 buckets must not use public ACLs unless the resource is "
+        "explicitly allowlisted.",
+        "S3 bucket policies must not grant public access unless the resource is "
+        "explicitly allowlisted.",
+    ]
+
+
+@pytest.mark.parametrize(
+    "props,expected",
+    [
+        ({}, False),
+        (_v2_encryption("AES256"), True),
+        (_v2_encryption("aws:kms"), True),
+        (_v2_encryption("none"), False),
+        (_v2_encryption(UNKNOWN_OUTPUT), False),
+        ({"serverSideEncryptionConfigurations": "AES256"}, False),
+        ({"serverSideEncryptionConfigurations": ["AES256"]}, False),
+        (
+            {
+                "serverSideEncryptionConfigurations": [
+                    {"rules": [{"applyServerSideEncryptionByDefaults": ["AES256"]}]}
+                ]
+            },
+            False,
+        ),
+        (
+            {
+                "serverSideEncryptionConfigurations": [
+                    {"rules": [{"applyServerSideEncryptionByDefaults": "AES256"}]}
+                ]
+            },
+            False,
+        ),
+    ],
+)
+def test_bucket_v2_inline_encryption_requires_a_concrete_default_rule(
+    policy_runtime: SimpleNamespace, props: dict[str, Any], expected: bool
+) -> None:
+    """BucketV2 uses list-shaped encryption blocks; unknown values never pass."""
+    violations = policy_runtime.storage_encryption_violations(BUCKET_V2, props)
+    assert (violations == []) is expected
+    if not expected:
+        assert violations == ["S3 buckets must enable default server-side encryption."]
+
+
+@pytest.mark.parametrize(
+    "props,expected",
+    [
+        ({}, False),
+        ({"loggings": [{"targetBucket": "audit-logs"}]}, True),
+        ({"loggings": [{"targetBucket": UNKNOWN_OUTPUT}]}, False),
+        ({"loggings": [{"targetBucket": " "}]}, False),
+        ({"loggings": ["audit-logs"]}, False),
+        ({"loggings": "audit-logs"}, False),
+        ({"tags": {"LoggingExempt": "true"}}, False),
+        (
+            {
+                "tags": {
+                    "LoggingExempt": "true",
+                    "LoggingExemptReason": "ALB access-log destination bucket",
+                }
+            },
+            True,
+        ),
+    ],
+)
+def test_bucket_v2_requires_access_logging_or_a_reasoned_exemption(
+    policy_runtime: SimpleNamespace, props: dict[str, Any], expected: bool
+) -> None:
+    """BucketV2 cannot skip server access logging without a stated reason."""
+    violations = policy_runtime.logging_violations(BUCKET_V2, props)
+    assert (violations == []) is expected
+    resource = _stack_resource(
+        BUCKET_V2, props=props, urn="urn:pulumi:test::policy::" + BUCKET_V2 + "::b"
+    )
+    assert (policy_runtime.logging_stack_violations([resource]) == []) is expected
+
+
+def test_bucket_v2_stack_checks_follow_split_encryption_and_logging(
+    policy_runtime: SimpleNamespace,
+) -> None:
+    """First-create split resources bind BucketV2 through property dependencies."""
+    bucket = _stack_resource(
+        BUCKET_V2,
+        props={"bucket": UNKNOWN_OUTPUT},
+        urn="urn:pulumi:test::policy::aws:s3/bucketV2:BucketV2::logs",
+    )
+    unrelated = _stack_resource(
+        BUCKET_V2,
+        props={"bucket": UNKNOWN_OUTPUT},
+        urn="urn:pulumi:test::policy::aws:s3/bucketV2:BucketV2::other",
+    )
+    encryption = _stack_resource(
+        "aws:s3/bucketServerSideEncryptionConfigurationV2:"
+        "BucketServerSideEncryptionConfigurationV2",
+        props={
+            "bucket": UNKNOWN_OUTPUT,
+            "rules": [
+                {"applyServerSideEncryptionByDefault": {"sseAlgorithm": "AES256"}}
+            ],
+        },
+        urn="urn:pulumi:test::policy::encryption",
+        property_dependencies={"bucket": [bucket]},
+    )
+    logging = _stack_resource(
+        "aws:s3/bucketLoggingV2:BucketLoggingV2",
+        props={"bucket": UNKNOWN_OUTPUT, "targetBucket": "audit-logs"},
+        urn="urn:pulumi:test::policy::logging",
+        property_dependencies={"bucket": [bucket]},
+    )
+    resources = [bucket, unrelated, encryption, logging]
+    assert policy_runtime.storage_encryption_stack_violations(resources) == [
+        (unrelated.urn, "S3 buckets must enable default server-side encryption.")
+    ]
+    assert policy_runtime.logging_stack_violations(resources) == [
+        (unrelated.urn, "S3 buckets must send access logs to a target bucket.")
+    ]
+    assert _collect_stack_violations(
+        policy_runtime.require_logging_stack, resources=[bucket]
+    ) == [(bucket.urn, "S3 buckets must send access logs to a target bucket.")]
+    named = _stack_resource(
+        BUCKET_V2,
+        props={"bucket": "named-logs"},
+        urn="urn:pulumi:test::policy::aws:s3/bucketV2:BucketV2::named",
+    )
+    named_logging = _stack_resource(
+        "aws:s3/bucketLoggingV2:BucketLoggingV2",
+        props={"bucket": "named-logs", "targetBucket": "audit-logs"},
+        urn="urn:pulumi:test::policy::named-logging",
+    )
+    assert policy_runtime.logging_stack_violations([named, named_logging]) == []
+
+
 def test_wildcard_iam_violations_support_allowlists_and_inline_policies(
     policy_runtime: SimpleNamespace,
 ) -> None:

@@ -219,8 +219,25 @@ def _run_native(tmp_path, addresses, certificate_source):
         + f"json.loads({json.dumps(images)!r}),\n"
         + f"json.loads({json.dumps(certificate)!r})))\n"
     )
+    # The installed runner previews and applies with the repository policy pack;
+    # the complete workload graph must satisfy it, including BucketV2 guardrails.
+    subprocess.run(
+        [sys.executable, str(ROOT / "scripts/prepare_policy_pack.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        timeout=120,
+    )
     preview = json.loads(
-        cli("preview", "--save-plan", "workload.plan", "--json", "--non-interactive")
+        cli(
+            "preview",
+            "--save-plan",
+            "workload.plan",
+            "--json",
+            "--non-interactive",
+            "--policy-pack",
+            str(ROOT / "policy"),
+        )
     )
     arguments = {
         "saved_plan": json.loads((project / "workload.plan").read_bytes()),

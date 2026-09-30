@@ -11,12 +11,12 @@ This file is the execution ledger. It is not a planning input.
 | Worktree | wt-usi-hardening |
 | Branch | feat/workload-wa-hardening |
 | Source baseline | 66776772979956de9c5abdbee7c45641a1b533fa (PR #56 head) |
-| Bundle revision | 11 (answers readiness round 11: R11-M1, R11-m1…m4, R11-n1…n4; no new user decision; parent commit 9b17199, which is revision 10) |
+| Bundle revision | 12 (answers readiness round 12: R12-M1, R12-M2, R12-m1…m4, R12-n1…n3; no new user decision; parent commit 7bf441c, which is revision 11) |
 | Specs directory | `specs/workload-wa-hardening/` (slug chosen by the caller) |
 | Target | pulumi (Python Pulumi), stacks test and prod |
 | Environment | none selected; planning is offline |
 | Stage | do-sdlc-plan |
-| Date (UTC) | 2026-09-30 |
+| Date (UTC) | 2026-09-30 (revisions 1-11); 2026-10-01 (revision 12) |
 
 ## Tooling and profile
 
@@ -44,6 +44,62 @@ This file is the execution ledger. It is not a planning input.
 
 - `specs/poc/README.md` sha256: 8ad9ccf4ae28083c36e30909a21d8ebec4fc0d40a9b716c9bb8b78b6276ed5b7
 - `decisions.md` (the user decisions, a planning input; hash below)
+- Repository source read for revision 12 at `7bf441c` (the workload
+  source is unchanged from the baseline), without executing it:
+  `scripts/poc_workload_capabilities.py` (lines 20-35, 86-240, 322-346),
+  `pulumi/app/compute.py` (lines 220-236, 720-736). Bootstrap-infrastructure,
+  read-only (`sed`, `grep`, `git log`, read-only Python over the
+  catalogs; no fetch, no checkout): `wt-boot-urllib3` (`862b4bf`,
+  `origin/main` proxy): `docs/governance-stack.md` (lines 470-490),
+  `specs/service-test-preview-trust-cutover/runbook.md` (lines 25-40),
+  `specs/security-completion/verification.md` (lines 50-62),
+  `specs/test-poc-prerequisite-capability/amendment-installation.md`
+  (lines 45-56), `…/impact.md` (by grep), `…/review.md` (line 15),
+  `pulumi/seed/README.md` (lines 10-26, 160-172),
+  `pulumi/seed/catalogs/test.json` and `prod.json` (the principals list,
+  lines 1143-1568, counted; the statement definition lines of the
+  round-11 and round-12 hashes; a grep for `lambda:` actions);
+  `wt-boot-pr280` (`e85534c`):
+  `specs/test-poc-prerequisite-capability/post-seed-activation.md`
+  (lines 75-90, 196-262, 362-372), `review.md` (lines 10-18),
+  `docs/governance-stack.md` (by grep); `wt-boot-219` (`54e9e2f`):
+  `pulumi/seed/poc_runtime.py` (lines 1-290),
+  `pulumi/infra/poc_runtime_enrollment.py` (lines 60-150),
+  `specs/219-test-workload-capability/runtime-enrollment.md` (lines 1-70,
+  90-115, 190-245), `…/installability-stop.md` (lines 1-20); a grep of
+  all three worktrees and the `bootstrap-infrastructure` clone (branch
+  `cost/account-spend-controls`, `debd88b`) for `Issue215CutoverSessions`.
+  A read-only `Explore` subagent recomputed the round-11 Location cells
+  against `git show 7bf441c:…` (R12-n1).
+- **AWS documentation, revision 12 (read 2026-10-01 by the revision-12
+  planning agent):** through the aws-knowledge MCP
+  (`read_documentation`, `search_documentation`): "Giving Lambda
+  functions access to resources in an Amazon VPC",
+  <https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html>
+  (whole page); `AWS::IAM::ManagedPolicy`,
+  <https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-iam-managedpolicy.html>
+  (properties and update behaviors); the AWS managed policy
+  `AWSPCSServiceRolePolicy` (a search result showing
+  `ec2:CreateNetworkInterface` on `network-interface`, `subnet` and
+  `security-group` ARNs). The aws-knowledge MCP could not render "Actions,
+  resources, and condition keys for Amazon EC2"
+  (<https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonec2.html>
+  redirects to the reference index there), so its published
+  machine-readable form was fetched read-only with `curl` from
+  <https://servicereference.us-east-1.amazonaws.com/v1/ec2/ec2.json>
+  (version v1.4, `last-modified` 2026-09-28), together with the same
+  service's `lambda`, `iam`, `ecr`, `sts`, `cloudtrail` and `logs` files,
+  and evaluated with read-only Python (the resource types and condition
+  keys of each action cited in AD-26 layer 6 and NFR-06). No AWS account
+  was called.
+- **AWS documentation, revision 11 (recorded late, R12-n2):** the
+  revision-11 pre-commit audit's recheck (the `claude-router:audit`
+  subagent) read "Giving Lambda functions access to resources in an
+  Amazon VPC",
+  <https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html>,
+  through the aws-knowledge MCP on 2026-09-30; its recheck finding N1
+  (`readiness.md`, "Pre-commit audit of revision 11") relies on it. That
+  read was not listed here in revision 11.
 - Repository source read for revision 11 at `9b17199` (the workload
   source is unchanged from the baseline), without executing it:
   `scripts/poc_workload_topology.py` (lines 18, 365-380, 810-842),
@@ -255,19 +311,19 @@ This file is the execution ledger. It is not a planning input.
 - User decisions given in chat on 2026-09-30 and relayed by the coordinator: D-1…D-7 (`decisions.md`). The D-4 and D-5 clarifications came in a second message the same day, and D-8…D-13 (derived details) were confirmed in a third. D-14 (recovery targets RPO ≤ 1 hour, RTO ≤ 24 hours) is a user decision of the same date, recorded in `decisions.md` by commit `68584e1`. **D-15** (the gateway certificate ARN pinned in the reviewed USI workload contract and checked only with `acm:DescribeCertificate`; no CI role gets any `ssm:GetParameter` read; no identity deny, seed guard, seed boundary or catalog hash loosened for SSM) is a user decision given in chat on 2026-09-30, answering the coordinator's question, and relayed with round 10; revision 10 records it in `decisions.md`.
 - Read-only cross-repository reconnaissance: bootstrap-infrastructure @debd88b, api-gateway-infrastructure, and user-service @main via `gh api`
 
-## Artifacts (sha256, revision 11)
+## Artifacts (sha256, revision 12)
 
-`run-summary.md` is not hashed here, because it contains the hashes. `decisions.md` is a planning input and is hashed. Commit `68584e1` added its D-14 row after revision 5; revision 6 changed only that row's label (a user decision, not a planning default); revisions 7, 8 and 9 do not change it; revision 10 adds the D-15 row (a user decision of 2026-09-30); revision 11 changes only D-15's note text (R11-n3). `research.md` is unchanged since revision 4; `brief.md` changed last in revision 10 (front matter and AS-4, D-15).
+`run-summary.md` is not hashed here, because it contains the hashes. `decisions.md` is a planning input and is hashed. Commit `68584e1` added its D-14 row after revision 5; revision 6 changed only that row's label (a user decision, not a planning default); revisions 7, 8 and 9 do not change it; revision 10 adds the D-15 row (a user decision of 2026-09-30); revision 11 changes only D-15's note text (R11-n3); revision 12 does not change it. `research.md` is unchanged since revision 4; `brief.md` changed last in revision 10 (front matter and AS-4, D-15).
 Check with `sha256sum -c` over the block below, from `specs/workload-wa-hardening/`.
 
 ```
 beca16ba9ab95d76cd28ed47ac8e806549b94805ddca9a2d138a790ee0f0ca59  research.md
 5d7d1e37b9417de7cbe7b4fa0bcafe28ed723da997c22be7ef5902b384e302e4  brief.md
-1274c62e1194f0af34bb375cd4542a3f62225663a764188530ce96e5717eb0a4  prd.md
-805254ac1b763a21d2a3c78a69ce7e2cd7ac7c25738c61aa034e3f0cea7ddf7f  architecture.md
-03800fcdb04aa777f336f14939afe45b598054ce4f889a7d1885a96ee5eccd65  epics-stories.md
+3da64146248f839b1c2a221dfa6e30153e8985f468a31c5ad76cb1ca83848587  prd.md
+ec87a092bf1ab1c6a119220f72991aec1a2bc6f2636e75587fee31633d317083  architecture.md
+386711f897b4f9569192fc2edff6d0c20c99c57a9ce8a18375f1c7e1ae26f7ba  epics-stories.md
 86df7c4f7b72ad49cbca328ec79884c792c1b3f833567f4a34586eb60d5259c6  decisions.md
-9e58e1088baa9ea385d25c08f0d7a8fcae4f5954809bb4373045ebd304751b46  readiness.md
+dfafe91d64162b7dde50303e572f351607d01a2f9f988ba763ba27c011c18dba  readiness.md
 ```
 
 ## Gates
@@ -287,25 +343,52 @@ beca16ba9ab95d76cd28ed47ac8e806549b94805ddca9a2d138a790ee0f0ca59  research.md
 | 9 | FAIL (1 major, R9-M1: the Preview and Apply roles are blocked by explicit secret-read denies on every workload `plan` and `up-plan`, and no story owned the TEST fix fully or the PROD one; 2 minor, R9-m1 and R9-m2; 4 nits, R9-n1…n4); fixed in revision 9, after a pre-commit fresh-context audit of the revision-9 changes and its recheck (both recorded in `readiness.md`) |
 | 10 | FAIL against `8e097aa` (1 major, R10-M1: the seed-owned IAM layers, the hash-pinned `immutable_managed_guard` of every USI CI role and the seed-owned permissions boundary, were not planned; 2 minor, R10-m1 (the 6144-character boundary) and R10-m2 (concurrent seed amendments); 6 nits, R10-n1…n6). The coordinator relayed the new user decision **D-15** with it (the certificate ARN in the reviewed USI contract, no `ssm:GetParameter` for any CI role). Fixed in revision 10, after a pre-commit fresh-context audit of the revision-10 changes and its recheck (REFUTED; 9 of 12 fixed, 3 partly, N1-N3 new; all folded in; both recorded in `readiness.md`) |
 | 11 | FAIL (R11-M1 and the round-11 findings); fixed in revision 11, after a pre-commit fresh-context audit of the revision-11 changes (REFUTED: 2 major, 3 minor, 3 nits) and its recheck (REFUTED: all 8 fixed; N1 (major), N2 and N3 new, all folded in); both recorded in `readiness.md` |
+| 12 | FAIL against `7bf441c` (2 major: R12-M1, the TEST Apply role's deny-all hold `Issue215CutoverSessions` not planned; R12-M2, no creator for the ECS roles' permissions boundaries and execution-role grants; 4 minor: R12-m1 installer identity, R12-m2 Lambda ENI scope, R12-m3 step-18 detach ownership, R12-m4 S5.24a fit-first; 3 nits: R12-n1…n3); fixed in revision 12, after a pre-commit fresh-context audit of the revision-12 changes (REFUTED: 1 major, 9 minor, 8 nits, all fixed) and its recheck (REFUTED on minors only; the new items A-H folded in by the final pass; both recorded in `readiness.md`) |
 
-Stage status: **BLOCKED** until an independent review of revision 11 reports
+Stage status: **BLOCKED** until an independent review of revision 12 reports
 PASS. Round 5 was recorded as the last allowed round, and rounds 6, 7, 8,
-9, 10 and 11 ran after it; whether another independent round runs is for the coordinator and
+9, 10, 11 and 12 ran after it; whether another independent round runs is for the coordinator and
 the user to decide. `readiness.md` is written by the author and says PENDING;
 it is not a PASS.
 
-**Attempt ledger:** canonical `attempts.json` was NOT initialized. The atomic reservation needs verified host write isolation for the copied ledger_reference package, and a same-user host cannot provide it. The ledger is therefore BLOCKED. Attempt count by caller record: 1 procedure run, with 11 recorded review rounds (round 11: FAIL, answered by revision 11). This count is not canonical.
+**Attempt ledger:** canonical `attempts.json` was NOT initialized. The atomic reservation needs verified host write isolation for the copied ledger_reference package, and a same-user host cannot provide it. The ledger is therefore BLOCKED. Attempt count by caller record: 1 procedure run, with 12 recorded review rounds (round 12: FAIL, answered by revision 12). This count is not canonical.
 
 ## Acceptance checklist for the next independent reviewer
 
 A reviewer ticks each item from the bundle text and the cited source, not
 from this list.
 
-- [ ] Every round-11 finding in `readiness.md` maps to text that
+- [ ] Every round-12 finding in `readiness.md` maps to text that
       resolves it at the cited file and line, and the cited source lines
-      say what the plan claims (round-10, round-9 and round-8 rows, recheck
-      residuals A1…A4, round-7 rows and audit F2, F6 and F8 stay
-      resolved).
+      say what the plan claims (round-11, round-10, round-9 and round-8
+      rows, recheck residuals A1…A4, round-7 rows and audit F2, F6 and F8
+      stay resolved).
+- [ ] `Issue215CutoverSessions` is named in AD-26 layer 2, XP-11 and PRD
+      §7; XP-18 (its BI retirement, read back absent, and the PROD Apply
+      read-back) precedes row 9 with a STOP; gate 1, S4.6 steps 3-4, S5.2's
+      matrix and S4.7 check it; step 4 routes an explicit-deny
+      `AccessDenied` to XP-18 before any `resume` (R12-M1).
+- [ ] S5.1's ECS runtime stacks create each ECS role's retained
+      `-Boundary` policy at `/issue219/{env}/boundary/` and workload-shaped
+      `-Guard`, the execution role's log-stream writes and, for TEST, its
+      `execution_policy()` pull grant; the PROD pull part is S5.24a's PROD
+      ECS amendment after XP-14; S5.4 lists `Modify` rows on the
+      boundaries and guards; the verifier, S4.6 step 3, S4.7 and S4.14's
+      `_role`/`_pull` fixtures cover them; XP-16 is S5.1's and row 49
+      holds XP-15 only (R12-M2).
+- [ ] XP-17 names the reviewed installer role, its minimum permissions,
+      its per-install evidence, the unguarded-identity residual and the
+      condition under which it becomes a user decision (R12-m1).
+- [ ] Only `ec2:DescribeNetworkInterfaces` and `ec2:DescribeSubnets` stay
+      on `*`; the four mutating ENI actions are resource-scoped with V-29
+      live and fallback steps never wider than
+      `arn:aws:ec2:eu-central-1:<account>:*` without a user decision;
+      `lambda:UpdateFunctionConfiguration` and `lambda:UpdateFunctionCode`
+      rows deny every CI and operator principal from S5.3 on; NFR-06
+      states the no-resource-type rule (R12-m2).
+- [ ] S5.5 owns the bootstrap job's step-18 detach and step-20 re-attach,
+      both are serialized in row 43, and XP-8 items 1-3 repeat after the
+      rebuild (R12-m3); S5.24a's PROD Apply reads go fit-first (R12-m4).
 - [ ] Every new IAM principal (the TEST and PROD ECS roles, the function
       roles, the restore, exercise and recovery roles, and any missing
       service-linked role) is created by an independent CloudFormation
@@ -456,13 +539,15 @@ from this list.
 - [ ] The artifact hashes above match the committed files
       (`sha256sum -c`).
 
-## Scope limits of revisions 4, 5, 6, 7, 8, 9, 10 and 11
+## Scope limits of revisions 4, 5, 6, 7, 8, 9, 10, 11 and 12
 
 - No aws or pulumi command ran against any account; no repository test, lint
   or preview ran; no secret value was read; nothing was pushed or commented.
 - The only local commands were file reads and greps of this repository and
   the read-only bootstrap-infrastructure clone, AWS documentation lookups
-  (aws-knowledge MCP, revisions 4 and 9 only), Python text edits and table checks
+  (aws-knowledge MCP in revisions 4, 9 and 12, and by the revision-11
+  recheck auditor; revision 12 also fetched the public Service
+  Authorization Reference JSON files with `curl`), Python text edits and table checks
   over the bundle, `sha256sum`, and a local `git commit` of the bundle.
   Revision 7 also ran one read-only fresh-context audit subagent
   (`claude-router:audit`) over the uncommitted changes. Revision 8 read
@@ -484,7 +569,16 @@ from this list.
   and #285 through `wt-boot-219` with `sed`, `grep`, `git log`,
   `git diff --stat` and `git merge-base` only (no fetch, no checkout),
   ran read-only Python evaluations of the seed catalogs (the guard
-  statement lists and the post-#284 boundary size), ran no AWS
-  documentation lookup, and ran one read-only fresh-context audit
+  statement lists and the post-#284 boundary size), made no AWS
+  documentation lookup itself (corrected in revision 12, R12-n2: its
+  recheck auditor read the Lambda VPC page through the aws-knowledge MCP,
+  now recorded in Inputs), and ran one read-only fresh-context audit
   subagent over the uncommitted changes, plus its recheck, before the
-  single commit.
+  single commit. Revision 12 read BI `origin/main` through
+  `wt-boot-urllib3`, #284 through `wt-boot-pr280` and #285 through
+  `wt-boot-219` with `sed`, `grep` and `git log` only (no fetch, no
+  checkout), ran read-only Python over the seed catalogs (the principal
+  count, statement lines), read AWS documentation (Inputs), ran one
+  read-only `Explore` subagent over `git show 7bf441c`, and ran one
+  read-only fresh-context audit subagent over the uncommitted changes,
+  plus its recheck, before the single commit.

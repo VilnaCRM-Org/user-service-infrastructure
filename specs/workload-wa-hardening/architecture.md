@@ -719,19 +719,23 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     has its evidence. Step 18 prepares it: the Kravalg-approved manifest and
     the BI ENI detach. Then step 20 rebuilds the stack (recovery import of
     retained resources (import receipt) → `rebuild-first` → XP-8 refresh for the new
-    managed-secret ARN → S5.5 re-run → step 2 → accepted receipt → clean
+    subnet IDs, SG ID and managed-secret ARN (items 1-4; R12-m3) → the
+    S5.5 and S5.18b re-attaches → S5.5 re-run → step 2 → accepted receipt → clean
     drift). The receipt (step 21) is assembled from the rebuilt stack. So
     the abandon never removes the stack before steps 14–17 run.
   - **BI ENIs before a removal plan.** The bootstrap-job and restore-reader
     Lambdas are attached to the USI subnets and bootstrap-job SG (S5.5,
     S5.18b), and their ENIs block the SG and subnet deletes. Before the
-    removal plan, a reviewed BI stack amendment detaches both functions
-    (empty `VpcConfig` only; the execution roles keep the network-interface
-    grant, because Lambda deletes its ENIs with those roles, AD-26 layer 6),
+    removal plan, two reviewed BI stack amendments, one at a time, detach
+    them: S5.5's function-role stack amendment the bootstrap job, then
+    S5.18b's restore stack amendment the reader (R12-m3; empty `VpcConfig`
+    only; the execution roles keep the network-interface grant, because
+    Lambda deletes its ENIs with those roles, AD-26 layer 6),
     and a read-only `DescribeNetworkInterfaces` check, polled for up to 45
     minutes, shows no Lambda ENI and no ENI owned by another service in
     those subnets. STOP if an ENI remains. The rebuild re-attaches both
-    through the refreshed XP-8 metadata.
+    (S5.5, then S5.18b) through the refreshed XP-8 metadata, whose subnet
+    and SG IDs are new because the abandon deleted them.
   - **Registry capture:** `scripts/poc_registry_plan.py` accepts the registry
     baseline after a verified abandon receipt. S4.3 issues the receipt and
     makes this change, which is the only change to that file in this plan
@@ -940,12 +944,14 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
       the TEST contract, user decision D-15; XP-11 including the TEST
       Preview and Apply workload-observation reads, their seed boundary
       amendment and the approving BI and seed PRs, with no deny and no
-      seed guard narrowed; AD-26, R9-M1, R10-M1),
+      seed guard narrowed; AD-26, R9-M1, R10-M1), the XP-18 marker (BI's
+      reviewed retirement of `Issue215CutoverSessions` on the TEST Apply
+      role, with the read-back showing it absent; R12-M1),
       and every applicable decision marked `resolved` with a date in
       `prd.md` §6 and `decisions.md` (defaults do not count); or
     - gate 2a: every gate-1 condition, plus `admission.prod: "preview"`,
       plus the campaign-complete TEST acceptance receipt (PRD §3.3), plus
-      the restore item (S4.8, measured against D-14), XP-14, XP-15 and XP-16 (R8-m6), and S5.24a's PROD Preview and Apply workload-observation reads (AD-26, R9-M1). It admits only the PROD `plan`
+      the restore item (S4.8, measured against D-14), XP-14, XP-15 and XP-16 (R8-m6; since revision 12 XP-16 is S5.1's PROD ECS boundaries, verified live by S4.7, R12-M2), XP-18's PROD Apply read-back still showing no deny-all hold (R12-M1), and S5.24a's PROD Preview and Apply workload-observation reads (AD-26, R9-M1). It admits only the PROD `plan`
       (`prod_preview` job), which produces the P-1 PROD-shaped preview
       evidence (FR-19); or
     - gate 2b: every gate-2a condition, plus `admission.prod: true`, plus the
@@ -1496,8 +1502,9 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
      bucket (`scripts/poc_backend_observer.py` lines 443 and 476); and
      the refresh and the capture's registry-row checks read the ECR
      repositories, the SES identity and the Route53 DKIM records. The BI
-     story S5.24 (unconditional) inventories and adds them after XP-14,
-     XP-15 and XP-16 and before S4.17, with
+     story S5.24 (unconditional) inventories and adds them after XP-14
+     and XP-15 (and XP-16, which S5.1 satisfies at row 8, R12-M2) and
+     before S4.17, with
      `iam:SimulatePrincipalPolicy` on the execution role only, citing the
      existing TEST grants of BI `origin/main` (active only while the
      packaged TEST capability is `enabled`). It narrows neither the
@@ -1613,7 +1620,7 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   applied in between, because `phase` stays `registry` until gate 1 and
   gate 1 lists S4.10.
 
-- **AD-26 Workload observation reads under the explicit secret-read denies and the seed-owned IAM layers, and the creation of every new IAM principal (R9-M1, R9-m1, R9-m2; revision 10: user decision D-15, R10-M1, R10-m1, R10-m2, R10-n3; revision 11: R11-M1, R11-m1, R11-m2, R11-n1, R11-n2, R11-n4).**
+- **AD-26 Workload observation reads under the explicit secret-read denies and the seed-owned IAM layers, and the creation of every new IAM principal (R9-M1, R9-m1, R9-m2; revision 10: user decision D-15, R10-M1, R10-m1, R10-m2, R10-n3; revision 11: R11-M1, R11-m1, R11-m2, R11-n1, R11-n2, R11-n4; revision 12: R12-M1, R12-M2, R12-m1, R12-m2, R12-m3, R12-m4, R12-n3).**
   **Problem.** Every workload `plan` and `up-plan` observes its
   prerequisites: `scripts/poc_workload_runner.py` line 178 and the gate at
   line 55 call `poc_workload_admission.observe_workload`
@@ -1772,8 +1779,12 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   **The six IAM layers (R10-M1; pre-commit audit 1; R11-M1, R11-n4).**
   Layers 1-5 apply to each USI CI role: identity allows, identity
   denies, the permissions boundary, the seed guard and the seed's
-  attachment constraint. Layer 6 is the seed's principal-creation
-  authority, which decides who may create a new role at all. An allow is
+  attachment constraint. Layer 6 is principal creation: the seed guards
+  deny role creation to every CI and operator principal, so they decide
+  who may **not** create a role; the identity that does create the new
+  roles, the reviewed human non-root installer (PRD §7 XP-17), is not in
+  the seed catalog and is not governed by it (corrected in revision 12,
+  R12-m1). An allow is
   effective only if an identity policy allows it, the permissions
   boundary allows it, and no explicit identity deny or seed guard denies
   it. Checked
@@ -1785,7 +1796,7 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
      the new statements are keyed to repository
      `user-service-infrastructure` and its stack; every other enrolled
      repository's rendered documents stay byte-identical.
-  2. **Identity denies: unchanged.** `DenySecretLeakingReads` and
+  2. **Identity denies: unchanged by this plan.** `DenySecretLeakingReads` and
      `DenySecretLeakingReadsApply` keep their action lists and resources.
      With D-15 the deny documents do not change at all: neither
      `_governance_read_only_policy_document` (`governance.py` line 212
@@ -1793,6 +1804,35 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
      (`ci_bootstrap.py` lines 634-663), which also renders the platform
      apply role's `secret-read-deny` document (line 700), so the platform
      roles' documents stay byte-identical as well.
+     **The TEST Apply role also carries an inline deny-all hold (R12-M1).**
+     BI keeps `Issue215CutoverSessions` on
+     `GitHubCiApply-user-service-infrastructure-test`: an unconditional
+     deny-all inline policy, whose retirement is "a separate reviewed
+     activation" and "a prerequisite to any downstream service apply"
+     (BI `docs/governance-stack.md` lines 478-480 at `origin/main`
+     through `wt-boot-urllib3`; #284 `wt-boot-pr280`
+     `specs/test-poc-prerequisite-capability/post-seed-activation.md`
+     lines 80-84, 257-259 and 368-370, and `review.md` line 15;
+     `specs/service-test-preview-trust-cutover/runbook.md` lines 34-35 on
+     `origin/main`).
+     No seed catalog models it (neither `test.json` nor `prod.json` names
+     it), and no BI source names an equivalent hold on the PROD Apply
+     role; the catalogs cannot show its absence, because they do not
+     model the TEST one either. While it is attached, an explicit Deny
+     overrides every TEST Apply allow of this plan: every TEST Apply allow
+     row of the S5.2 (row 9) and XP-11 (row 42) matrices fails, S4.6 step
+     3 fails, and the step-4 apply fails with `AccessDenied`. It also
+     blocks XP-9's TEST registry-phase apply, which #284 runs under the
+     same role (`specs/test-poc-prerequisite-capability/requirements.md`
+     FR2: the fixed ECR repositories and the SES identity), so XP-9 and
+     XP-13 depend on it as well. This plan
+     does not remove, narrow or bypass it. Its retirement is BI's own
+     reviewed activation and a named external precondition, **XP-18**
+     (PRD §7), before row 9's first TEST Apply allow row; XP-18 also
+     reads back the PROD Apply role's inline policies before row 9's PROD
+     part. Gate 1 checks it, S4.6 step 3 reads it back, and step 4's
+     STOP routes an explicit-deny `AccessDenied` to it rather than to an
+     S4.3 `resume`.
   3. **Permissions boundary: seed-owned, amended by a seed catalog
      amendment.** The Preview, Apply and Drift roles carry
      `GovernanceBoundary-user-service-infrastructure-{env}`
@@ -1885,10 +1925,20 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
      check above 10,240 characters. For the Apply role: the TEST XP-11
      allows go into the TEST `-poc-prerequisites` managed policy that
      #219 admits, within 6144 characters.
+     For the PROD Apply role, S5.24a's reads go **fit-first** (R12-m4)
+     into one of S5.2's PROD Apply managed policies (row 9, already in
+     `_managed_policy_resources`, the governance ceilings' read lists and
+     `G-GitHubGovernanceApply`'s two `NotResource` lists), within 6144
+     characters; only if no S5.2 PROD Apply policy has room does S5.24a
+     create a new one. So the NFR-06 condition "only because the size
+     limits leave no other design" holds for every new policy.
      **A new managed policy for a USI CI role (R11-m1).** Any new Apply
-     managed policy (S5.2's workload capability, S5.24a's PROD reads, or
-     XP-11 if it does not fit) and any new Preview or Drift managed policy
-     (the inline-overflow fallback above) must be writable by the
+     managed policy (S5.2's workload capability, which does not fit the
+     existing `-pulumi-backend`, `-secret-read-deny` or TEST
+     `-poc-prerequisites` documents; S5.24a's PROD reads only if no S5.2
+     PROD Apply policy has room; or XP-11 if it does not fit) and any new
+     Preview or Drift managed policy (the inline-overflow fallback above)
+     must be writable by the
      governance apply role, `GitHubGovernanceApply`, and readable by its
      Preview and Drift runs. #219's amendment shows the full set for one
      policy (`pulumi/seed/test_poc_prerequisite_amendment.py` lines
@@ -2001,7 +2051,22 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
        in the PR (the coordinator's direction; #285 requires the
        separately authenticated installer above and a named, reviewed
        holder for its break-glass path, `runtime-enrollment.md` lines
-       236-239);
+       236-239). **The installer identity is the external precondition
+       XP-17 (R12-m1; PRD §7), before row 8:** a reviewed non-root
+       installer role of the same class as #284's
+       `--installer-role-arn` (`wt-boot-pr280`
+       `specs/test-poc-prerequisite-capability/post-seed-activation.md`
+       lines 200-236: an already-issued non-root installer session,
+       authenticated by STS identity and immutable RoleId), with the
+       minimum permissions XP-17 lists and per-install evidence (caller
+       ARN, RoleId, MFA present, non-root). The seed catalog holds
+       exactly 24 principals and no installer (`test.json` lines
+       1143-1568; `pulumi/seed/README.md` lines 14-24 and 167-170), and
+       BI records that no authenticated live installer exists yet
+       (`wt-boot-219` `specs/219-test-workload-capability/installability-stop.md`
+       lines 5-10). So **the seed does not guard this identity** (a
+       recorded residual): its bounds are its own reviewed policies,
+       the per-install evidence and the stack policies;
      - a CREATE change set whose rows are exactly the reviewed `Add` rows,
        with the `DescribeChangeSet` output kept as evidence, and a
        preflight that the stack, role and policy names are absent;
@@ -2027,9 +2092,9 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
 
      | Stack (per family) | Created by | Holds at creation | Later reviewed amendments |
      | --- | --- | --- | --- |
-     | ECS runtime, TEST and PROD (one stack each) | S5.1 (row 8) | the execution and task roles with their ECS trust and every S5.1 grant (secret reads for the execution role; SQS, SES and `elasticache:Connect` for the task role) | S5.4 (the AD-15a identity rows, row 11) |
-     | function roles, TEST and PROD | S5.1 (row 8) | the app-rotation, redeploy and bootstrap-job roles with their S5.1 grants | S5.4 (the app-rotation AD-15a row, row 11); S5.3 (row 13: the app-rotation and seed, redeploy and bootstrap-job functions, as `Add` rows); S5.5 (inside row 43, S4.6 steps 5-6 and again step 20: the bootstrap-job exact-ARN secret read, its documented Lambda network-interface grant (`Resource: *`, the NFR-06 exception below, kept for the life of the function) with the source-function deny, and the function's `VpcConfig`) |
-     | restore, TEST | S5.1 (row 8) | the restore-operator and restore-reader roles, trust only | S5.18a (row 42: the grants and the reader function without `VpcConfig`); S5.18b (inside row 43: the reader's network-interface grant (kept for the life of the function) and `VpcConfig` in step 5, the `VpcConfig`-only detach in step 18, the `VpcConfig` re-attach in step 20); S4.8 (row 45, only if V-19 selects the ephemeral exact-ARN reader grant: its add and its removal) |
+     | ECS runtime, TEST and PROD (one stack each) | S5.1 (row 8) | the execution and task roles (path `/`) with their ECS trust, one retained `-Boundary` and one retained workload-shaped `-Guard` managed policy per role at `/issue219/{env}/{boundary,guard}/` (R12-M2, below), and every S5.1 grant: for the execution role the secret reads, `logs:CreateLogStream`/`logs:PutLogEvents` on the stack's two ECS log groups and, for TEST, #219's `execution_policy()` ECR pull grant; for the task role SQS, SES and `elasticache:Connect` | S5.4 (row 11: the AD-15a identity rows as `Modify` rows on the roles **and** `Modify` rows on the boundary and guard policies, which gain the same KMS actions); PROD only, S5.24a (row 50, after XP-14): the PROD execution role's ECR pull grant and the matching boundary and guard rows on XP-14's repositories |
+     | function roles, TEST and PROD | S5.1 (row 8) | the app-rotation, redeploy and bootstrap-job roles with their S5.1 grants | S5.4 (the app-rotation AD-15a row, row 11); S5.3 (row 13: the app-rotation and seed, redeploy and bootstrap-job functions, as `Add` rows); S5.5 (inside row 43: in S4.6 steps 5-6 the bootstrap-job exact-ARN secret read, its scoped Lambda network-interface grant (R12-m2, below; kept for the life of the function) with the source-function deny, and the function's `VpcConfig`; in step 18 the `VpcConfig`-only detach; in step 20 the re-attach with the rebuilt XP-8 subnet and SG IDs, the grant re-scoped to them and the new secret ARN; R12-m3) |
+     | restore, TEST | S5.1 (row 8) | the restore-operator and restore-reader roles, trust only | S5.18a (row 42: the grants and the reader function without `VpcConfig`); S5.18b (inside row 43: the reader's scoped network-interface grant (kept for the life of the function) and `VpcConfig` in step 5, the `VpcConfig`-only detach in step 18, the re-attach in step 20 with the rebuilt subnet and SG IDs and the grant re-scoped to them); S4.8 (row 45, only if V-19 selects the ephemeral exact-ARN reader grant: its add and its removal) |
      | exercise, TEST | S5.1 (row 8) | the exercise role, trust only (S5.4's runtime key policy names it, AD-15a) | S5.4 (its AD-15a row, row 11); S5.23 (its other grants, row 33) |
      | recovery, TEST | S5.7 (row 34) | the recovery role with every S5.7 grant | none planned |
      | recovery, PROD | S5.19 (row 47) | the recovery role with every S5.19 grant | none planned |
@@ -2040,48 +2105,139 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
      policy whose principal does not exist) and the S3.3 endpoint policy
      binds the restore-reader ARN (AD-12a); their grants arrive with the
      stories that own them (S5.23, S5.18a). **The Lambda
-     network-interface grant (R11-M1 audit and recheck N1; NFR-06
-     exception):** a function with a `VpcConfig` needs, on its execution
-     role, the documented set `ec2:CreateNetworkInterface`,
-     `ec2:DescribeNetworkInterfaces`, `ec2:DescribeSubnets`,
-     `ec2:DeleteNetworkInterface`, `ec2:AssignPrivateIpAddresses` and
-     `ec2:UnassignPrivateIpAddresses`, and the AWS Lambda guide says to
-     allow all six on `"Resource": "*"` ("Giving Lambda functions access
-     to resources in an Amazon VPC",
+     network-interface grant, scoped (R11-M1 audit and recheck N1;
+     re-scoped in revision 12, R12-m2):** a function with a `VpcConfig`
+     needs, on its execution role, the documented set
+     `ec2:CreateNetworkInterface`, `ec2:DescribeNetworkInterfaces`,
+     `ec2:DescribeSubnets`, `ec2:DeleteNetworkInterface`,
+     `ec2:AssignPrivateIpAddresses` and `ec2:UnassignPrivateIpAddresses`.
+     The AWS Lambda guide lists them and says to allow them on
+     `"Resource": "*"` ("Giving Lambda functions access to resources in
+     an Amazon VPC",
      <https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html>,
-     section "Required IAM permissions"). That page names no EC2
-     condition key for these actions (its condition keys `lambda:VpcIds`,
-     `lambda:SubnetIds` and `lambda:SecurityGroupIds` apply to the caller
-     of `CreateFunction` and `UpdateFunctionConfiguration`, not to the
-     execution role), so no condition is adopted and **no resource scope
-     exists for these actions**: this is an explicit NFR-06 exception of
-     the same kind as `iam:SimulateCustomPolicy` and the
-     `acm:DescribeCertificate` read. It is bounded three ways. (1) The
-     grant sits only on the bootstrap-job and restore-reader execution
-     roles, and is created only by the human stack amendment that also
-     adds the `VpcConfig` (the function depends on the role). (2) Each of
-     those roles carries the deny the same page recommends: `Deny` of the
-     same actions plus `ec2:DetachNetworkInterface` on `*` with
-     `ArnEquals lambda:SourceFunctionArn` = the function's own ARN, so
-     the function's code cannot call EC2 while the Lambda service still
-     can. (3) Every other principal is unchanged. **Lifecycle decision
+     section "Required IAM permissions"), but it does not say that they
+     lack resource-level support. The Service Authorization Reference
+     for Amazon EC2 ("Actions, resources, and condition keys for Amazon
+     EC2",
+     <https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonec2.html>,
+     read 2026-10-01 in its published machine-readable form,
+     <https://servicereference.us-east-1.amazonaws.com/v1/ec2/ec2.json>,
+     version v1.4) lists these resource types:
+     `CreateNetworkInterface`: `network-interface`, `security-group` and
+     `subnet` (condition keys include `ec2:SubnetID`,
+     `ec2:SecurityGroupID` and `ec2:Vpc` on the subnet and security
+     group); `DeleteNetworkInterface`, `AssignPrivateIpAddresses` and
+     `UnassignPrivateIpAddresses`: `network-interface`, with the
+     resource condition keys `ec2:Subnet` and `ec2:Vpc` (type ARN);
+     `DescribeNetworkInterfaces` and `DescribeSubnets`: no resource type.
+     So the grant is:
+     - `ec2:CreateNetworkInterface` on the XP-8 subnet ARNs
+       (`arn:aws:ec2:eu-central-1:<account>:subnet/<id>`), the XP-8
+       bootstrap-job SG ARN (`…:security-group/<id>`) and
+       `arn:aws:ec2:eu-central-1:<account>:network-interface/*` (the new
+       ENI's ID is not known in advance);
+     - `ec2:DeleteNetworkInterface`, `ec2:AssignPrivateIpAddresses` and
+       `ec2:UnassignPrivateIpAddresses` on
+       `arn:aws:ec2:eu-central-1:<account>:network-interface/*` with
+       `ArnEquals ec2:Subnet` = the XP-8 subnet ARNs;
+     - `ec2:DescribeNetworkInterfaces` and `ec2:DescribeSubnets` on
+       `"*"`, the only part without a resource scope, because the EC2
+       reference lists no resource type for them (the NFR-06 rule for
+       such actions).
+
+     No EC2 condition narrows the Describe pair, and the Lambda page's
+     condition keys `lambda:VpcIds`, `lambda:SubnetIds` and
+     `lambda:SecurityGroupIds` apply to the caller of `CreateFunction`
+     and `UpdateFunctionConfiguration` (the Lambda service reference,
+     <https://servicereference.us-east-1.amazonaws.com/v1/lambda/lambda.json>,
+     lists them on those two actions), not to the execution role. **Open
+     point V-29 (live, fail closed):** the Lambda guide documents only
+     the `*` form, so whether the service accepts the scoped grant is
+     proven live by the first attach amendment (S4.6 step 5): its
+     post-update verifier requires the function `State` `Active`,
+     `LastUpdateStatus` `Successful` and a `lambda` ENI in the XP-8
+     subnets, and the step-18 check requires that ENI deleted within 45
+     minutes. The reader attaches to the same subnets and SG, and Lambda
+     shares a Hyperplane ENI between functions with the same subnet and
+     SG combination (the same page), so the reader may create no ENI of
+     its own; its grant is proven only where CloudTrail shows a
+     `CreateNetworkInterface` or `DeleteNetworkInterface` call under the
+     reader role, and otherwise the bootstrap job's first attach is the
+     Create evidence. A refusal or a failed update is a STOP; the
+     fallback, each step a reviewed stack amendment and each re-proven by
+     V-29, is: (1) drop the `ec2:Subnet` condition; (2) widen the four
+     mutating actions to the resource-type wildcards in the region and
+     account (`…:subnet/*`, `…:security-group/*`,
+     `…:network-interface/*`); (3) widen them to
+     `arn:aws:ec2:eu-central-1:<account>:*`. If the service still refuses,
+     the fallback is exhausted: STOP, then a **user decision** to amend
+     NFR-06 to the documented `"Resource": "*"` form (with the
+     `lambda:SourceFunctionArn` deny); this plan does not take it.
+     The grant is bounded three more ways. (1) It sits only on the
+     bootstrap-job and restore-reader execution roles, and is created
+     only by the human stack amendment that also adds the `VpcConfig`
+     (the function depends on the role). (2) Each of those roles carries
+     the deny the same page recommends: `Deny` of the six actions plus
+     `ec2:DetachNetworkInterface` on `*` with `ArnEquals
+     lambda:SourceFunctionArn` = the function's own ARN, so the
+     function's code cannot call EC2 while the Lambda service still can.
+     (3) Every other principal is unchanged. **Who can re-point or
+     re-code the functions (R12-m2; audit of revision 12):** stack
+     policies restrict only CloudFormation updates, not direct Lambda
+     calls, and `lambda:UpdateFunctionCode` would run any code as the
+     bootstrap-job role (the DocumentDB secret read) or the reader role.
+     So every stack amendment that adds a function or changes its code or
+     `VpcConfig` (S5.3 at row 13 for the three function-role functions,
+     S5.18a at row 42 for the reader, then S5.5 and S5.18b in row 43)
+     carries simulator rows that `lambda:UpdateFunctionConfiguration` and
+     `lambda:UpdateFunctionCode` on every function of that stack are
+     denied to every CI and operator principal that exists at that row
+     (the TEST recovery role from row 34 on): the USI Preview, Apply,
+     Drift, recovery and exercise roles (simulated by the TEST Preview
+     role, whose S5.17 grant from row 10 covers them; every PROD USI role
+     by the BI owner, because S5.24 gives the PROD Preview role
+     `iam:SimulatePrincipalPolicy` on the PROD execution role only and
+     this plan does not widen it) and `GitHubGovernanceApply`,
+     `GitHubCiApply-bootstrap-infrastructure`,
+     `PulumiAutomation-bootstrap-infrastructure`,
+     `PulumiDeploy-bootstrap-infrastructure` and the operator Apply role
+     (run by the BI owner with a BI identity, "Who runs which rows"). An
+     allowed row is a STOP for that amendment and then a **user
+     decision**: the remedy (for example the documented
+     `lambda:VpcIds`/`lambda:SubnetIds` caller conditions, or a deny of
+     the update actions on these functions, added to that principal's
+     guard) is a seed-guard change outside NFR-06's closed list of guard
+     changes, so it amends NFR-06; this plan takes no such decision. Only
+     the XP-17 installer may update the functions. **Lifecycle decision
      (recheck N1): the grant lives as long as the function, and only the
-     `VpcConfig` is removed by the detach amendment.** Lambda deletes an
-     unused Hyperplane ENI with the execution role of the function that
-     created it, and does so only after no other function or published
-     version uses it; the page says this takes up to 20 minutes (older
+     `VpcConfig` is removed by the detach amendment.** The Lambda VPC guide
+     (<https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html>)
+     says only that "Lambda relies on permissions in the function
+     execution role" to manage the ENIs, so the plan keeps the grant on
+     both roles, and Lambda deletes an unused Hyperplane ENI only after
+     no other function or published version uses it; the page says this takes up to 20 minutes (older
      guidance said up to 45, so the plan uses 45), and that deleting the
      role first leaves the ENI for a manual delete. Removing the grant in
      the detach amendment would therefore strand the ENI, which blocks the
      SG and subnet deletes. Keeping the grant needs no second removal
-     amendment, no wait between two human steps and no re-add in the
-     step-20 re-attach, and the extra exposure is nil because of the
-     source-function deny. The grant leaves with the function (a later
-     stack amendment that removes the function and the role's grant
-     together, after the ENI check below shows no Lambda ENI in the XP-8
-     subnets). The ENI check is read-only `ec2:DescribeNetworkInterfaces`
-     filtered on the XP-8 `subnet-id` values and `interface-type` =
-     `lambda`, polled for up to 45 minutes after the detach.
+     amendment and no wait between two human steps, and the extra
+     exposure is nil because of the source-function deny. **Rebuild
+     (R12-m3):** the step-19 abandon deletes the USI subnets and the
+     bootstrap-job SG (the manifest retains only the log-bucket families
+     and the retained secrets), so the rebuild has new subnet and SG IDs
+     and XP-8 items 1-4 all repeat (item 4, the Apply-role secret-policy
+     re-grant, is a governance change, not a seed operation). The step-20 re-attach (S5.5
+     for the bootstrap job, S5.18b for the reader) therefore `Modify`s
+     the grant's subnet and SG ARNs and the `ec2:Subnet` condition to
+     the rebuilt ones together with the `VpcConfig` (the old ENIs are
+     already gone, by the step-18 check), and S5.5 also moves the secret
+     read to the new managed-secret ARN. The grant leaves with the
+     function (a later stack amendment that removes the function and the
+     role's grant together, after the ENI check below shows no Lambda ENI
+     in the XP-8 subnets). The ENI check is read-only
+     `ec2:DescribeNetworkInterfaces` filtered on the XP-8 `subnet-id`
+     values and `interface-type` = `lambda`, polled for up to 45 minutes
+     after the detach.
 
      **Functions that run as S5.1 roles live in the owning stack (not
      by guard narrowing).** A Lambda function with one of these roles
@@ -2142,11 +2298,143 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
      ConfigRead roles share the boundary but not the identity allow, so
      their `iam:PassRole` stays denied (ConfigRead rows).
 
+     **The ECS roles' boundaries, guards and execution-role grants: S5.1
+     creates them (R12-M2; audit of revision 12).** USI admission requires
+     each ECS role to have path `/` and the permissions boundary
+     `arn:aws:iam::<account>:policy/issue219/{env}/boundary/{name}-Boundary`
+     (`scripts/poc_workload_capabilities.py` `_role`, lines 89-117, the
+     boundary check at lines 106-116; S4.14 makes `test` the request's
+     stack), and `_pull` (lines 193-232, called at line 338 with the
+     execution role) simulates `ecr:GetAuthorizationToken` on `*` and
+     `ecr:BatchCheckLayerAvailability`, `ecr:BatchGetImage` and
+     `ecr:GetDownloadUrlForLayer` on each registry ARN, with
+     `aws:RequestedRegion`, and requires every row `allowed` **and**
+     `AllowedByPermissionsBoundary` (`_decision`, lines 160-191). The
+     task definitions use the `awslogs` driver (`pulumi/app/compute.py`
+     lines 727-734) on the log groups `/aws/ecs/<stack_tag>/web` and
+     `/worker` (lines 223-233), which the execution role writes. #219
+     proposes all of this only as unwired source: the boundary and guard
+     ARNs (`wt-boot-219` `pulumi/seed/poc_runtime.py` `policy_arn`, lines
+     66-73), the execution role's `execution_policy()` (lines 166-168,
+     rendered by `_ecr_policy`, lines 191-210: `sts:GetCallerIdentity`
+     and `ecr:GetAuthorizationToken` on `*` and the three pull actions on
+     the two TEST repositories `REPOSITORY_ARNS`, each ECR allow with
+     `aws:RequestedRegion`), its guard `_ecr_guard` (lines 213-235), the
+     role registration with `permissions_boundary`
+     (`pulumi/infra/poc_runtime_enrollment.py` lines 127-147), and the
+     explicit exclusion of the four ECS fences from its stack
+     (`runtime-enrollment.md` lines 12-16 and 95-104). This plan does not
+     adopt #219's later runtime amendment (above), so **S5.1's ECS
+     runtime stack of each environment creates, per role:**
+     - the `{name}-Boundary` managed policy at path
+       `/issue219/{env}/boundary/` (`AWS::IAM::ManagedPolicy`,
+       `DeletionPolicy` and `UpdateReplacePolicy` `Retain`), set as the
+       role's `PermissionsBoundary`. Its content covers every grant of
+       that role and nothing else, and it changes only by `Modify` rows
+       (a `PolicyDocument` update is "No interruption" for
+       `AWS::IAM::ManagedPolicy`, while a name or path change is
+       "Replacement": CloudFormation template reference
+       <https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-iam-managedpolicy.html>,
+       read 2026-10-01): for the execution role `sts:GetCallerIdentity`,
+       the secret reads, the two log-stream writes, the `_pull` set (TEST
+       at creation; PROD later, below) and (S5.4) `kms:Decrypt` on the
+       runtime CMK via Secrets Manager; for the task role SQS, SES,
+       `elasticache:Connect` and (S5.4) the JWT and 2FA key actions;
+     - a workload-shaped `{name}-Guard` managed policy at
+       `/issue219/{env}/guard/` (`Retain`), attached to the role. #219's
+       own guard documents are not adopted as they are: the execution
+       guard denies every action outside ECR pull and
+       `sts:GetCallerIdentity` (`_ecr_guard`) and the task guard and
+       boundary are deny-all (`poc_runtime.py` line 276), so they would
+       block the secret, log, KMS, SQS and SES grants. But the guard's
+       purpose stays (`runtime-enrollment.md` lines 88-92): a permissions
+       boundary does not limit a same-account resource-based policy that
+       names the role session, so an explicit deny is still needed. S5.1's
+       guard therefore follows #219's shape over the workload set: a
+       `Deny` with `NotAction` equal to the role's action set; one
+       `Deny Action=<group> NotResource=<exact ARNs or patterns>` per
+       action group of the role, with the NotResource equal to that
+       group's resources in the `-Boundary` (the ECR pull actions on the
+       stack's two repositories; the secret reads on the exact secret
+       patterns; the two log-stream writes on the `log-stream` ARNs; for
+       the task role the SQS, SES and `elasticache:Connect` actions on
+       their exact ARNs), so a same-account resource policy naming the
+       role session cannot reach any other resource of a service the role
+       uses; and a `Deny` of the ECR actions when `aws:RequestedRegion` is
+       not `eu-central-1`. S5.4's amendment adds the KMS actions to the
+       `NotAction` list and a `Deny Action=kms:Decrypt` (and, for the task
+       role, the JWT and 2FA key actions) with `NotResource` the runtime
+       CMK (or the JWT and 2FA key ARNs) by `Modify` rows; S5.24a adds the
+       PROD ECR group's `NotResource` deny the same way;
+     - the execution role's inline pull grant, #219's `execution_policy()`
+       shape with the environment's account and repositories (for TEST
+       exactly #219's document on `user-service-test-web` and
+       `-worker`);
+     - the execution role's `logs:CreateLogStream` and
+       `logs:PutLogEvents` on
+       `arn:aws:logs:eu-central-1:<account>:log-group:/aws/ecs/<stack_tag>/{web,worker}:log-stream:*`
+       (the Logs service reference lists `log-stream` as their resource
+       type).
+
+     **The PROD ECR part waits for XP-14 (audit of revision 12,
+     finding 1).** The PROD repository names belong to XP-14 (row 48;
+     PRD §7), so S5.1's PROD stack at row 8 creates the PROD roles,
+     boundaries and guards **without** the ECR pull grant and without the
+     `_pull` rows in the boundary and guard. **S5.24a (row 50) owns the
+     PROD ECS runtime stack amendment** that adds them on XP-14's two PROD
+     repositories (`Modify` rows on the role and on both policies), before
+     its catalog amendment. No PROD `_pull` runs before gate 2a (S4.7, row
+     52), so nothing uses the grant earlier. Each boundary and guard is
+     one managed policy of at most 6144 characters; S5.1, S5.4 and
+     S5.24a record the rendered sizes and fail an offline check above
+     that. **ARNs taken over from #219 (for the BI review):** these four
+     TEST policy ARNs are the ones #219's later runtime amendment
+     reserves, and the obsolete staged change sets on the
+     `REVIEW_IN_PROGRESS` stack `issue219-runtime-fences-test`
+     (`runtime-enrollment.md` lines 32-49) contain fences with the same
+     names. S5.1's preflight requires them absent (a collision is a
+     STOP), and the BI review records that S5.1 takes these names over
+     and that #219's runtime amendment is withdrawn or renamed.
+
+     The post-create verifier checks each role's `PermissionsBoundary`
+     ARN, its single guard attachment, each policy's default version
+     document (equal to the reviewed one) and the `Retain` policies in
+     the template; S5.4's and S5.24a's post-update verifiers check the
+     amended documents. **Offline regression:** S5.1's PR renders the
+     template and asserts, for each ECS role, the `_role` expectations
+     (path `/`, the exact boundary ARN) and, for TEST, that the identity
+     and boundary documents each carry an `Allow` statement covering every
+     `_pull` (action, resource) pair with `aws:RequestedRegion`. It also asserts that each guard's per-group `NotResource` list equals the boundary's resources for that group. USI S4.14
+     (row 39) adds `_role`/`_pull` fixtures from S5.1's reviewed TEST
+     template as amended by S5.4 (the row-11 template; its hash
+     recorded): `get-role` fixtures from the template pass `_role`; a
+     structural helper in the test asserts the pull coverage above and
+     then feeds stubbed `simulate-principal-policy` rows (`allowed`,
+     `AllowedByPermissionsBoundary`) to `_pull`. Negative fixtures: a
+     template variant with a wrong boundary path fails with
+     `workload-native-role-boundary`; one with a role path other than
+     `/` fails with `workload-native-role-identity`; one whose boundary
+     lacks `ecr:GetDownloadUrlForLayer` fails the structural helper; a
+     stubbed row whose `PermissionsBoundaryDecisionDetail` is not
+     `AllowedByPermissionsBoundary` fails with
+     `workload-execution-pull-decision`. USI has no offline IAM
+     evaluator, so the live proof of the boundary decision is the
+     simulator row (S5.1 at row 8 for TEST, S4.6 step 3, S4.7). The PROD
+     fixtures use stand-ins for XP-14's repository names, like S4.14's
+     other XP-14 rows.
+     **XP-16 folded into S5.1:** the PROD boundary path that XP-16 left
+     to the bootstrap owner is created by S5.1's PROD ECS runtime stack
+     at row 8, so XP-16 needs no row-49 deliverable: S4.14 (row 39) pins
+     the name from S5.1's reviewed PROD template and S4.7 verifies it
+     live (PRD §7).
+
      **Not chosen: the governor-guard route.** Narrowing `8f75c4a5…` or
-     `dc27f076…`, removing roles from the `8c068aaa…` `NotResource`
-     scope, or adding `iam:CreateRole` to the `01dcac0c…` `NotAction`
-     list would let a CI or operator principal create roles. Each
-     narrows a Resource-`*` deny, which NFR-06 does not allow, so that
+     `dc27f076…`, adding the new roles to the `8c068aaa…` `NotResource`
+     list (which widens that statement's exemption, so the governance
+     apply role's `iam:*` reaches them; corrected in revision 12,
+     R12-n3), or adding `iam:CreateRole` to the `01dcac0c…` `NotAction`
+     list would let a CI or operator principal create or write roles.
+     Each narrows a Resource-`*` deny, which NFR-06 does not allow, so that
      route would need a user decision amending NFR-06. This plan does not
      take it; NFR-06 stays as it is.
 
@@ -2172,15 +2460,37 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
        every other policy; `iam:PutRolePolicy` and `iam:AttachRolePolicy`
        on a new role are denied to the USI roles, the governance apply
        role, the three platform appliers and the operator Apply role;
-     - the stack's post-create or post-update verifier output.
+     - for each stack amendment that adds a function or changes its code
+       or `VpcConfig` (S5.3, S5.18a, S5.5, S5.18b; R12-m2):
+       `lambda:UpdateFunctionConfiguration` and `lambda:UpdateFunctionCode`
+       on every function of that stack denied to every CI and operator
+       principal (the list in the network-interface paragraph above);
+     - for S5.1's ECS runtime stacks (R12-M2): one verifier row per
+       boundary and guard policy (the role's `PermissionsBoundary` ARN
+       equals `…:policy/issue219/{env}/boundary/{name}-Boundary`, the
+       role's only managed attachment is its `-Guard`, and each default
+       version document equals the reviewed one), and the TEST execution
+       role's `_pull` set simulated `allowed` with
+       `AllowedByPermissionsBoundary` (run by the BI owner at row 8,
+       because no USI role's simulate grant exists before S5.17; S4.6
+       step 3 repeats it live under the Preview role); the PROD rows run
+       at S5.24a's PROD ECS amendment (row 50) and live in S4.7;
+     - the stack's post-create or post-update verifier output, and the
+       XP-17 per-install evidence (caller ARN, RoleId, MFA, non-root).
 
-     **Who runs which rows.** The rows for the USI Preview, Apply and
-     Drift roles are simulated by the TEST (or PROD) Preview role, whose
-     S5.17 (or S5.24a) simulate grant covers them, and S4.6 step 3 (and
-     S4.7 for PROD) repeats them live. The rows for the governance, platform
-     and operator roles are outside that grant: the BI owner runs them
-     with a BI identity in the stack or amendment PR, and S4.6 step 3
-     and S4.7 attach that output rather than simulate it.
+     **Who runs which rows.** The rows for the TEST USI Preview, Apply
+     and Drift roles are simulated by the TEST Preview role, whose S5.17
+     simulate grant covers them, and S4.6 step 3 repeats them live. The
+     BI owner runs **every PROD USI-role row** with a BI identity in the
+     stack or amendment PR, including S5.24a's own PROD ECS `_pull`
+     verifier rows, because S5.24's PROD Preview grant covers the PROD
+     execution role only (S5.24a's catalog amendment comes after its
+     stack amendment, so no wider grant exists when those rows run; this
+     plan does not widen it), and S4.7 attaches that output for PROD and
+     repeats the execution-role rows live. The rows for the governance,
+     platform and operator roles are outside that grant too: the BI owner
+     runs them with a BI identity, and S4.6 step 3 and S4.7 attach that
+     output rather than simulate it.
 
   **Boundary size and fallback form (R10-m1).** The boundary is one
   managed policy of at most 6144 characters (`governance_automation.py`
@@ -2245,12 +2555,23 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   1. external precondition, no row: #284 merged and applied before the
      first operation of row 8; its result `ff2eaf29…` is the TEST
      baseline of every later TEST amendment. #285's publisher stack is
-     not open while any operation below is open;
+     not open while any operation below is open. **Also before row 8
+     (R12-m1): XP-17**, the reviewed non-root installer role with its
+     minimum permissions (PRD §7); without it no stack install or
+     amendment starts (STOP). **Before row 9's first TEST Apply allow
+     row (R12-M1): XP-18**, BI's reviewed retirement of
+     `Issue215CutoverSessions` on the TEST Apply role, read back absent,
+     and the PROD Apply role's inline policies read back with no
+     deny-all hold, before row 9's PROD part (STOP otherwise). If BI's
+     retirement activation changes a catalog or a stack, it takes the
+     one-open slot before row 9, like #284;
   2. row 8, S5.1: the service-linked-role stack of each account, only if
      the preflight read finds one of the five missing (R11-m2); then the
-     TEST ECS runtime stack, the PROD ECS runtime stack, the TEST and
-     PROD function-role stacks, the TEST restore stack and the TEST
-     exercise stack, one at a time;
+     TEST ECS runtime stack, the PROD ECS runtime stack (each with the
+     retained boundary and guard policies; PROD without its ECR part,
+     R12-M2), the TEST and PROD
+     function-role stacks, the TEST restore stack and the TEST exercise
+     stack, one at a time;
   3. row 9, S5.2: the TEST catalog amendment, then the PROD one
      (boundary allows including the PassRole fragment, the USI Apply
      guard's PassRole fragment, and the new Apply managed policies with
@@ -2258,8 +2579,9 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   4. row 10, S5.17: TEST, then PROD;
   5. row 11, S5.4: TEST, then PROD (the Preview, Drift and Apply KMS
      reads); then the AD-15a identity rows as stack amendments of the
-     TEST and PROD ECS runtime stacks, the TEST and PROD function-role
-     stacks and the TEST exercise stack;
+     TEST and PROD ECS runtime stacks (with `Modify` rows on their
+     boundary and guard policies, R12-M2), the TEST and PROD function-role stacks
+     and the TEST exercise stack;
   6. row 13, S5.3, in this order: BI CI creates the function log
      groups, then the TEST (then PROD) function-role stack amendment adds
      the three functions (no catalog change), then BI CI creates the
@@ -2268,18 +2590,30 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   8. row 34, S5.7: the TEST recovery stack install;
   9. row 42, S5.18a then XP-11: the TEST restore stack amendment, then
      XP-11's TEST catalog amendment (after S5.18a, before S4.6);
-  10. row 43, S4.6: S5.5's TEST function-role stack amendment (the
-      bootstrap-job exact XP-8 secret read, its network-interface grant
-      and `VpcConfig`) in steps 5-6 and again in step 20 (a new ARN after
-      the rebuild; the grant is already there), and S5.18b's TEST restore
-      stack amendments (the reader's network-interface grant and
-      `VpcConfig` in step 5, the `VpcConfig`-only detach in step 18, the
-      `VpcConfig` re-attach in step 20);
+  10. row 43, S4.6, one amendment at a time in this order (R12-m3):
+      step 5, S5.5's TEST function-role stack amendment (the
+      bootstrap-job exact XP-8 secret read, its scoped network-interface
+      grant and `VpcConfig`), then S5.18b's TEST restore stack amendment
+      (the reader's scoped grant and `VpcConfig`); step 18, S5.5's
+      `VpcConfig`-only detach of the bootstrap job, then S5.18b's
+      `VpcConfig`-only detach of the reader (the ENI check follows both);
+      step 20, S5.5's re-attach (the rebuilt XP-8 subnet and SG IDs, the
+      grant re-scoped to them, the new managed-secret ARN), then
+      S5.18b's re-attach (the same subnet and SG IDs, its grant
+      re-scoped); and, inside step 20 before step 2, the XP-8 item-4
+      re-grant of the USI Apply role's exact-ARN secret-policy read and
+      write on the new managed-secret ARN, which is S5.5's governance
+      identity change and not a seed operation, so it is not a seed
+      installer row and lands before step 2 needs it;
   11. row 45, S4.8, only if V-19 selects the ephemeral exact-ARN reader
       grant: its add and its removal, as TEST restore stack amendments;
   12. row 47, S5.19: the PROD recovery stack install;
   13. row 48, XP-14: the PROD `s3:GetBucketVersioning` catalog amendment;
-  14. row 50: S5.24a's amendment, then S5.24b's.
+  14. row 50: S5.24a's PROD ECS runtime stack amendment (the PROD
+      execution role's ECR pull grant and the boundary and guard rows on
+      XP-14's repositories, R12-M2), then S5.24a's catalog amendment (its
+      PROD Apply reads fit-first into an S5.2 PROD Apply policy, R12-m4),
+      then S5.24b's.
 
   An Apply or Preview/Drift managed-policy change (layer 5) rides in its
   story's catalog amendment in this order. S5.5's Apply-role
@@ -2366,8 +2700,18 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     guard-layer, renderer-scope and principal-creation rows for Preview,
     Apply and Drift.
     Only Drift *denies* are asserted, because the TEST Drift allows are
-    S5.24b's (row 50, after gate 1).
-  - **S5.24a (PROD Preview and Apply):** the same rows (principal-creation
+    S5.24b's (row 50, after gate 1). **Hold rows (R12-M1):** a read-back
+    by the BI owner (`iam:ListRolePolicies` on the TEST Apply role, then
+    `iam:GetRolePolicy` of each name) shows no `Issue215CutoverSessions`
+    and no inline document that denies `*`; and every simulated TEST
+    Apply allow row is `allowed` with no entry of its
+    `MatchedStatements` whose `SourcePolicyId` is
+    `Issue215CutoverSessions`. S5.2's TEST matrix (row 9) carries the
+    same two rows, and its PROD matrix the PROD Apply read-back.
+  - **S5.24a (PROD Preview and Apply):** the PROD ECS rows of its stack
+    amendment (the PROD execution role's `_pull` set `allowed` with
+    `AllowedByPermissionsBoundary`; the boundary and guard documents),
+    the XP-18 PROD read-back, and the same rows (principal-creation
     rows included) on the PROD roles,
     repositories and XP-15 certificate ARN, plus an allow row for the
     PROD Preview role's `iam:SimulatePrincipalPolicy` on the PROD
@@ -2390,11 +2734,11 @@ after its predecessor merges.
 
 | Chain | Order |
 | --- | --- |
-| C-BI (IAM/KMS/Lambda, governance apply) | S5.1 (every central role except the two recovery roles, each role family created by its own independent CloudFormation stack through a human non-root installer (AD-26 layer 6, R11-M1): ECS runtime per environment (execution and task; the TEST stack adopts #219's names and PassRole fragments), function roles per environment (app-rotation, redeploy, bootstrap-job), TEST restore (operator, reader; trust only) and TEST exercise (trust only), plus a service-linked-role stack for any of the five that a read finds missing (R11-m2); no KMS statements) → S5.2 (apply capability, including the managed-password and log-group KMS describe grants) → S5.17 (preview/drift read without KMS; `iam:SimulatePrincipalPolicy` for the preview role) → S5.4 (CMKs whose key policies name only existing roles, per AD-15a; then the matching identity statements, including the preview/drift KMS read) → S5.3 (functions that use the S5.1 roles, added to the function-role stacks by reviewed stack amendments because no CI applier may pass those roles (AD-26 layer 6); KMS-encrypted function log groups and rules by BI CI) → S5.23 (TEST exercise role grants, an amendment of its S5.1 stack) → S5.7 (test-recovery role and grants in their own stack, derived from the S4.10 graph) → S5.18a (grants on the S5.1 restore-operator and restore-reader roles and the reader function without VPC, as a restore-stack amendment) → XP-11 (the TEST Preview and Apply workload-observation reads and their seed boundary amendment: an external gate-1 prerequisite whose BI and seed changes take this C-BI slot, after S5.18a (row 42) and before S4.6 (row 43); R10-m2) → [live, after USI step 1] S5.5 (XP-8 metadata, the bootstrap-job exact-ARN grant as a function-stack amendment, bootstrap-job VPC attach, job run) → S5.18b (restore-reader network-interface grant and VPC attach, after XP-8, as restore-stack amendments; detach and re-attach in steps 18 and 20) → S5.6 (conditional) → S5.19 (prod-recovery role and grants in their own stack) → [after XP-14, XP-15 and XP-16] S5.24 (Drift-role registry-row, refresh, `s3:GetBucketVersioning`, IAM, ECR and ACM read inventory and grants for S4.17, with `SimulatePrincipalPolicy` on the execution role only and the Drift-role deny unchanged; plus the PROD Preview and Apply workload-observation reads (no SSM read and no deny or guard narrowed, user decision D-15), before gate 2a; two separately approved PRs, S5.24a (PROD Preview/Apply) and S5.24b (Drift); each adds the matching boundary statements through a seed catalog amendment; R7-m9, R8-m3, R9-M1, R9-m1, R9-m2, R10-M1, AD-26). The TEST Preview and Apply counterparts are XP-11, in the slot after S5.18a. Every C-BI grant to the preview, apply or drift service role also widens the seed-owned `GovernanceBoundary-user-service-infrastructure-<env>` through a seed catalog amendment, by exactly that grant or by the seed-approved service or resource-family ceiling, with a size check against the 6144-character limit (AD-26, R10-M1, R10-m1). **Seed operation order (R10-m2, R11-M1):** one seed operation (catalog amendment, stack install or stack amendment) is open at a time across both catalogs and every stack (AD-26 serialization), in this order: #284 (external precondition) → row 8 S5.1 stack installs (SLR stacks if needed, TEST ECS, PROD ECS, TEST and PROD function roles, TEST restore, TEST exercise) → row 9 S5.2 → row 10 S5.17 → row 11 S5.4 (catalog, then the stack amendments) → row 13 S5.3 (function-role stack amendments) → row 33 S5.23 (stack amendment) → row 34 S5.7 (stack install) → row 42 S5.18a (stack amendment), then XP-11 → row 43 S5.5 and S5.18b (stack amendments, steps 5-6, 18 and 20) → row 45 S4.8 (only if V-19 selects the ephemeral reader grant) → row 47 S5.19 (stack install) → row 48 XP-14's PROD `s3:GetBucketVersioning` addition → row 50 S5.24a → S5.24b; each takes its predecessor's result catalog as its baseline |
+| C-BI (IAM/KMS/Lambda, governance apply) | [external, before S5.1: #284 and XP-17, the reviewed installer role, R12-m1] S5.1 (every central role except the two recovery roles, each role family created by its own independent CloudFormation stack through the XP-17 human non-root installer (AD-26 layer 6, R11-M1): ECS runtime per environment (execution and task, each with its retained `-Boundary` and workload-shaped `-Guard` policies, and the execution role's log-stream grants and, for TEST, its ECR pull grant (PROD's at S5.24a, after XP-14), R12-M2; the TEST stack adopts #219's names and PassRole fragments), function roles per environment (app-rotation, redeploy, bootstrap-job), TEST restore (operator, reader; trust only) and TEST exercise (trust only), plus a service-linked-role stack for any of the five that a read finds missing (R11-m2); no KMS statements) → [external, before S5.2: XP-18, `Issue215CutoverSessions` retired, R12-M1] S5.2 (apply capability, including the managed-password and log-group KMS describe grants) → S5.17 (preview/drift read without KMS; `iam:SimulatePrincipalPolicy` for the preview role) → S5.4 (CMKs whose key policies name only existing roles, per AD-15a; then the matching identity statements, including the preview/drift KMS read) → S5.3 (functions that use the S5.1 roles, added to the function-role stacks by reviewed stack amendments because no CI applier may pass those roles (AD-26 layer 6); KMS-encrypted function log groups and rules by BI CI) → S5.23 (TEST exercise role grants, an amendment of its S5.1 stack) → S5.7 (test-recovery role and grants in their own stack, derived from the S4.10 graph) → S5.18a (grants on the S5.1 restore-operator and restore-reader roles and the reader function without VPC, as a restore-stack amendment) → XP-11 (the TEST Preview and Apply workload-observation reads and their seed boundary amendment: an external gate-1 prerequisite whose BI and seed changes take this C-BI slot, after S5.18a (row 42) and before S4.6 (row 43); R10-m2) → [live, after USI step 1] S5.5 (XP-8 metadata, the bootstrap-job exact-ARN grant as a function-stack amendment, bootstrap-job scoped network-interface grant and VPC attach, job run; the bootstrap-job `VpcConfig` detach in step 18 and the re-attach with the rebuilt subnet and SG IDs in step 20, R12-m3) → S5.18b (restore-reader scoped network-interface grant and VPC attach, after XP-8, as restore-stack amendments; detach and re-attach in steps 18 and 20) → S5.6 (conditional) → S5.19 (prod-recovery role and grants in their own stack) → [after XP-14, XP-15 and XP-16] S5.24 (Drift-role registry-row, refresh, `s3:GetBucketVersioning`, IAM, ECR and ACM read inventory and grants for S4.17, with `SimulatePrincipalPolicy` on the execution role only and the Drift-role deny unchanged; plus the PROD Preview and Apply workload-observation reads (no SSM read and no deny or guard narrowed, user decision D-15), before gate 2a; two separately approved PRs, S5.24a (PROD Preview/Apply) and S5.24b (Drift); each adds the matching boundary statements through a seed catalog amendment; R7-m9, R8-m3, R9-M1, R9-m1, R9-m2, R10-M1, AD-26). The TEST Preview and Apply counterparts are XP-11, in the slot after S5.18a. Every C-BI grant to the preview, apply or drift service role also widens the seed-owned `GovernanceBoundary-user-service-infrastructure-<env>` through a seed catalog amendment, by exactly that grant or by the seed-approved service or resource-family ceiling, with a size check against the 6144-character limit (AD-26, R10-M1, R10-m1). **Seed operation order (R10-m2, R11-M1):** one seed operation (catalog amendment, stack install or stack amendment) is open at a time across both catalogs and every stack (AD-26 serialization), in this order: #284 (external precondition) → row 8 S5.1 stack installs (SLR stacks if needed, TEST ECS, PROD ECS, TEST and PROD function roles, TEST restore, TEST exercise) → row 9 S5.2 → row 10 S5.17 → row 11 S5.4 (catalog, then the stack amendments) → row 13 S5.3 (function-role stack amendments) → row 33 S5.23 (stack amendment) → row 34 S5.7 (stack install) → row 42 S5.18a (stack amendment), then XP-11 → row 43 S5.5 and S5.18b (stack amendments, steps 5-6, 18 and 20) → row 45 S4.8 (only if V-19 selects the ephemeral reader grant) → row 47 S5.19 (stack install) → row 48 XP-14's PROD `s3:GetBucketVersioning` addition → row 50 S5.24a → S5.24b; each takes its predecessor's result catalog as its baseline |
 | C-controls (USI GitHub repository controls, m3: `scripts/configure_github_repository_controls.py`, `scripts/_github_repository_controls.py`, `scripts/_github_environment_controls.py`, `tests/unit/test_configure_repository_controls.py`; admin apply by Kravalg) | S5.21 (Kravalg-only environments `test`, `prod`, `test-recovery`, `test-exercise`, `prod-recovery`; `governance-evidence` checked unchanged) → S5.22 (ruleset: `abandon-manifest-approval` required with a pinned issuer, after S4.3) |
 | C-contract (`schemas/` (including the S4.14 PROD contract schema `poc-prod-v1.schema.json` and the S4.15 `poc-workload-scheduled-drift-result-v1.schema.json`; R7-m4, R7-m1), `scripts/poc_contract.py`, `scripts/poc_phase_admission.py` (the stack → contract mapping, S4.14), secret validators, admission, drift allow-list, receipt schemas, `scripts/poc_workload_reconciliation.py` and `docs/poc-workload-reconciliation.md` (R5-M1, R5-M5), `scripts/poc_registry_plan.py` (only S4.3's post-abandon baseline acceptance, R6-m13), `scripts/poc_registry_phase_entrypoint.py` (only S4.10's stack-keyed registry-set selector next to `_REGISTRIES`; the `prod` entry is XP-14's, outside this plan; R9-n4), acceptance-receipt validator) | S1.1 → S1.7 → S1.9 → S1.8 → S1.11 → S4.10 → S4.11 → S4.9 → S4.2 → S4.3 → S4.12 → S4.13 → S4.14 → S4.15 → S4.6 → S4.7. S1.11 follows S1.8, which follows S2.1 in C-compute, so the program's `ignore_changes` exist when S1.11 checks them (R5-M4). S4.9 precedes S4.2 (R6-M2): S4.2's `resume` applies S4.9's per-mode admission rules and `start_at` window, while S4.9 depends only on S4.10, S4.11 and S2.6. |
 | C-topology (`scripts/poc_workload_topology.py`, `scripts/poc_workload_secret_result.py`, the native integration test, the Random/TLS pins, `recovery/delete-actions.json`, the runner-spec topology text) | S4.10 only (AD-25) |
-| C-runner (`scripts/poc_workload_runner.py`, `scripts/service_execution_worker.py`, `scripts/service_execution_host.py` (receipt copy-out; PROD `JOBS`, lines 27-31; the S4.17 scheduled entries with scheduled-main provenance, R7-M2), the worker diagnostics, `.github/workflows/self-deploy.yml`, `.github/workflows/scheduled-drift.yml`, `scripts/run_pulumi_command.py` (the scheduled exclusion), `scripts/poc_phase_source_adapter.py` (the `workload_route` and `workload_observation` outputs, R6-M1), `scripts/poc_workload_observation.py`, `scripts/poc_scheduled_workload_drift.py` (S4.17), the admission observation functions (including `scripts/poc_workload_images.py` and `scripts/poc_workload_capabilities.py`, which only S4.14 edits in this plan: the token-free config read, the D-15 certificate change and the release-platform pin at capabilities lines 327-330; S4.9's multi-arch check lives in `scripts/poc_workload_admission.py`, C-contract, and edits neither module; S4.17 calls them; R9-M1, R10-n6, AD-26), receipt modules, `specs/poc-workload-runner.md` lifecycle text, the README line-127 sentence, `docs/poc-workload-log-health.md`, `test_workload_apply_docs_consistency.py`, `tests/unit/test_service_execution_worker.py`, and the workflow-shape tests that pin the CI graph (R6-M1): `tests/pulumi/test_ci_guardrails.py`, `tests/unit/test_trusted_test_controller_workflow.py`, `tests/unit/test_service_execution_workflow.py`, `tests/unit/test_poc_registry_completion_workflow.py`, `tests/unit/test_poc_registry_workflow.py`, `tests/unit/test_poc_source_workflow.py`, `tests/unit/test_poc_phase_source_adapter.py`, `tests/unit/test_service_initializer.py`, `tests/unit/test_service_execution_host.py`, `tests/unit/test_poc_scheduled_registry_workflow.py`, `tests/unit/test_service_reviewed_credentials.py` (R7-m7)) | S4.1 → S4.4 → S4.5 → S4.11 → S4.12 → S4.13 → S4.14 → S4.17 → S4.7 (R8-m7: S4.7's unstubbed PROD host seam test edits `tests/unit/test_service_execution_host.py`). S4.1 heads it because its FR-20 test is `tests/unit/test_service_execution_worker.py` (m5). S4.11–S4.14 also hold the C-contract slot at their position in that chain, because they edit `poc_workload_admission.py`. S4.17 follows XP-14, XP-15, XP-16 and S5.24 and is a gate-2b precondition; because S4.7 (gate 2a) follows it in C-runner, a stop of S4.17 (for example a rejected S5.24b) also stops gate 2a (recheck N1, R10-n1). Every rewrite of a workflow-shape test is a guardrail change that needs an `APPROVED` review by `@Kravalg` specifically, recorded like the round-5 m14 hard-stop amendment (`epics-stories.md` S4.11, S4.13, S4.14, S4.17, S4.7). |
+| C-runner (`scripts/poc_workload_runner.py`, `scripts/service_execution_worker.py`, `scripts/service_execution_host.py` (receipt copy-out; PROD `JOBS`, lines 27-31; the S4.17 scheduled entries with scheduled-main provenance, R7-M2), the worker diagnostics, `.github/workflows/self-deploy.yml`, `.github/workflows/scheduled-drift.yml`, `scripts/run_pulumi_command.py` (the scheduled exclusion), `scripts/poc_phase_source_adapter.py` (the `workload_route` and `workload_observation` outputs, R6-M1), `scripts/poc_workload_observation.py`, `scripts/poc_scheduled_workload_drift.py` (S4.17), the admission observation functions (including `scripts/poc_workload_images.py` and `scripts/poc_workload_capabilities.py`, which only S4.14 edits in this plan: the token-free config read, the D-15 certificate change and the release-platform pin at capabilities lines 327-330; S4.9's multi-arch check lives in `scripts/poc_workload_admission.py`, C-contract, and edits neither module; S4.17 calls them; R9-M1, R10-n6, AD-26), receipt modules, `specs/poc-workload-runner.md` lifecycle text, the README line-127 sentence, `docs/poc-workload-log-health.md`, `test_workload_apply_docs_consistency.py`, `tests/unit/test_service_execution_worker.py`, and the workflow-shape tests that pin the CI graph (R6-M1): `tests/pulumi/test_ci_guardrails.py`, `tests/unit/test_trusted_test_controller_workflow.py`, `tests/unit/test_service_execution_workflow.py`, `tests/unit/test_poc_registry_completion_workflow.py`, `tests/unit/test_poc_registry_workflow.py`, `tests/unit/test_poc_source_workflow.py`, `tests/unit/test_poc_phase_source_adapter.py`, `tests/unit/test_service_initializer.py`, `tests/unit/test_service_execution_host.py`, `tests/unit/test_poc_scheduled_registry_workflow.py`, `tests/unit/test_service_reviewed_credentials.py` (R7-m7)) | S4.1 → S4.4 → S4.5 → S4.11 → S4.12 → S4.13 → S4.14 → S4.17 → S4.7 (R8-m7: S4.7's unstubbed PROD host seam test edits `tests/unit/test_service_execution_host.py`). S4.1 heads it because its FR-20 test is `tests/unit/test_service_execution_worker.py` (m5). S4.11–S4.14 also hold the C-contract slot at their position in that chain, because they edit `poc_workload_admission.py`. S4.17 follows XP-14, XP-15, XP-16 (S5.1's since revision 12) and S5.24 and is a gate-2b precondition; because S4.7 (gate 2a) follows it in C-runner, a stop of S4.17 (for example a rejected S5.24b) also stops gate 2a (recheck N1, R10-n1). Every rewrite of a workflow-shape test is a guardrail change that needs an `APPROVED` review by `@Kravalg` specifically, recorded like the round-5 m14 hard-stop amendment (`epics-stories.md` S4.11, S4.13, S4.14, S4.17, S4.7). |
 | C-composition (`pulumi/app/workload_phase.py`: the plane imports and wiring at lines 13-29 and in `WorkloadPhaseStack.__init__`, `TAGGABLE_TYPES`, `_validate_target`) (m6) | S1.1 (`workload_step` branch) → S1.3 (step-1/step-2 structure, XP-8 exports) → S1.4 (ElastiCache user and group types) → S2.1 (autoscaling plane) → S2.3 (observability plane, with every taggable type S2.4 and S2.5 add) → S3.2 (default SG) → S3.1 (flow-log plane and bucket family) → S3.3 (endpoints and endpoint SG) → S3.5-A (`_validate_target` parameterized by stack so the program renders `prod`; today it pins `test` and the TEST registries, lines 125-160; before S4.10, whose PROD native plan needs it) |
 | C-autoscaling (`pulumi/app/autoscaling.py`) | S2.1 → S2.2 → S2.6 (TEST schedules) |
 | C-observability (`pulumi/app/observability.py`) | S2.3 → S2.4 → S2.5 |
@@ -2558,3 +2902,4 @@ independent scopes, because their stories also wire `workload_phase.py`
   | V-26 | The per-type delete action sets derived from the pinned provider's delete paths are complete (drain and detach calls included) for the recovery role | provider source + live (CloudTrail of the abandon run, no `AccessDenied`) | S4.10, S5.7 | 19 | STOP: an `AccessDenied` stops the removal plan mid-way → S4.3 `export`, reviewed S5.7 grant fix, then `recovery-abandon` again from the export receipt. |
   | V-27 | Whether a resource imported with the `import_` option (the rebuild's recovery import, AD-16) keeps `importID` on its checkpoint row after the import apply (R6-m12) | engine source (first case) + live | S4.10 (first case), S4.3 | 20 | If it persists, S4.10's allowance accepts `importID` only on rows whose URN the authenticated import receipt lists, and every other `importID` still fails. A live `importID` on an unlisted row → STOP before `rebuild-first`; S4.3 `export`, then a reviewed fix. |
   | V-28 | `ecr:GetDownloadUrlForLayer` accepts an image's **config** digest (not only a layer digest) and returns a pre-signed URL on exactly `LAYER_HOST` (R9-M1, R10-n5; AD-26 point 1) | docs (the API reference documents image layers and is silent on the config blob) + live | S4.14 (P4, N7; the offline fakes assume acceptance) | 1 (the gate-1 PR's TEST workload `plan`, read-only), confirmed again by the step-4 `up-plan` | STOP: the `plan` fails with `image-config-observation-failed` before any apply. No automatic fallback: the token path needs a user decision that amends NFR-06 and narrows the identity denies and the seed guards (AD-26), plus the BI security and seed reviews approved by `@Kravalg`. |
+  | V-29 | The Lambda service accepts the resource-scoped network-interface grant of AD-26 layer 6 (R12-m2: `ec2:CreateNetworkInterface` on the XP-8 subnet and SG ARNs and `network-interface/*`; `ec2:DeleteNetworkInterface`, `AssignPrivateIpAddresses` and `UnassignPrivateIpAddresses` on `network-interface/*` with `ec2:Subnet`; only the two Describe actions on `*`), creates the ENI and deletes it after the detach | docs (the Lambda guide shows only the `*` form; the EC2 Service Authorization Reference lists the resource types) + live | S5.5, S5.18b | 5 (attach: function `State` `Active`, `LastUpdateStatus` `Successful`, a `lambda` ENI in the XP-8 subnets), 18 (the ENI deleted within 45 minutes) and 20 (re-attach) | STOP: the update fails or the ENI is not created or not deleted. Fallback, each a reviewed stack amendment re-proven here: drop the `ec2:Subnet` condition; then the resource-type wildcards `…:subnet/*`, `…:security-group/*`, `…:network-interface/*` in the region and account; then `arn:aws:ec2:eu-central-1:<account>:*`. If still refused: STOP, then a user decision to amend NFR-06 to the documented `*` form. The reader may share the bootstrap job's ENI, so its grant is proven only where CloudTrail shows a call under the reader role. |

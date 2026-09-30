@@ -11,7 +11,7 @@ This file is the execution ledger. It is not a planning input.
 | Worktree | wt-usi-hardening |
 | Branch | feat/workload-wa-hardening |
 | Source baseline | 66776772979956de9c5abdbee7c45641a1b533fa (PR #56 head) |
-| Bundle revision | 10 (answers readiness round 10: R10-M1, R10-m1, R10-m2, R10-n1…n6, and applies user decision D-15; parent commit 8e097aa, which is revision 9) |
+| Bundle revision | 11 (answers readiness round 11: R11-M1, R11-m1…m4, R11-n1…n4; no new user decision; parent commit 9b17199, which is revision 10) |
 | Specs directory | `specs/workload-wa-hardening/` (slug chosen by the caller) |
 | Target | pulumi (Python Pulumi), stacks test and prod |
 | Environment | none selected; planning is offline |
@@ -44,6 +44,32 @@ This file is the execution ledger. It is not a planning input.
 
 - `specs/poc/README.md` sha256: 8ad9ccf4ae28083c36e30909a21d8ebec4fc0d40a9b716c9bb8b78b6276ed5b7
 - `decisions.md` (the user decisions, a planning input; hash below)
+- Repository source read for revision 11 at `9b17199` (the workload
+  source is unchanged from the baseline), without executing it:
+  `scripts/poc_workload_topology.py` (lines 18, 365-380, 810-842),
+  `scripts/poc_workload_phase_entrypoint.py` (lines 50-65, 88-137),
+  `scripts/poc_publisher_dispatch.py` (lines 140-180, 211-217, 261-286),
+  `.github/workflows/self-deploy.yml` (lines 1-10, 40-53, 60-80,
+  718-790), `schemas/poc-test-v1.schema.json` (top-level keys, lines
+  440-455 and 815-840), `tests/unit/test_poc_workload_topology.py`
+  (lines 160-170, 275-283) and `tests/unit/test_poc_publisher_dispatch.py`
+  (line 128). Bootstrap-infrastructure, read-only: `origin/main` through
+  `wt-boot-urllib3` (`862b4bf`): `pulumi/seed/catalogs/test.json` and
+  `prod.json` (the guard, ceiling and boundary entries and the statements
+  cited in the round-11 map, plus read-only Python evaluations of the
+  guards' statement lists), `pulumi/seed/policy_registry.py` (lines
+  15-24), `pulumi/seed/test_poc_prerequisite_amendment.py` (lines 1-160),
+  `pulumi/seed/poc_pass_role.py` (lines 1-94),
+  `pulumi/infra/poc_runtime_enrollment.py` (lines 100-135),
+  `pulumi/infra/governance_automation.py` (lines 476-492); #284 through
+  `wt-boot-pr280` (`e85534c`): `policy_registry.py`, the TEST catalog
+  boundary and governance entries, `pulumi/infra/test-poc-identity.json`;
+  #285 through `wt-boot-219` (`54e9e2f`):
+  `specs/219-test-workload-capability/runtime-enrollment.md` (lines
+  1-396), `pulumi/seed/poc_runtime_fence_stack.py` (by grep),
+  `pulumi/seed/poc_publisher_stack_verification.py` (line 197), and
+  `git merge-base`/`git diff --stat` between `862b4bf`, `e85534c` and
+  `54e9e2f`.
 - Repository source read for revision 10 at `8e097aa` (the workload
   source is unchanged from the baseline), without executing it:
   `scripts/poc_workload_runner.py` (lines 160-190),
@@ -229,19 +255,19 @@ This file is the execution ledger. It is not a planning input.
 - User decisions given in chat on 2026-09-30 and relayed by the coordinator: D-1…D-7 (`decisions.md`). The D-4 and D-5 clarifications came in a second message the same day, and D-8…D-13 (derived details) were confirmed in a third. D-14 (recovery targets RPO ≤ 1 hour, RTO ≤ 24 hours) is a user decision of the same date, recorded in `decisions.md` by commit `68584e1`. **D-15** (the gateway certificate ARN pinned in the reviewed USI workload contract and checked only with `acm:DescribeCertificate`; no CI role gets any `ssm:GetParameter` read; no identity deny, seed guard, seed boundary or catalog hash loosened for SSM) is a user decision given in chat on 2026-09-30, answering the coordinator's question, and relayed with round 10; revision 10 records it in `decisions.md`.
 - Read-only cross-repository reconnaissance: bootstrap-infrastructure @debd88b, api-gateway-infrastructure, and user-service @main via `gh api`
 
-## Artifacts (sha256, revision 10)
+## Artifacts (sha256, revision 11)
 
-`run-summary.md` is not hashed here, because it contains the hashes. `decisions.md` is a planning input and is hashed. Commit `68584e1` added its D-14 row after revision 5; revision 6 changed only that row's label (a user decision, not a planning default); revisions 7, 8 and 9 do not change it; revision 10 adds the D-15 row (a user decision of 2026-09-30). `research.md` is unchanged since revision 4; `brief.md` changes in revision 10 (front matter and AS-4, D-15).
+`run-summary.md` is not hashed here, because it contains the hashes. `decisions.md` is a planning input and is hashed. Commit `68584e1` added its D-14 row after revision 5; revision 6 changed only that row's label (a user decision, not a planning default); revisions 7, 8 and 9 do not change it; revision 10 adds the D-15 row (a user decision of 2026-09-30); revision 11 changes only D-15's note text (R11-n3). `research.md` is unchanged since revision 4; `brief.md` changed last in revision 10 (front matter and AS-4, D-15).
 Check with `sha256sum -c` over the block below, from `specs/workload-wa-hardening/`.
 
 ```
 beca16ba9ab95d76cd28ed47ac8e806549b94805ddca9a2d138a790ee0f0ca59  research.md
 5d7d1e37b9417de7cbe7b4fa0bcafe28ed723da997c22be7ef5902b384e302e4  brief.md
-9b57f66f9cc5bcb1a3b205a787d7e462f3e02b7d0a46e426ef93e402d22a586d  prd.md
-bd9cd8f9dfb3e7565708299a8ec6e706a215bed7e2400f4607de317e0f99b044  architecture.md
-20ca4c2f2f369cdff9bce80422e89a3ac5504f7cc45e43159877c4e90fb5e77b  epics-stories.md
-d30f96c6c8379a7771a989195629a576063d1c7dd00af73fe5a9e66bfd4002e8  decisions.md
-ef621053e656dc52fbcaee69464c1b5eeaa7c73bb920371327661d682bf16c3a  readiness.md
+1274c62e1194f0af34bb375cd4542a3f62225663a764188530ce96e5717eb0a4  prd.md
+805254ac1b763a21d2a3c78a69ce7e2cd7ac7c25738c61aa034e3f0cea7ddf7f  architecture.md
+03800fcdb04aa777f336f14939afe45b598054ce4f889a7d1885a96ee5eccd65  epics-stories.md
+86df7c4f7b72ad49cbca328ec79884c792c1b3f833567f4a34586eb60d5259c6  decisions.md
+9e58e1088baa9ea385d25c08f0d7a8fcae4f5954809bb4373045ebd304751b46  readiness.md
 ```
 
 ## Gates
@@ -260,25 +286,50 @@ ef621053e656dc52fbcaee69464c1b5eeaa7c73bb920371327661d682bf16c3a  readiness.md
 | 8 | FAIL (R8-M1; R8-m1…m7; R8-n1…n4), plus the residuals A1…A4 of the recheck of the revision-7 pre-commit audit (A2 merged into R8-m1); fixed in revision 8, after a pre-commit fresh-context audit of the revision-8 changes (recorded in `readiness.md`) |
 | 9 | FAIL (1 major, R9-M1: the Preview and Apply roles are blocked by explicit secret-read denies on every workload `plan` and `up-plan`, and no story owned the TEST fix fully or the PROD one; 2 minor, R9-m1 and R9-m2; 4 nits, R9-n1…n4); fixed in revision 9, after a pre-commit fresh-context audit of the revision-9 changes and its recheck (both recorded in `readiness.md`) |
 | 10 | FAIL against `8e097aa` (1 major, R10-M1: the seed-owned IAM layers, the hash-pinned `immutable_managed_guard` of every USI CI role and the seed-owned permissions boundary, were not planned; 2 minor, R10-m1 (the 6144-character boundary) and R10-m2 (concurrent seed amendments); 6 nits, R10-n1…n6). The coordinator relayed the new user decision **D-15** with it (the certificate ARN in the reviewed USI contract, no `ssm:GetParameter` for any CI role). Fixed in revision 10, after a pre-commit fresh-context audit of the revision-10 changes and its recheck (REFUTED; 9 of 12 fixed, 3 partly, N1-N3 new; all folded in; both recorded in `readiness.md`) |
+| 11 | FAIL (R11-M1 and the round-11 findings); fixed in revision 11, after a pre-commit fresh-context audit of the revision-11 changes (REFUTED: 2 major, 3 minor, 3 nits) and its recheck (REFUTED: all 8 fixed; N1 (major), N2 and N3 new, all folded in); both recorded in `readiness.md` |
 
-Stage status: **BLOCKED** until an independent review of revision 10 reports
+Stage status: **BLOCKED** until an independent review of revision 11 reports
 PASS. Round 5 was recorded as the last allowed round, and rounds 6, 7, 8,
-9 and 10 ran after it; whether another independent round runs is for the coordinator and
+9, 10 and 11 ran after it; whether another independent round runs is for the coordinator and
 the user to decide. `readiness.md` is written by the author and says PENDING;
 it is not a PASS.
 
-**Attempt ledger:** canonical `attempts.json` was NOT initialized. The atomic reservation needs verified host write isolation for the copied ledger_reference package, and a same-user host cannot provide it. The ledger is therefore BLOCKED. Attempt count by caller record: 1 procedure run, with 10 recorded review rounds (round 10: FAIL, answered by revision 10 together with user decision D-15). This count is not canonical.
+**Attempt ledger:** canonical `attempts.json` was NOT initialized. The atomic reservation needs verified host write isolation for the copied ledger_reference package, and a same-user host cannot provide it. The ledger is therefore BLOCKED. Attempt count by caller record: 1 procedure run, with 11 recorded review rounds (round 11: FAIL, answered by revision 11). This count is not canonical.
 
 ## Acceptance checklist for the next independent reviewer
 
 A reviewer ticks each item from the bundle text and the cited source, not
 from this list.
 
-- [ ] Every round-10 finding in `readiness.md` maps to text that
+- [ ] Every round-11 finding in `readiness.md` maps to text that
       resolves it at the cited file and line, and the cited source lines
-      say what the plan claims (round-9 and round-8 rows, recheck
+      say what the plan claims (round-10, round-9 and round-8 rows, recheck
       residuals A1…A4, round-7 rows and audit F2, F6 and F8 stay
       resolved).
+- [ ] Every new IAM principal (the TEST and PROD ECS roles, the function
+      roles, the restore, exercise and recovery roles, and any missing
+      service-linked role) is created by an independent CloudFormation
+      stack per role family with a reviewed template and hash, a human
+      non-root installer, change-set evidence, a post-create verifier
+      and `@Kravalg`'s approval, and every later grant on it is a
+      reviewed stack amendment; no guard's Resource-`*` deny is narrowed
+      and the governor-guard route is recorded as a user decision not
+      taken (R11-M1).
+- [ ] The TEST ECS roles have one owner, S5.1, which adopts #219's names
+      and PassRole fragments, and S5.2's PassRole depends on it (R11-M1).
+- [ ] Every seed operation (catalog amendment, stack install, stack
+      amendment) is in the one-open serialization with its row; guard
+      rows compare with each story's baseline catalog; the matrices carry
+      `iam:CreateRole`-denied and exact-ARN applier rows (R11-M1).
+- [ ] A new managed policy lists the five governance changes and names
+      `G-GitHubGovernanceApply` (R11-m1); no CI role gets
+      `iam:CreateServiceLinkedRole`, and the five SLRs are an S4.6 step-1
+      `iam:GetRole` precondition with an independent-owner creator
+      (R11-m2); S4.10's ARM64 tests need no higher row (R11-m3); the
+      publisher platform is the committed `publish_platform` field at job
+      level, never `client_payload` (R11-m4); the #284 and #285 facts,
+      S5.2's post-#284 baseline, D-15 option (a) and the layer count are
+      exact (R11-n1…n4).
 - [ ] D-15 is recorded in `decisions.md` with the user's wording and date,
       in PRD §6, in every D-1…D-15 range and list (PRD, architecture,
       epics, brief), the epics inventory and ordered row 0; S4.14 owns the
@@ -294,9 +345,9 @@ from this list.
       `iam:SimulatePrincipalPolicy` (execution role only for Apply),
       the three ECR pull reads and `acm:DescribeCertificate`; the ECR
       token stays removed with the fail-closed open point V-28 (S4.6 step
-      1); the four IAM layers are named (identity allows scoped to the USI
+      1); the IAM layers are named (six since revision 11, R11-n4: identity allows scoped to the USI
       identity; `DenySecretLeakingReads` and `DenySecretLeakingReadsApply`
-      unchanged; the seed guards unchanged; the seed-owned boundary
+      unchanged; the seed guards unchanged (relative to each story's baseline catalog since revision 11); the seed-owned boundary
       amended only through seed catalog amendments with a new catalog hash
       pin, a named seed owner, CloudFormation change-set evidence,
       `@Kravalg`'s approval and a 6144-character size check or the
@@ -405,7 +456,7 @@ from this list.
 - [ ] The artifact hashes above match the committed files
       (`sha256sum -c`).
 
-## Scope limits of revisions 4, 5, 6, 7, 8, 9 and 10
+## Scope limits of revisions 4, 5, 6, 7, 8, 9, 10 and 11
 
 - No aws or pulumi command ran against any account; no repository test, lint
   or preview ran; no secret value was read; nothing was pushed or commented.
@@ -428,4 +479,12 @@ from this list.
   guard statements against the planned actions, and the boundary size),
   and ran one read-only fresh-context audit subagent over the uncommitted
   changes, plus its recheck, before the single commit. No AWS
-  documentation lookup ran in revision 10.
+  documentation lookup ran in revision 10. Revision 11 read BI
+  `origin/main` through `wt-boot-urllib3`, #284 through `wt-boot-pr280`
+  and #285 through `wt-boot-219` with `sed`, `grep`, `git log`,
+  `git diff --stat` and `git merge-base` only (no fetch, no checkout),
+  ran read-only Python evaluations of the seed catalogs (the guard
+  statement lists and the post-#284 boundary size), ran no AWS
+  documentation lookup, and ran one read-only fresh-context audit
+  subagent over the uncommitted changes, plus its recheck, before the
+  single commit.

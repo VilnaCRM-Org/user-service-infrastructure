@@ -2,32 +2,42 @@
 artifact: implementation-readiness
 workflow: _bmad/bmm/workflows/3-solutioning/bmad-check-implementation-readiness (Validate mode)
 task: workload-wa-hardening
-source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa (workload source); bundle parent 8e097aa (revision 9)
+source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa (workload source); bundle parent 9b17199 (revision 10)
 date: 2026-09-30
-revision: 10
-author: the planning agent that wrote revision 10 (NOT an independent reviewer)
-independent_reviewer: none yet for revision 10
-status: PENDING independent review of revision 10
+revision: 11
+author: the planning agent that wrote revision 11 (NOT an independent reviewer)
+independent_reviewer: none yet for revision 11
+status: PENDING independent review of revision 11
 ---
 
 # Implementation readiness
 
 ## Verdict
 
-**PENDING. Not PASS.** The author of revision 10 wrote this file. It records
+**PENDING. Not PASS.** The author of revision 11 wrote this file. It records
 what changed and the repository source each fix was checked against. It does
 not grade itself.
 
 - Only an independent reviewer's PASS satisfies the planning gate.
-- Revision 10 answers independent readiness round 10 (FAIL: 1 major,
-  R10-M1; 2 minor, R10-m1 and R10-m2; 6 nits, R10-n1…n6) and applies the
+- Revision 11 answers independent readiness round 11 against `9b17199`
+  (FAIL: 1 major, R11-M1; 4 minor, R11-m1…m4; 4 nits, R11-n1…n4). It
+  adds no user decision. The route for R11-M1 (independent
+  CloudFormation owners for every new IAM principal) is a design choice
+  within the existing decisions, given as the coordinator's direction
+  and recorded below with its rationale.
+- A fresh-context, read-only audit of the revision-11 changes ran before
+  the commit, and a recheck by the same auditor after its findings were
+  folded in; both are recorded in "Pre-commit audit of revision 11"
+  below. They are author-side checks, not the independent review.
+- Revision 10 answered independent readiness round 10 (FAIL: 1 major,
+  R10-M1; 2 minor, R10-m1 and R10-m2; 6 nits, R10-n1…n6) and applied the
   new user decision D-15 (2026-09-30: the gateway certificate ARN is
   pinned in the reviewed USI contract; no CI role reads SSM).
 - A fresh-context, read-only audit of the revision-10 changes ran before
   the commit, and a recheck by the same auditor after its findings were
   folded in; both are recorded in "Pre-commit audit of revision 10"
   below. They are author-side checks, not the independent review.
-- Rounds 5 to 10 ran after round 5 was recorded as the last allowed
+- Rounds 5 to 11 ran after round 5 was recorded as the last allowed
   round. Whether another independent round runs is for the coordinator
   and the user to decide. Until an independent reviewer reports PASS, the
   stage stays BLOCKED.
@@ -45,7 +55,8 @@ not grade itself.
 | 7 | independent reviewer (relayed by the coordinator), plus a fresh-context audit of revision 6 | FAIL: R7-M1, R7-M2, R7-m1…m9, R7-n1…n3; audit F1…F8 (F2, F6, F8 new) | revision 7 |
 | 8 | independent reviewer (relayed by the coordinator), plus the recheck of the revision-7 pre-commit audit | FAIL: R8-M1, R8-m1…m7, R8-n1…n4; recheck residuals A1…A4 | revision 8 |
 | 9 | independent reviewer (relayed by the coordinator) | FAIL: R9-M1, R9-m1, R9-m2, R9-n1…n4 | revision 9 |
-| 10 | independent reviewer (relayed by the coordinator), against `8e097aa` | FAIL: R10-M1, R10-m1, R10-m2, R10-n1…n6; the coordinator relayed user decision D-15 with it | revision 10 (this file) |
+| 10 | independent reviewer (relayed by the coordinator), against `8e097aa` | FAIL: R10-M1, R10-m1, R10-m2, R10-n1…n6; the coordinator relayed user decision D-15 with it | revision 10 |
+| 11 | independent reviewer (relayed by the coordinator), against `9b17199` | FAIL: R11-M1, R11-m1…m4, R11-n1…n4; the coordinator gave the design direction for R11-M1 (independent CloudFormation owners) | revision 11 (this file) |
 
 ## User decisions (all explicit, dated 2026-09-30)
 
@@ -71,9 +82,154 @@ counterparts of XP-10 and XP-11) block gate 2a.
 - **D-15 is a user decision (revision 10):** recorded in `decisions.md`
   row D-15, PRD §6, the front matter of the PRD, architecture, epics and
   brief (D-1…D-15), brief AS-4, the epics inventory and ordered row 0.
+- **Revision 11 adds no user decision.** `decisions.md` changes only in
+  D-15's note text (R11-n3: option (a)'s seed amendment applies "if the
+  boundary holds the exact ARN"); the user's wording is unchanged.
+- **The R11-M1 route is a design choice, not a user decision.** The
+  coordinator directed the independent-CloudFormation-owner route, the
+  precedent bootstrap-infrastructure itself set in #285 (a
+  publisher-only seed stack with its own reviewed template, `Retain`
+  resources, a permanent deny-update stack policy, a post-create verifier
+  and a reviewed amendment path). It stays within NFR-06 and D-15: no
+  guard's Resource-`*` deny is narrowed, no CI role gets `iam:CreateRole`
+  or `iam:CreateServiceLinkedRole`, and every new principal still needs a
+  reviewed template, a human non-root installer, change-set evidence, a
+  post-create verifier and `@Kravalg`'s approval. The alternative, the
+  governor-guard route (narrowing `8f75c4a5…` or `dc27f076…`, widening
+  `8c068aaa…`, or adding `iam:CreateRole` to `01dcac0c…`), narrows
+  Resource-`*` denies; it would need a user decision amending NFR-06 and
+  is not chosen (architecture AD-26 layer 6).
 - **Planning defaults, not user decisions:** only the 20% TEST cost forecast
   threshold and the rule that every PROD increase is justified (NFR-11,
   m17). The user may change them.
+
+## Round-11 finding → resolution map
+
+Line numbers refer to revision 11 as committed. "Source" is the
+repository file and lines each fix was checked against: USI at
+`9b17199` (the workload source is unchanged from the baseline); BI
+`origin/main` through the worktree `wt-boot-urllib3` (`862b4bf`, whose
+`pulumi/` tree equals `origin/main`); #284 through `wt-boot-pr280`
+(`e85534c`); and #285 through `wt-boot-219` (`54e9e2f`). All reads were
+`sed`, `grep`, `git log`, `git diff --stat`, `git merge-base` and
+read-only Python evaluations of the catalogs; nothing was fetched,
+checked out or executed. TEST catalog lines are `test.json`; PROD has the
+same entries at the same lines in `prod.json` (statement hashes that
+embed an account differ and are named where cited).
+
+| Finding | Resolution | Location | Source checked |
+| --- | --- | --- | --- |
+| R11-M1 no plan to create the new IAM principals | **AD-26 layer 6** names every guard that stops it: `8f75c4a5…` (Deny `iam:CreateRole`, `iam:CreatePolicy*`, `iam:PutRolePermissionsBoundary` on `*`) in the platform apply, `PulumiAutomation` and `PulumiDeploy` guards; `94cec98a…` and `4fae8daf…` in the platform apply guard; `dc27f076…` (Deny `iam:CreateRole`) and `8c068aaa…` (`iam:*` outside the USI CI set) in `G-GitHubGovernanceApply`, `dc27f076…` also in the USI Apply guard; and `01dcac0c…`, whose `NotAction` list lacks `iam:CreateRole`. **Route (coordinator direction; design choice, not a user decision):** an independent CloudFormation stack per role family, as #285 did for the publisher: a reviewed template and hash, `Retain` resources, a permanent deny-update stack policy, a human non-root installer named in the PR, a CREATE change set with exactly the reviewed `Add` rows as evidence, a post-create verifier like `verify_publisher_stack`, and `@Kravalg`'s approval; every later grant is a reviewed stack amendment with a post-update verifier. Stacks: ECS runtime (TEST, PROD), function roles (TEST, PROD), restore and exercise (TEST, trust only, because S5.4's key policy names the exercise role and S3.3's endpoint policy binds the reader) by S5.1; recovery by S5.7 and S5.19; S5.4, S5.23, S5.18a and S5.5 are amendments. **TEST ECS single owner: S5.1**, adopting #219's names and `propose_pass_role` fragments; it does not defer to #219's later runtime amendment, because that amendment amends the governor's identity, boundary and guards (the route not chosen) and no story owns it; the preflight requires both names absent and `PocRuntimeRoles` unregistered. S5.2 applies all of `propose_pass_role` on S5.1's ARNs (the Apply allow and deny statements, and the Preview and Drift `DenyReadRolePassRole`), so the Preview, Drift and Apply guard hashes change and guard rows pin the baseline catalog. **Functions live in the stack that owns their role** (S5.3 adds the three functions to the function-role stacks, S5.18a the reader to the restore stack; S5.5 and S5.18b add the Lambda network-interface grant and `VpcConfig` by amendment), because the platform appliers' `4fae8daf…` denies `iam:PassRole` on those roles and NFR-06 does not allow narrowing it while this non-weakening design exists. **The governor-guard route is not chosen and would need a user decision amending NFR-06.** Guard-layer rows compare with the story's baseline catalog. Evidence rows: `iam:CreateRole` denied to every CI applier; each applier limited to exact role and policy ARNs; the USI-role rows are simulated by the Preview role (S4.6 step 3, S4.7), and the BI-role rows come from BI PR evidence run with a BI identity, because they are outside the Preview role's simulate grant. **#284 and #285 facts corrected** (R11-n1 row). **Serialization:** one seed operation (catalog amendment, stack install or stack amendment) open at a time, each with its row. NFR-06 and FR-27 name the route. | `architecture.md:43-44,52-53,216-220,456-458,538-541,558,1613,1769-1776,1831-1843,1938-2145,2179-2246,2278-2317,2318-2339,2351,2462-2476`; `prd.md:208,245,357-361,472-487,517-534,589-610`; `epics-stories.md:2491-2493,2500-2501,2515-2520,2640-2654,3381-3391,3530-3557,3558-3609,3614-3628,3688-3727,3734-3755,3788-3805` | BI `origin/main` `pulumi/seed/catalogs/test.json:575-598,599-614,629-648,649-663,801-809,978-1015,1671-1701,2483-2492,2493-2508,2915-2931,2944-2975,3000-3020,3815-3829` (PROD `prod.json` entries at the same lines; `9fb811f6…` line 3061, `06267ab9…` line 1767, `473c8904…` line 2264); `pulumi/seed/poc_pass_role.py:1-5,16-19,42-94`; `pulumi/infra/poc_runtime_enrollment.py:112-135`; `test.json:712-761,843-852,2411-2439,3273-3299` (the Preview and Drift guards with `ae950d73…`, the operator `iam-write` guard with `455fe8d0…`); `prod.json:3208` (`a9609b86…`), `prod.json:2487` (`6227eeae…`); the guard sets that hold `4fae8daf…`; a grep of BI `pulumi/` and `scripts/` for `poc_runtime_enrollment` (no importer); `wt-boot-219`: `specs/219-test-workload-capability/runtime-enrollment.md:12-16,26-30,51-65,95-113,125-139,196-302,315-322,358-363`, `pulumi/seed/poc_runtime_fence_stack.py:98-99,113-114,165-166`, `pulumi/seed/poc_publisher_stack_verification.py:197` |
+| R11-m1 the five changes for a new managed policy | Listed in full, as #219's amendment makes them: (1) the governance Preview ceiling's and (2) the governance Drift ceiling's policy-read statement (`339af045…` on `origin/main`); (3) `G-GitHubGovernanceApply`'s `iam:*` statement (`8c068aaa…`; `21195ff8…` after #284; PROD `9fb811f6…`); (4) its policy-write statement (`5366ec11…`; `bb116727…` after #284; PROD `06267ab9…`); (5) `_managed_policy_resources`. Plus the seed attachment rule. The guard is named `G-GitHubGovernanceApply` everywhere; the USI Apply guard has no policy-write statement. The Preview/Drift inline-overflow fallback (a new managed policy) now needs the same five changes, a write-scope resolution of its own and the role's `attachment_arns`. | `architecture.md:1885-1937`; `prd.md:561-588`; `epics-stories.md:2536-2542,3503-3529` | `wt-boot-urllib3` `pulumi/seed/test_poc_prerequisite_amendment.py:17-40,114-145` (identical in `wt-boot-219`); `pulumi/infra/governance_automation.py:480-489`; `test.json:415-434,435-454,599-614,649-663,2251`; `wt-boot-pr280` `test.json` (`G-GitHubGovernanceApply` template `b6d1a587…`) |
+| R11-m2 service-linked roles | S5.2's `iam:CreateServiceLinkedRole` branch is removed: `05f77e26…` denies it outside budgets, guardduty and securityhub in the USI Apply guard (line 658) and every BI applier guard. The five SLRs' existence is a read-only `iam:GetRole` precondition of S4.6 step 1 (a missing one is a STOP). The creator of a missing one is the independent-owner route: an `AWS::IAM::ServiceLinkedRole` in a seed stack of that account, installed by the human non-root installer first in row 8 (S5.1). | `architecture.md:456-458,2462-2476` and the layer-6 stack table (2023-2031); `epics-stories.md:2586-2596,2603,3614,3615`; `prd.md:245` | `test.json:649-663,1767-1780` (and the guards' `statement_ids`; `prod.json:1753`) |
+| R11-m3 test-level forward dependency | S4.10 now unit-tests `_task_execution_inputs` (a directly built projection; ARM64 accepted for `linux/arm64`, `X86_64` rejected, and the reverse) and asserts that the end-to-end ARM64 path fails closed at the entrypoint's line-59 pin (`validate_first_workload_topology` → `_checked` → `project_workload_phase` → `_images`). The positive end-to-end ARM64 fixture moves to S4.14, which widens that pin and replaces S4.10's fail-closed assertion. The ordered-list note and this file's R10-n6 row and ARM64 residual are corrected. | `epics-stories.md:853-873,2009-2025,3719,3734-3755` (S4.10, S4.14, row 39 and the note); this file (R10-n6 row, "ARM64 before S4.14" residual) | `scripts/poc_workload_topology.py:18,365-371,814-839`; `scripts/poc_workload_phase_entrypoint.py:52-59,96-123,126-133`; `tests/unit/test_poc_workload_topology.py:166-170,275-280` |
+| R11-m4 ARM64 publisher platform source | Both revision-10 branches are withdrawn with their reasons (the release block is unreachable at dispatch; a "reviewed dispatch input" has no carrier). The source is a committed, schema-validated optional contract field `publish_platform` (S4.14, TEST schema; absent means `linux/amd64`; in a workload contract it must equal `release.platform`), changed only by a reviewed USI contract PR, never `client_payload`. `poc_prepare_source` exports it, the dispatch job's job-level `env` (lines 739-748) carries it to both the `prepare` (760-762) and `dispatch` (774-781) steps, and `prepare()` checks it against the authenticated contract. Tests: arm64 and absent values, an out-of-enum value, an environment/contract mismatch, the `prepare` and `dispatch` requests equal, no `client_payload` read. Cross-repo precondition: the user-service publisher accepts arm64 (S5.14, row 24). | `epics-stories.md:2036-2089,3719` (row 39) | `.github/workflows/self-deploy.yml:1-8,40-53,60-80,721-781`; `schemas/poc-test-v1.schema.json:440-455,815-840` (top-level keys, `additionalProperties: false`); `scripts/poc_publisher_dispatch.py:143-175,211-217,261-271`; `tests/unit/test_poc_publisher_dispatch.py:128` |
+| R11-n1 #284/#285 facts | "Not verified locally" is replaced by the verified facts: #284 carries the only #219 catalog change (TEST pin `ff2eaf29…`; TEST boundary 11 statements, template `805998b5…`; `-poc-prerequisites` in `policy_registry.py` lines 542-546; capability `"state": "enabled"`); #285 contains #284 and changes no catalog file, catalog hash or `policy_registry.py` line; PROD is unchanged (`d4b56073…`). #284 is the external precondition of row 8. | `architecture.md:2179-2246`; `prd.md:589-610`; `epics-stories.md:3558-3609,3788-3805`; this file's R10-m2 row | `wt-boot-pr280` and `wt-boot-219` `pulumi/seed/policy_registry.py:18-21,540-548`, `pulumi/infra/test-poc-identity.json:11`, `pulumi/seed/catalogs/test.json:307-322`; `git merge-base --is-ancestor e85534c 54e9e2f`; `git diff --stat e85534c 54e9e2f` over the catalogs, `policy_registry.py` and the identity file (empty); `git diff --stat 862b4bf e85534c` (three files) |
+| R11-n2 S5.2's TEST baseline | The post-#284 TEST boundary (11 statements, template `805998b5…`, 2894 characters, measured like the `origin/main` 1235) is S5.2's TEST baseline; catalog entries are cited by template and statement hash. | `architecture.md:2146-2178`; `prd.md:542-545`; `epics-stories.md:3558-3576,3615` | `wt-boot-pr280` `pulumi/seed/catalogs/test.json:307-322` |
+| R11-n3 D-15 option (a) | "if the boundary holds the exact ARN" added to option (a) (note text only; the user's wording is unchanged). | `decisions.md:15`; `prd.md:459-471`; this file (pre-commit audit 10 finding 6, its recheck item 2, and "Surfaced for the user") | — |
+| R11-n4 layer count | "Four layers" becomes six: identity allows, identity denies, the boundary, the seed guard, the seed attachment constraint, and the new seed principal-creation authority. | `architecture.md:1769-1776`; `prd.md:485-487`; `epics-stories.md:2500-2501`; this file (skill applicability); `run-summary.md` checklist | — |
+
+**Ordered list (re-verified in revision 11).** Still 53 rows (0-52); no
+row is added or moved. Rows 8-11, 13, 33, 34, 42, 43, 45 and 47 name
+their seed operations, and row 39 names the `publish_platform` field and
+the end-to-end ARM64 fixture. Every new role is created in row 8 (or in
+its own row: S5.7 row 34, S5.19 row 47) before any row passes it or
+grants on it (rows 9, 11, 13, 33, 42, 43, 45); every seed operation's
+baseline comes from a lower row; #284 is the external precondition of
+row 8's first operation. Test level (R11-m3): S4.10 (row 28) no longer
+needs S4.14 (row 39) for a passing fixture. S4.14 depends on S5.14 (row
+24) for the publisher's arm64 support. No story depends on a
+higher-numbered row. See `epics-stories.md:3676-3838`.
+
+**Residuals recorded in revision 11 (not new risk acceptances).**
+
+- **Stack amendments in the live campaign (R11-M1).** S5.5's
+  bootstrap-job grant, network-interface grant and `VpcConfig` are a
+  function-stack amendment by the human installer in S4.6 steps 5-6 and
+  again after the step-20 rebuild (only the secret ARN changes then);
+  S5.18b's reader attach (step 5), `VpcConfig`-only detach (step 18) and
+  `VpcConfig` re-attach (step 20) are restore-stack amendments. The
+  network-interface grant stays for the life of the function (recheck N1);
+  if V-19 selects the ephemeral reader grant, S4.8 adds and removes it
+  the same way. Each is a human step with its own evidence; none is a CI
+  path.
+- **Functions in the stacks (R11-M1).** Every function that runs as an
+  S5.1 role lives in that role's stack, so no platform applier's
+  `iam:PassRole` guard changes. The cost: every function code or
+  `VpcConfig` change (S5.3, S5.5, S5.18a, S5.18b, including the S4.6
+  step-18 `VpcConfig` detach and step-20 re-attach) is a human stack
+  amendment with its own evidence. A second cost of the same route: the
+  exercise and restore roles are created trust-only in S5.1, and their
+  grants arrive by later amendments.
+
+## Pre-commit audit of revision 11
+
+A read-only `claude-router:audit` subagent, with fresh context, audited
+the uncommitted revision-11 diff against `9b17199` before the commit, then
+rechecked the fixes. It could not edit files and ran no make, pulumi or aws
+command.
+
+**First pass: REFUTED (2 major, 3 minor, 3 nits).** Findings (all eight
+were fixed in revision 11):
+
+1. (major) Live principal-creation rows outside the Preview simulate grant.
+2. (major) S5.3 narrowing `4fae8daf`.
+3. (minor) The shared `4fae8daf` scope.
+4. (minor) S5.2 omitting #219's read-role PassRole denies.
+5. (minor) Lambda network-interface grants missing (the recheck, N1 below,
+   then corrected their scope and lifecycle).
+6. (nit) The exercise KMS row with two owners.
+7. (nit) Citation errors (`ae950d73`, `455fe8d0`, `PocRuntimeRoles`, the
+   human installer credit).
+8. (nit) The Remove rows, the PROD hash counterparts, the row 10 marking
+   and XP-1.
+
+**Recheck: REFUTED.** All eight first-pass items were confirmed fixed; it
+found three new items, now folded in:
+
+- **N1 (major): the Lambda network-interface grant was under-scoped,
+  incomplete and removed too early.** The AWS Lambda guide ("Giving Lambda
+  functions access to resources in an Amazon VPC",
+  <https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html>,
+  read through the aws-knowledge MCP) lists six actions on
+  `"Resource": "*"`: `ec2:CreateNetworkInterface`,
+  `DescribeNetworkInterfaces`, `DescribeSubnets`, `DeleteNetworkInterface`,
+  `AssignPrivateIpAddresses`, `UnassignPrivateIpAddresses`. The plan had
+  five, scoped to subnet ARNs, and dropped `DescribeSubnets`. The page
+  names no EC2 condition key that narrows them (its `lambda:VpcIds`,
+  `lambda:SubnetIds` and `lambda:SecurityGroupIds` constrain the caller of
+  `CreateFunction` and `UpdateFunctionConfiguration`), so no condition was
+  adopted. Fixed: the documented set on `*` is an explicit NFR-06
+  exception ("no resource scope exists for these actions", like
+  `iam:SimulateCustomPolicy` and the `acm` read), recorded in PRD NFR-06
+  and AD-26; it is bounded by the `lambda:SourceFunctionArn` deny the same
+  page recommends. **Lifecycle choice: the grant stays for the life of the
+  function and the detach removes only `VpcConfig`,** because Lambda
+  deletes an unused ENI with the creating function's execution role (up to
+  20 minutes per the page; the plan polls up to 45). S5.18b's detach
+  acceptance, S5.5, the S4.6 ordered row 43 text and the step-18 STOP
+  (an ENI remains after 45 minutes, or the grant was removed before the
+  read-only `DescribeNetworkInterfaces` check on the XP-8 subnets passed)
+  are consistent with this.
+- **N2 (nit):** architecture.md said PROD `prod.json` has the same entries
+  at the same lines. Fixed: the guard entries are the same, but the
+  statement lines differ (PROD `a9609b86` 3208 against TEST `94cec98a`
+  3000; `06267ab9` 1767 against 2493; `9fb811f6` 3061 against 2915).
+- **N3 (nit):** S5.3 and row 13 did not state the full order. Fixed: BI CI
+  log groups, then the stack amendment that creates the functions, then BI
+  CI Lambda permissions and the `RotationSucceeded` rule.
+
+**Coordinator design choice, not a user decision.** The independent
+CloudFormation-owner route for new IAM principals and for the functions
+that run as them (AD-26 layer 6) is the coordinator's design choice made to
+avoid narrowing any seed guard. No user decision is taken or needed, and
+none is recorded in `decisions.md`.
+
+**Trade-offs recorded.** (1) Every Lambda function and `VpcConfig` change
+becomes a human stack amendment. (2) The exercise and restore roles are
+created trust-only in S5.1, because S5.4's key policy and the S3.3 endpoint
+policy name them, and their grants arrive by later amendments. The ordered
+list is unchanged (53 rows) and no story depends on a higher-numbered row.
 
 ## Round-10 finding → resolution map
 
@@ -92,13 +248,13 @@ the pre-commit audit are cited as "audit <n>".
 | D-15 (user decision, 2026-09-30) | Recorded with the user's wording, date and accepted rationale in `decisions.md` and PRD §6, and in every decision range (D-1…D-15) and list. **Code owner: S4.14** (the one editor of the capabilities module, holding the C-runner and C-contract slots at row 39): the TEST schema requires `certificate_arn` and drops `certificate_parameter_name`; the PROD schema has only `certificate_arn`; the runner rule becomes `workload-certificate-arn-required`; the SSM read path and the `("ssm", "get-parameter")` operation are removed; the receipt's certificate observation is narrowed to `null`; the pinned runner, contract, capabilities and entrypoint tests and `specs/poc-workload-runner.md` (8-17, 110-113), `specs/poc-api-gateway-backend.md` (30, 41-60) and `docs/poc-workload-admission.md` (104-111) are updated. Revision 9's `certificate=` reader parameter is withdrawn. **XP-10 and XP-15 rewritten:** the gateway owner supplies the ARN, a reviewed USI contract PR pins it (TEST: the gate-1 PR, S4.6 step 1; PROD: S4.7's contract PR), a replacement needs a new contract PR, and until it merges PR plans and scheduled drift fail closed on the ACM check (operating residual). **AD-26, XP-11 and S5.24a/S5.24b rewritten:** every `ssm:GetParameter` carve-out is removed; the only allows are `iam:GetRole`, `iam:SimulatePrincipalPolicy` (execution role only for Apply and Drift), the three ECR pull reads and `acm:DescribeCertificate`, which no deny or guard blocks; `DenySecretLeakingReads`, `DenySecretLeakingReadsApply` and every seed guard statement are unchanged; negative matrix rows prove `ssm:GetParameter` denied for every role. **S4.17** takes the ARN from the contract its success receipt applied. From the pre-commit audit: S4.14's test and doc list is completed (audit 5); the replacement residual is corrected (the grant update, a possible seed amendment, S4.17's applied-contract window, ACM's in-use rule), and its gap with D-15's rationale is surfaced to the user (audit 6); D-15 joins the gate-1 decision lists (audit 10). | `decisions.md:15`; `prd.md:7,212,214,245,295,330,412-468,469-585,630-659`; `architecture.md:7,928-932,1145,1187,1352,1443,1492,1521-1524,1605-2007`; `epics-stories.md:7,17-23,27,83,85,96,171,1844,1908-1994,2056,2271-2282,2437-2498,2527-2539,2549-2573,2802-2811,2998-3017,3042-3048,3190-3201,3256-3262,3281-3304,3446-3447,3458,3511,3550,3560`; `brief.md:7,163-168` | `scripts/poc_workload_runner.py:170-178`; `scripts/poc_workload_capabilities.py:30-34,37-47,243-266,269-292,295-319,322-346`; `scripts/poc_workload_admission.py:455-475`; `scripts/poc_workload_phase_entrypoint.py:96-123,226-231`; `schemas/poc-test-v1.schema.json:508-527`; `specs/poc-workload-runner.md:8-21,110-113`; `specs/poc-api-gateway-backend.md:30,41-60`; `docs/poc-workload-admission.md:104-111`; `tests/unit/test_poc_workload_runner.py:18-25,52-56,224-242,316-321`; `tests/unit/test_poc_contract.py:325-333`; `tests/unit/test_poc_workload_capabilities.py:320,333,371-459`; `tests/unit/test_poc_workload_phase_entrypoint.py:40-107` |
 | R10-M1 seed-owned IAM layers | **AD-26 now names four layers** for each USI CI role: identity allows (new, USI-scoped), identity denies (unchanged), **seed guard: unchanged**, and the **seed-owned permissions boundary**. The guards (TEST Preview and Drift statement `ae950d73…`, Apply `9f269660…`; PROD Preview and Drift `ae950d73…`, Apply `ce12c400…`) deny `ssm:GetParameter*` and `ecr:GetAuthorizationToken`; with D-15 and the token-free image read no guard narrowing is needed, and a computed check over the catalogs shows that no guard statement matches the remaining allows except the seed-resource-only `d413d73a…`/`aec83856…`. The token fallback would also have to narrow the guards, which stays a user decision amending NFR-06. Guard-layer rows are in the XP-11, S5.24a and S5.24b matrices (and S4.6 step 3, S4.7). The boundary is an `existing_capability_boundary` in the seed catalog, with hashes pinned in `policy_registry.py`, so **every boundary addition goes through a seed catalog amendment** with a new catalog hash pin, a named seed owner, CloudFormation change-set evidence and `@Kravalg`'s approval. The Epic 5 boundary rule and AD-26 no longer locate the boundary only in `governance_automation.py`. From the pre-commit audit: the boundary also bounds the ConfigRead roles, with ConfigRead rows in the matrices (audit 4); the seed's attachment constraint on the Apply role is AD-26 layer 5, with the Preview and Drift allows in the existing inline documents, the TEST Apply allows in `-poc-prerequisites`, the seed code, write-scope and guard changes for any new Apply managed policy, and `verify_active_enrollment` rows (audit 1); S5.2's amendment covers S5.5's later grant (audit 3). | `architecture.md:1632-1667,1761-1875,1944-2003`; `prd.md:469-585,628`; `epics-stories.md:2437-2498,2549-2573,3281-3304,3350-3441,3446,3458` | BI `origin/main`: `pulumi/seed/catalogs/test.json:307-319,649-663,712-761,3102-3118,3273-3299,3667`; `pulumi/seed/catalogs/prod.json:307-319,649-663,712-725,747-760,3277-3303,3325,3711-3727`; `pulumi/seed/policy_registry.py:18-21`; `pulumi/seed/test_poc_prerequisite_amendment.py:1-5,20-40,58-72` (prepared by #274, `1ed394d`; identical in `wt-boot-219`); `pulumi/infra/governance.py:98-109,212,266-271,414-475,486-497`; `pulumi/infra/governance_automation.py:422-455,480-489`; `pulumi/infra/ci_bootstrap.py:132-145,153-166,634-663,770-773,814-842`; `pulumi/seed/policy_registry.py:532-551,554-591`; `pulumi/seed/test_poc_prerequisite_amendment.py:135-144`; `wt-boot-219` `pulumi/seed/policy_registry.py:542-546`; the catalog `principals` bound by each boundary |
 | R10-m1 boundary size | The boundary is one policy of at most 6144 characters, shared by Preview, Apply, Drift and the ConfigRead roles (audit 4; today about 1.2 thousand: TEST 1235, PROD 1240, computed over the catalog statements), so "copy every allow exactly" will not fit. Each story that adds boundary content records the rendered size in its seed amendment (S5.2, S5.17, S5.4, XP-11, XP-14's addition, S5.24a, S5.24b). The fallback form is a service or resource-family ceiling in the boundary, approved in the seed review, with the exact allows kept in the identity policies, as BI's `platform_control_boundary` does. S5.2's several managed policies are noted. | `architecture.md:1876-1901`; `prd.md:520-543`; `epics-stories.md:3350-3441,3446-3447,3458` | `pulumi/infra/governance_automation.py:185-194`; `pulumi/seed/test_poc_prerequisite_amendment.py:69-72`; `pulumi/infra/platform_iam.py:642-645` |
-| R10-m2 seed amendment conflicts | Every amendment pins baseline and result hashes, so they are serialized in C-BI order, one open across both catalogs (recheck N2): #219's own amendment (bootstrap PRs #284/#285 as round 10 reports; not verified locally) → S5.2 → S5.17 → S5.4 (rows 9-11) → XP-11 → XP-14's PROD addition → S5.24a → S5.24b. XP-11's BI identity change and seed amendment take the C-BI slot in **row 42, after S5.18a and before S4.6 (row 43)**; no row is added. No forward dependency: XP-11 reads only the catalog left by rows 9-11, and its matrix asserts only Drift denies. | `architecture.md:1902-1925,2015`; `prd.md:563-572`; `epics-stories.md:3350-3441,3553,3559,3561,3565-3643` | `pulumi/seed/test_poc_prerequisite_amendment.py:32-40` |
+| R10-m2 seed amendment conflicts | Every amendment pins baseline and result hashes, so they are serialized in C-BI order, one open across both catalogs (recheck N2): #219's own amendment (revision 11, R11-n1, verified read-only: #284 carries the only #219 catalog change, the TEST prerequisite activation, and #285 changes no catalog hash) → S5.2 → S5.17 → S5.4 (rows 9-11) → XP-11 → XP-14's PROD addition → S5.24a → S5.24b. XP-11's BI identity change and seed amendment take the C-BI slot in **row 42, after S5.18a and before S4.6 (row 43)**; no row is added. No forward dependency: XP-11 reads only the catalog left by rows 9-11, and its matrix asserts only Drift denies. | `architecture.md:1902-1925,2015`; `prd.md:563-572`; `epics-stories.md:3350-3441,3553,3559,3561,3565-3643` | `pulumi/seed/test_poc_prerequisite_amendment.py:32-40` |
 | R10-n1 gate effect of a rejected S5.24b | The R9-M1 (d) and R9-m2 rows below, the "Remaining user decisions" table and the architecture C-runner row now say that a rejected S5.24b stops S4.17 and therefore gate 2a (recheck N1), not "gate 2b", "gate-2b precondition only" or "gate 2a unaffected" (audit 7). | this file (R9-M1 (d) and R9-m2 rows; "Remaining user decisions"); `architecture.md:2019` | `epics-stories.md:3458` (S5.24 row, rejected-S5.24b sentence) |
 | R10-n2 FR coverage | FR-31 lists XP-11 (gate 1) and S5.24a (gate 2a); FR-33 lists XP-11, S5.24a and S5.24b. | `epics-stories.md:83,85` | — |
 | R10-n3 renderer scope | The new identity statements render for the USI identity only (`_governance_policy_documents` renders every enrolled repository). With D-15 the deny documents do not change at all, including `_apply_secret_deny_document`, which also renders the platform apply role's document. Renderer-scope rows prove that other repositories' and the platform roles' documents stay byte-identical. | `architecture.md:1767-1780,1968-1974`; `prd.md:479-507`; `epics-stories.md:2448-2461,3458` | `pulumi/infra/governance.py:414-475`; `pulumi/infra/ci_bootstrap.py:634-663,690-705` (the platform apply role's `secret-read-deny` at line 700) |
 | R10-n4 certificate re-pointing | Answered by the D-15 operating residual: a replacement needs a USI contract PR. PR plans keep checking the old ARN until that PR merges, then fail closed on the ACM read until the grant update (and any seed amendment) is applied; scheduled drift keeps checking the applied contract's ARN until an apply of the new-ARN contract writes a new success receipt. The ARN never changes silently. | `prd.md:430-468`; `architecture.md:1668-1703`; `epics-stories.md:2998-3017` | `scripts/poc_workload_capabilities.py:243-266` |
 | R10-n5 V-28 and test names | The config-blob open point is **V-28** in the V-table, with S4.14 as its offline story and **S4.6 step 1** (the gate-1 PR's `plan`) as its live step. S4.14's tests name the two `authorize=` tests and keep the "pre-signed URL never exposed" assertion. | `architecture.md:2171`; `epics-stories.md:28,1881-1907,2249-2253,2527-2539` | `tests/unit/test_poc_workload_image_config.py:303-334`; `scripts/poc_workload_images.py:235-259` |
-| R10-n6 "only S4.14 edits" | S4.9's multi-arch check lives in `scripts/poc_workload_admission.py` (C-contract) and edits neither the images nor the capabilities module, so the architecture claim holds and is scoped in the C-runner row. The AMD64 pins further down have owners (audit 2): S4.10 derives the topology `cpuArchitecture` from the release platform, and S4.14 widens the capabilities and projection platform checks to the schema enum; the FR-14 coverage row lists S4.9, S4.10 and S4.14. **Recheck of audit 2:** the image-publisher request's `"platform": "linux/amd64"` (`scripts/poc_publisher_dispatch.py` line 170) is S4.14's too (pin-table row; `docs/poc-workload-admission.md` line 111 joins its doc list), so FR-14 (a) is admissible from gate 1 only through S4.10 (row 28) and S4.14 (row 39), both before row 43; an ARM64 publication (XP-12, external) runs after row 39, so there is no forward dependency. Until S4.14 merges an ARM64 contract fails closed. | `epics-stories.md:66,853-862,1101-1122,1995-2037`; `architecture.md:2019` | `scripts/poc_workload_capabilities.py:327-330`; `scripts/poc_workload_phase_entrypoint.py:59`; `scripts/poc_workload_topology.py:828`; `scripts/poc_workload_admission.py:355,370-377,448,464-475`; `scripts/poc_publisher_dispatch.py:170`; `docs/poc-workload-admission.md:111`; `tests/unit/test_poc_publisher_dispatch.py:128` |
+| R10-n6 "only S4.14 edits" | S4.9's multi-arch check lives in `scripts/poc_workload_admission.py` (C-contract) and edits neither the images nor the capabilities module, so the architecture claim holds and is scoped in the C-runner row. The AMD64 pins further down have owners (audit 2): S4.10 derives the topology `cpuArchitecture` from the release platform, and S4.14 widens the capabilities and projection platform checks to the schema enum; the FR-14 coverage row lists S4.9, S4.10 and S4.14. **Recheck of audit 2:** the image-publisher request's `"platform": "linux/amd64"` (`scripts/poc_publisher_dispatch.py` line 170) is S4.14's too (pin-table row; `docs/poc-workload-admission.md` line 111 joins its doc list), so FR-14 (a) is admissible from gate 1 only through S4.10 (row 28) and S4.14 (row 39), both before row 43; an ARM64 publication (XP-12, external) runs after row 39, so there is no forward dependency. Until S4.14 merges an ARM64 contract fails closed. **Corrected in revision 11:** S4.10's end-to-end ARM64 fixture could not pass before S4.14 (the entrypoint's line-59 pin), so S4.10 unit-tests `_task_execution_inputs` and asserts the fail-closed path, and the positive fixture is S4.14's (R11-m3); the publisher's platform comes from the committed `publish_platform` field, not a release block or a dispatch input (R11-m4). | `epics-stories.md:66,853-862,1101-1122,1995-2037`; `architecture.md:2019` | `scripts/poc_workload_capabilities.py:327-330`; `scripts/poc_workload_phase_entrypoint.py:59`; `scripts/poc_workload_topology.py:828`; `scripts/poc_workload_admission.py:355,370-377,448,464-475`; `scripts/poc_publisher_dispatch.py:170`; `docs/poc-workload-admission.md:111`; `tests/unit/test_poc_publisher_dispatch.py:128` |
 
 **Ordered list (re-verified in revision 10).** Still 53 rows (0-52); no
 row is added or moved. Row 0 lists D-15. Row 39 (S4.14) adds the D-15
@@ -140,7 +296,12 @@ higher row. Two external preconditions without a row are stated (audit
   admissible from gate 1 only through S4.10 (row 28) and S4.14 (row 39),
   both on the gate-1 list and before S4.6 (row 43); an ARM64 image
   publication (XP-12, external, no row) runs after row 39. No forward
-  dependency; no user decision is needed.
+  dependency; no user decision is needed. **Revision 11 (R11-m3,
+  R11-m4):** S4.10's own tests assert the fail-closed end-to-end ARM64
+  path and unit-test `_task_execution_inputs`; the passing end-to-end
+  ARM64 fixture is S4.14's. The publisher's platform comes from the
+  committed `publish_platform` contract field at job level, never from
+  `client_payload`.
 
 ## Pre-commit audit of revision 10
 
@@ -182,7 +343,7 @@ pulumi or aws command.
      D-15's rationale. Fixed in PRD XP-10, AD-26, S4.17, D-15's note and
      this file; the gap is surfaced to the user in "Remaining user
      decisions" with three options; the plan's default is (a), exact-ARN grants with a BI
-     grant update and seed amendment on replacement, and the user may
+     grant update and seed amendment on replacement if the boundary holds the exact ARN, and the user may
      choose (b) or (c).
   7. (minor) R10-n1 was only partly fixed. Fixed: the R9-m2 row and the
      architecture C-runner row.
@@ -236,7 +397,7 @@ pulumi or aws command.
      row and residual, `decisions.md` D-15 note text only, and the same
      sentence in the PRD §6 D-15 row). D-15's replacement-path options now
      carry one wording everywhere: the plan's default is (a), exact-ARN
-     grants with a BI grant update and seed amendment on replacement; the
+     grants with a BI grant update and seed amendment on replacement if the boundary holds the exact ARN; the
      user may choose (b) or (c) (PRD XP-10, "Surfaced for the user",
      `decisions.md`, finding 6 above).
   3. **N1 (minor, inline policy size).** IAM limits a role's aggregate
@@ -705,7 +866,8 @@ These are recorded gates, not planning defects.
   no SSM publication; XP-11 is the TEST Preview and Apply
   workload-observation reads (no SSM), with the denies and seed guards
   unchanged, and their seed boundary amendment in the C-BI slot after
-  S5.18a, under the BI security review and the seed review approved by
+  S5.18a (revision 11: the #219 part is #284's catalog amendment; the
+  TEST ECS roles are S5.1's, R11-M1), under the BI security review and the seed review approved by
   `@Kravalg` (PRD §7, AD-26). XP-9 also keeps
   the packaged TEST capability `enabled`. Its `PocBackendVersioning` and
   registry reads serve every TEST capture, and `withdrawn` while a
@@ -749,6 +911,12 @@ or review items, not user decisions:
   approved by `@Kravalg`;
 - the repository-policy record (XP-11 for TEST, S5.24a and S5.24b for
   PROD and Drift).
+- for every independent stack (R11-M1): the reviewed template and its
+  hash, the named human non-root installer, the CREATE or UPDATE
+  change-set evidence and the verifier output; the BI review's record
+  that S5.1's TEST ECS stack replaces #219's later runtime amendment for
+  the two ECS roles. These are the BI owner's and the seed reviews,
+  approved by `@Kravalg`.
 
 **Surfaced for the user, not decided here (pre-commit audit 6):** D-15's
 accepted rationale says a certificate replacement needs only a reviewed
@@ -756,7 +924,7 @@ USI PR. Under NFR-06's exact-ARN rule the plan also needs the BI
 `acm:DescribeCertificate` grant update on replacement, plus a seed
 amendment if the boundary holds the exact ARN. The plan's default is
 (a), exact-ARN grants with a BI grant update and seed amendment on
-replacement; the user may choose (b) or (c). The options (PRD §7
+replacement if the boundary holds the exact ARN; the user may choose (b) or (c). The options (PRD §7
 XP-10): (a) accept the extra BI and seed PRs; (b) an ACM certificate-family
 ceiling in the boundary (seed review), which removes the seed amendment
 only; (c) `acm:DescribeCertificate` on the account's regional
@@ -774,6 +942,7 @@ only if a live check, a measurement or an owner review fails:
 | Conditional: V-16 fails with SSE-KMS | step 12 | SSE-S3 would contradict D-4, so a new decision would be needed |
 | Conditional: a D-14 RPO or RTO target missed | S4.8, before gate 2a | a new user decision: accept the measured value or change the design |
 | Conditional: the BI security review or the seed review rejects XP-11's or S5.24a's Preview and Apply reads or their boundary amendment (R9-M1 (d), R10-M1) | XP-11 before gate 1; S5.24a before gate 2a | a STOP, then a user decision. If only the Apply-role reads are rejected, one option is the recorded fallback design, in which `up-plan` reuses the Preview-role observation. This plan does not choose it. |
+| Conditional: a stack or stack-amendment review is rejected, a preflight finds a role name present (for example #219's `PocRuntimeRoles` registered first), or a post-create or post-update verifier fails (R11-M1) | the row of that seed operation (8, 11, 13, 33, 34, 42, 43, 45 or 47) | a STOP for that story, then an owner decision. The governor-guard route (narrowing a Resource-`*` deny so a CI role can create roles) is not a fallback: it needs a user decision amending NFR-06, which this plan does not take |
 | Conditional: the BI or seed review rejects S5.24b's Drift grants | S5.24b, before S4.17, and therefore before gate 2a (recheck N1; corrected in revision 10, R10-n1) | a STOP, then a user decision |
 | Conditional: a boundary amendment exceeds 6144 characters and the seed review rejects the service-family ceiling (R10-m1) | the amendment of S5.2, S5.17, S5.4, XP-11, XP-14, S5.24a or S5.24b | a STOP for that story, then an owner or user decision (for example a second boundary design, which this plan does not choose) |
 | Conditional: `GetDownloadUrlForLayer` refuses the config digest, or its URL is outside `LAYER_HOST` (V-28, R9-M1 (a), R10-n5) | S4.6 step 1, the first TEST workload `plan` (read-only, before any apply) | a STOP. The token fallback removes `ecr:GetAuthorizationToken` from the Preview, Apply and Drift identity denies and from their seed guards (guard template and catalog hashes change through a seed amendment). That narrows Resource-`*` denies, so it needs a user decision that amends NFR-06, as well as the BI security review and the seed review approved by `@Kravalg` |
@@ -782,7 +951,7 @@ only if a live check, a measurement or an owner review fails:
 
 **Applicable and addressed:**
 
-- security-iam (AD-15a, AD-26 with its four IAM layers: identity allows, unchanged denies, unchanged seed guards and the seed-owned boundary; S5.x, S5.21/S5.22 repository controls)
+- security-iam (AD-15a, AD-26 with its six IAM layers: identity allows, unchanged denies, the seed-owned boundary, seed guards unchanged relative to each story's baseline catalog, the seed attachment constraint, and principal creation only by independent CloudFormation stacks (R11-M1, R11-n4); S5.x, S5.21/S5.22 repository controls)
 - state-migration (AD-16, AD-25, the R5-M5 checkpoint-field allowance, the
   V-27 `importID` case and the private export reader)
 - observability (§3.2a)

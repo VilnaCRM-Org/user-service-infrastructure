@@ -4,7 +4,7 @@ workflow: _bmad/core/tasks/bmad-create-prd (non-interactive; steps-c 01..12 reso
 task: workload-wa-hardening
 source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa
 date: 2026-09-30
-revision: 10 (readiness round-10 findings R10-M1, R10-m1, R10-m2 and R10-n1..n6 and user decision D-15 addressed on top of revision 9, which answered round 9 (R9-M1, R9-m1, R9-m2 and R9-n1..n4) on top of revision 8, which answered round 8 on top of revision 7 (round-7 findings R7-M1, R7-M2, R7-m1..m9 and R7-n1..n3, plus audit F2, F6 and F8); decisions D-1..D-15 of 2026-09-30 recorded: D-1..D-7, D-14 and D-15 as user decisions, D-8..D-13 as confirmed details)
+revision: 11 (readiness round-11 findings R11-M1, R11-m1..m4 and R11-n1..n4 addressed on top of revision 10, which answered round 10 (R10-M1, R10-m1, R10-m2 and R10-n1..n6) and applied user decision D-15 on top of revision 9, which answered round 9 (R9-M1, R9-m1, R9-m2 and R9-n1..n4) on top of revision 8, which answered round 8 on top of revision 7 (round-7 findings R7-M1, R7-M2, R7-m1..m9 and R7-n1..n3, plus audit F2, F6 and F8); decisions D-1..D-15 of 2026-09-30 recorded: D-1..D-7, D-14 and D-15 as user decisions, D-8..D-13 as confirmed details)
 inputDocuments: [research.md, brief.md, decisions.md, specs/poc/README.md, specs/poc-workload-runner.md]
 ---
 
@@ -205,7 +205,7 @@ matching run is a finding. S2.5 tests every row (P, N, B).
 | --- | --- | --- | --- | --- |
 | FR-25 | The worker healthcheck matches the running supervisor config (user-service #501). The USI `worker_health_command` in the contract equals the published image's command. | US + USI | T→P | CON, L |
 | FR-26 | The web and worker images run as non-root (UID ≥1000). USI drops all Linux capabilities for both containers and uses an unprivileged container port. | US + USI | T→P | L |
-| FR-27 | BI N-11 grants: the apply-role workload capability, the central ECS roles, the app-rotation, redeploy and bootstrap-job roles, and the recovery and restore-rehearsal (operator and reader) grants are installed as reviewed IAM documents. `scripts/poc_workload_capabilities.py` proves the simulator matrix offline (every required action allowed, every denied action denied, condition keys present). A live `iam:SimulatePrincipalPolicy` run in S4.6 step 3 repeats it. Other live exercises (forced rotation, denied reads, alarm and scaling-alarm induction, flow-log and CloudTrail reads, log counts, optional load) use the TEST exercise role `GitHubCiExercise-user-service-infrastructure-test` in the `test-exercise` environment (S5.23, S4.16). The simulator run uses the `GitHubCiPreview-user-service-infrastructure-{env}` role, which S5.17 grants `iam:SimulatePrincipalPolicy` and `iam:GetContextKeysForPrincipalPolicy` on the exact role ARNs of the matrix only, plus `iam:SimulateCustomPolicy` (no resource scope exists for it; read-only) (m6). Key and secret resource policies are passed as `ResourcePolicy` inputs. | BI + USI | T→P | IAM, L |
+| FR-27 | BI N-11 grants: the apply-role workload capability, the central ECS roles, the app-rotation, redeploy and bootstrap-job roles, and the recovery and restore-rehearsal (operator and reader) grants are installed as reviewed IAM documents. Every new role is created by an independent CloudFormation stack per role family, with a reviewed template, a human non-root installer, change-set evidence, a post-create verifier and `@Kravalg`'s approval, and a later grant on it is a reviewed stack amendment (architecture AD-26 layer 6, R11-M1). `scripts/poc_workload_capabilities.py` proves the simulator matrix offline (every required action allowed, every denied action denied, condition keys present). A live `iam:SimulatePrincipalPolicy` run in S4.6 step 3 repeats it. Other live exercises (forced rotation, denied reads, alarm and scaling-alarm induction, flow-log and CloudTrail reads, log counts, optional load) use the TEST exercise role `GitHubCiExercise-user-service-infrastructure-test` in the `test-exercise` environment (S5.23, S4.16). The simulator run uses the `GitHubCiPreview-user-service-infrastructure-{env}` role, which S5.17 grants `iam:SimulatePrincipalPolicy` and `iam:GetContextKeysForPrincipalPolicy` on the exact role ARNs of the matrix only, plus `iam:SimulateCustomPolicy` (no resource scope exists for it; read-only) (m6). Key and secret resource policies are passed as `ResourcePolicy` inputs. | BI + USI | T→P | IAM, L |
 | FR-28 | Front-door security per D-3 (decided 2026-09-30), outside the hard stop and required before any public exposure: a REST API regional endpoint with AWS WAF (managed common, known-bad-inputs and IP-reputation groups plus a rate rule), a private integration over **VPC link V2 directly to the internal ALB** (`integration_target` = ALB ARN; no NLB; V-10), a custom domain and a deploy pipeline. Live TEST evidence is S4.6 step 17; PROD public exposure requires it before gate 2. | AGI (+USI outputs) | T→P | L |
 | FR-29 | The legacy managed path (`pulumi/app/stack.py` `UserServiceStack`, `compute.py::_create_runtime_secrets`, `data.py::_persist_url` fallback) fails closed for `test` and `prod`, or is removed. It currently writes config-supplied secret material, including the social-login client secrets, into `SecretVersion`s. Social-login secrets, if ever enabled, are written outside Pulumi by a governance secret-write path. That is future work, recorded here. | USI | T→P | ST, CON |
 | FR-30 | Backup and rollback. **Restore:** a point-in-time restore of the TEST cluster (`RestoreDBClusterToPointInTime` with `UseLatestRestorableTime`, R6-m10) to a temporary cluster `<stack>-docdb-restore-rehearsal` under the BI restore-operator role (S5.18a). The cluster is switched to a managed primary password. A VPC-attached BI reader (bootstrap-job SG, attached in S5.18b after XP-8) records the restore time and a document-count sample. Then the temporary cluster is deleted. This is a PROD gate. **Recovery targets (user decision D-14, dated 2026-09-30; architecture AD-19; R6-m1):** DocumentDB RPO ≤ 1 hour inside the backup retention window, recorded as the restore request time minus the achieved recovery point of the point-in-time restore (the source `LatestRestorableTime` it used), and RTO ≤ 24 hours from the restore request to the reader's document-count sample; a measured value above a target is a STOP at gate 2a for a new user decision. Redis is rebuilt, not restored. **Rollback (m4):** (a) *first deployment*, before any accepted-workload receipt exists: there is no prior release, so rollback means stop serving. A create-only `rollback-zero` plan (FR-11) scales both services to 0, and the stack stays in place for `resume`, recovery or `abandon`. (b) *later releases*, after an accepted-workload receipt (FR-35): re-apply the prior accepted release (image digests, task-definition inputs, original registry anchor) as a saved plan. The ECS circuit breaker (AD-19) covers in-deploy failures in both cases. | USI + BI | T (gate for P) | IAM, L |
@@ -242,7 +242,7 @@ all-zero IDs or hashes) and any item without every field.
 | NFR-03 | The quality floors (§2) are unchanged and green. | `make ci-pr`, `make test-coverage`. | offline |
 | NFR-04 | TEST before PROD. Each live step is approved by Kravalg, with a requester different from the approver. | Workflow run evidence; receipt field check (§3.3). | evidence-only |
 | NFR-05 | Credential changes cause no outage. **IAM paths (Redis IAM, DocumentDB IAM):** zero authentication failures. **Single-key rotations (`APP_SECRET`, `OAUTH_ENCRYPTION_KEY`):** impact stays within D-5. | **IAM paths:** during a 13 h soak that crosses the 12 h Redis connection limit and at least two task-credential refreshes, the app `auth_failure{backend=redis\|documentdb}` log metric and the ElastiCache `AuthenticationFailures` metric are both 0. **Single-key:** window W = `RotationSucceeded` time → ECS deployment `COMPLETED` + 5 min; in W the ALB 5xx alarm does not fire, and the counts of failed refresh-token and failed decrypt log events are recorded; the result passes if every failure is a forced re-login accepted by D-5. | evidence-only |
-| NFR-06 | Least privilege. Every new grant is scoped to named ARNs, name patterns (`<name>-??????`), deterministic ARNs or exact XP-8 ARNs, with conditions. An explicit secret-read deny or seed guard is narrowed only where no non-weakening design exists, only to one exact ARN, and only after the BI security review approved by `@Kravalg` (AD-26, R9-M1); this plan narrows none (user decision D-15, R10-M1). A permissions-boundary addition goes through a seed catalog amendment (AD-26). The BI seed and rotation functions act only on allow-listed secret ARNs. | Reviewed IAM document hashes plus the offline capability simulator, and a live `iam:SimulatePrincipalPolicy` run (S4.6 step 3). | offline + live |
+| NFR-06 | Least privilege. Every new grant is scoped to named ARNs, name patterns (`<name>-??????`), deterministic ARNs or exact XP-8 ARNs, with conditions. An explicit secret-read deny or seed guard is narrowed only where no non-weakening design exists, only to one exact ARN, and only after the BI security review approved by `@Kravalg` (AD-26, R9-M1); this plan narrows no secret-read deny and no Resource-`*` guard deny (user decision D-15, R10-M1, R11-M1). The only seed guard changes are S5.2's added PassRole denies (#219's fragments, AD-26 layer 6) and, for a managed policy this plan creates only because the size limits leave no other design, its one exact ARN added to the governance guard's `iam:*` and policy-write lists (AD-26 layer 5, the #219 pattern), each through a seed catalog amendment and the seed review. Functions that run as a new role live in the stack that owns the role, so no applier's PassRole guard is narrowed (AD-26 layer 6). A permissions-boundary addition goes through a seed catalog amendment (AD-26). New IAM roles are created only by independent CloudFormation stacks through a human non-root installer (AD-26 layer 6); no CI role gets `iam:CreateRole` or `iam:CreateServiceLinkedRole` (R11-M1, R11-m2). **One documented exception (recheck N1):** the six Lambda network-interface actions a VPC-attached function's execution role needs (`ec2:CreateNetworkInterface`, `DescribeNetworkInterfaces`, `DescribeSubnets`, `DeleteNetworkInterface`, `AssignPrivateIpAddresses`, `UnassignPrivateIpAddresses`) have no resource scope, and AWS documents them on `"Resource": "*"` (https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html); they are granted only to the bootstrap-job and restore-reader roles, with a `lambda:SourceFunctionArn` deny for the function's own code, and stay for the life of the function because Lambda deletes its ENIs with that role (AD-26 layer 6). The BI seed and rotation functions act only on allow-listed secret ARNs. | Reviewed IAM document hashes plus the offline capability simulator, and a live `iam:SimulatePrincipalPolicy` run (S4.6 step 3). | offline + live |
 | NFR-07 | Fail closed: a missing central role, CMK, decision or evidence, or a forbidden prior-checkpoint URN, gives BLOCKED admission. | Negative admission and capability tests. | offline |
 | NFR-08 | An alarm reaches SNS within 5 min. | TEST alarm exercise: time from the induced condition to the SNS delivery record. | evidence-only |
 | NFR-09 | An interrupted TEST apply is resumed, or abandoned (D-7, decided 2026-09-30; TEST only, Kravalg-approved manifest), through FR-22 within one working day, with complete evidence. Every recovery subcommand that writes the checkpoint (`clear-pending`, `import`, `abandon`) leaves a receipt bound to the new checkpoint, so the resume anchor never goes stale (R5-M2). | TEST rehearsals: resume after `release-lock` and `clear-pending` (S4.6 step 13) and abandon plus rebuild (S4.6 steps 19–20). | evidence-only |
@@ -355,7 +355,10 @@ admitted by gate 1.
 ## 7. External prerequisites (not satisfiable by USI)
 
 - **XP-1.** BI installs the central ECS execution and task roles. They are
-  proposed only; `d41c019` is unavailable locally (R-14).
+  proposed only; `d41c019` is unavailable locally (R-14). Since revision
+  11 their owner is S5.1's independent ECS runtime stack, which adopts
+  #219's names and PassRole fragments; `d41c019` and #219's
+  `PocRuntimeRoles` are reference inputs only (AD-26 layer 6, R11-M1).
 - **XP-2.** BI provides the apply-role workload capability and boundary (N-11),
   and the preview and drift read capability (FR-33).
 - **XP-3.** BI provides the CMKs, key policies, the app-rotation, redeploy and
@@ -458,7 +461,7 @@ one (FR-31 e):
     is needed on replacement. Under NFR-06's exact-ARN rule, a
     replacement also needs the BI grant update and, with an exact-ARN
     boundary, a seed amendment. The plan's default is (a), exact-ARN
-    grants with a BI grant update and seed amendment on replacement; the
+    grants with a BI grant update and seed amendment on replacement if the boundary holds the exact ARN; the
     user may choose (b) or (c). (a) accepts the extra BI and seed PRs;
     (b) an ACM certificate-family
     ceiling in the boundary (seed review), which removes the seed
@@ -466,16 +469,22 @@ one (FR-31 e):
     `acm:DescribeCertificate` on the account's regional `certificate/*`
     (metadata only), which removes both but amends NFR-06 and so needs
     a user decision.
-- **XP-11.** The bootstrap #219 grants: installed central runtime and
-  deployment IAM, and the TEST workload-observation reads of the `plan`
-  and `up-plan` paths (R9-M1, R10-M1, architecture AD-26). Every workload
+- **XP-11.** The bootstrap #219 prerequisites and the TEST
+  workload-observation reads of the `plan` and `up-plan` paths (R9-M1,
+  R10-M1, architecture AD-26). The #219 prerequisites are #284's TEST
+  catalog amendment (the enabled TEST capability and the
+  `-poc-prerequisites` Apply policy). The TEST ECS execution and task
+  roles are not XP-11's: S5.1 creates them in its independent stack,
+  adopting #219's names and PassRole fragments (AD-26 layer 6, R11-M1). Every workload
   `plan` and `up-plan` calls `poc_workload_admission.observe_workload`
   (`scripts/poc_workload_runner.py` line 178, and in the gate at line 55;
   `scripts/poc_workload_admission.py` lines 464-475) under the Preview
   role (`plan`) and the Apply role (`up-plan`)
   (`scripts/poc_backend_observer.py` lines 173-174). XP-11 therefore
   gives `GitHubCiPreview-user-service-infrastructure-test` and
-  `GitHubCiApply-user-service-infrastructure-test`, in four layers:
+  `GitHubCiApply-user-service-infrastructure-test`, under the six
+  layers of AD-26 (R11-n4); XP-11 creates no principal (layer 6), because
+  the ECS roles its reads name are S5.1's:
   - **identity allows (only allows that no deny or guard blocks, D-15):**
     `iam:GetRole` on the TEST ECS execution and task roles;
     `iam:SimulatePrincipalPolicy` on the TEST execution role only, for
@@ -505,15 +514,21 @@ one (FR-31 e):
     document stays byte-identical (R10-n3). The token is not needed,
     because S4.14 replaces the registry-HTTP config read with
     `ecr:GetDownloadUrlForLayer` (V-28);
-  - **seed guard: unchanged (R10-M1).** Each USI CI role carries an
+  - **seed guard: unchanged relative to XP-11's baseline catalog (R10-M1,
+    R11-M1).** XP-11 adds no guard statement; its baseline is the catalog
+    left by the row-11 amendment (S5.4), in which S5.2's PassRole
+    fragments have already replaced the Preview, Drift and Apply guards'
+    template hashes, so
+    the guard-layer rows compare with that baseline, not with
+    `origin/main`. Each USI CI role carries an
     attached, hash-pinned `immutable_managed_guard` in the BI seed
     catalog (BI `origin/main` `pulumi/seed/catalogs/test.json`: Apply
     lines 649-663 with statement `9f269660…` at lines 3102-3118; Drift
     and Preview lines 712-761 with statement `ae950d73…` at lines
     3273-3299). Both statements deny `ssm:GetParameter*` and
     `ecr:GetAuthorizationToken`. With D-15 and the token-free image read
-    no guard statement, guard template hash or catalog guard entry
-    changes. The allows above are blocked by no guard statement (the
+    XP-11 changes no guard statement, guard template hash or catalog
+    guard entry. The allows above are blocked by no guard statement (the
     only other guard statement that could match them, `d413d73a…` at
     `test.json` lines 3667 on, is limited to the seed's own bucket, key
     and secrets);
@@ -525,7 +540,9 @@ one (FR-31 e):
     (lines 422-455), attached at `pulumi/infra/governance.py` lines
     486-497, but the installed policy is seed-owned: an
     `existing_capability_boundary` in `pulumi/seed/catalogs/test.json`
-    (lines 307-319, template `4a170a1c…`), whose catalog hashes are
+    (lines 307-319, template `4a170a1c…` on `origin/main`; #284 makes it
+    11 statements, template `805998b5…`, 2894 characters, which is S5.2's
+    TEST baseline, R11-n2), whose catalog hashes are
     pinned in `pulumi/seed/policy_registry.py` lines 18-21. So the
     addition is a **seed catalog amendment**, like #219's
     (`pulumi/seed/test_poc_prerequisite_amendment.py` lines 1-5, 20-40
@@ -553,23 +570,44 @@ one (FR-31 e):
     characters, so XP-11 (like S5.17, S5.4, S5.24a and S5.24b) records the
     aggregate rendered inline size of each Preview and Drift role it
     touches and fails above that limit; the fallback is a new managed
-    policy for that role, with a seed catalog `attachment_arns`
-    amendment and a seed code change in the same seed review. If the
-    Apply allows do not fit, a new Apply
-    managed policy needs the seed code, the governance-apply write scope
-    (`pulumi/infra/governance_automation.py` lines 480-489) and the Apply
-    guard's policy-write list amended in the same seed review (AD-26
-    layer 5);
-  - **serialization (R10-m2):** every seed amendment pins baseline policy
-    hashes and a result catalog hash (`test_poc_prerequisite_amendment.py`
-    lines 32-40), so two open amendments conflict, and every amendment edits `pulumi/seed/policy_registry.py` (`CATALOG_HASHES`, TEST line 19 and PROD line 20, adjacent; some also `_mutable_attachment_sets`), so a TEST and a PROD amendment conflict too and are serialized across both catalogs (pre-commit recheck N2). The
-    XP-11 amendment runs in C-BI order after S5.18a (ordered row 42) and
-    before S4.6 (row 43), after the S5.2, S5.17 and S5.4 amendments
-    (rows 9-11) and after #219's own amendment (the module was prepared on
-    BI `origin/main` by #274, commit `1ed394d`; round 10 reports that
-    bootstrap PRs #284 and #285 carry the #219 seed work, not verified
-    locally); its baseline is the catalog those left (architecture §4,
-    C-BI);
+    policy for that role. If the Apply allows do not fit, the fallback
+    is a new Apply managed policy. Either new policy needs, in the same
+    seed review (AD-26 layer 5, R11-m1), the five changes #219's
+    amendment makes for `-poc-prerequisites`
+    (`pulumi/seed/test_poc_prerequisite_amendment.py` lines 114-145):
+    the governance Preview ceiling's and the governance Drift ceiling's
+    policy-read lists; the `iam:*` statement and the policy-write
+    statement of the governance apply guard `G-GitHubGovernanceApply`
+    (`test.json` lines 599-614; statements `8c068aaa…` and `5366ec11…`
+    on `origin/main`, `21195ff8…` and `bb116727…` after #284); and the
+    governance write scope `_managed_policy_resources`
+    (`pulumi/infra/governance_automation.py` lines 480-489). It also
+    needs the seed attachment rule (`_mutable_attachment_sets`, or the
+    role's catalog `attachment_arns` and attachment rule for a Preview
+    or Drift policy). The USI Apply guard (`test.json` lines 649-663)
+    has no policy-write statement and does not change for it;
+  - **serialization (R10-m2, R11-M1, R11-n1):** every seed catalog
+    amendment pins baseline policy hashes and a result catalog hash
+    (`test_poc_prerequisite_amendment.py` lines 32-40) and edits
+    `pulumi/seed/policy_registry.py` (`CATALOG_HASHES`, TEST line 19 and
+    PROD line 20, adjacent; some also `_mutable_attachment_sets`), and
+    every independent stack install or amendment is checked against the
+    catalog guards (AD-26 layer 6). So only one seed operation (catalog
+    amendment, stack install or stack amendment) is open at a time,
+    across both catalogs and every stack (pre-commit recheck N2), in the
+    AD-26 order. The XP-11 amendment runs after S5.18a's restore-stack
+    amendment (ordered row 42) and before S4.6 (row 43); its catalog
+    baseline is the one left by the S5.2, S5.17 and S5.4 catalog
+    amendments (rows 9-11). The first operation of the
+    order (row 8, S5.1's stack installs) needs #284 merged and applied:
+    #284 (bootstrap-infrastructure, `e85534c`, verified read-only)
+    carries the only #219 catalog change, the TEST prerequisite
+    activation (TEST pin `ff2eaf29…`, the TEST boundary at 11
+    statements with template `805998b5…`, `-poc-prerequisites` admitted
+    in `pulumi/seed/policy_registry.py` lines 542-546, and the packaged
+    capability `"state": "enabled"`). #285 (`54e9e2f`) changes no catalog
+    hash; it adds #219's independent publisher stack, which is not open
+    while any operation of this plan is open;
   - **governance:** the BI owner's security review, approved by
     `@Kravalg`, with the PR numbers (identity and seed) recorded in the
     acceptance receipt; the review also records the two repositories'

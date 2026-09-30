@@ -787,8 +787,12 @@ step 13 (induced failure).
     393; the registry nodes of lines 144, 372 and 388, and of
     `scripts/poc_workload_secret_result.py` line 68, come from a
     stack-selected registry set, whose PROD entry is XP-14's and is
-    stubbed in this story's PROD fixtures; see the S4.10 registry-set
-    note in S4.14), for
+    stubbed in this story's PROD fixtures; the selector is a stack-keyed
+    function that this story adds in `scripts/poc_registry_phase_entrypoint.py`
+    next to `_REGISTRIES` (not a C-topology file), returning today's set
+    for `test` and failing closed for `prod` until XP-14 adds the `prod`
+    entry, an edit outside this plan like its `_mail_semantics` entry;
+    see the S4.10 registry-set note in S4.14), for
     every resource those stories add or remove (AD-25 list), including
     `kms_key_id` on every log group and the pre-created Container Insights
     group; the PROD HTTPS target group (S3.5-A); the named URN sets that S4.9 admits (step-2 set,

@@ -189,10 +189,17 @@ could not edit files and ran no make, pulumi or aws command.
   6. (nit) The FR-31 boundary cell omitted XP-15 and XP-16. Fixed.
   7. (nit) The inventory test keyed on line numbers. Fixed with item 1.
 - No invented user decision was found.
-- **Not yet confirmed:** a recheck of these fixes by the same auditor was
-  requested but had not returned when this revision was committed. The
-  fixes are therefore unconfirmed by the auditor, and the next
-  independent reviewer should check them.
+- **Recheck: CONFIRMED.** The same auditor rechecked all seven fixes
+  read-only after the first commit of revision 8 (`ead0f03`): the three
+  greps return 87, 38 and 41 lines with every hit in the table, the
+  XP-15/XP-16 wording has no forward dependency, the `registry-phase`
+  checkpoint is null with validator cases, 45 recomputed Location ranges
+  start and end on the cited text, and the retention and FR-31 wording is
+  fixed. Its one optional nit (S4.10 did not name the file of the
+  stack-selected registry set or its behaviour before XP-14) is folded
+  in: a stack-keyed selector in `scripts/poc_registry_phase_entrypoint.py`,
+  outside C-topology, that fails closed for `prod` until XP-14 adds the
+  entry, an edit outside this plan.
 
 ## Round-7 finding → resolution map
 

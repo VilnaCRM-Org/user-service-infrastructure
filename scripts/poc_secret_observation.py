@@ -28,7 +28,7 @@ def _validate_secret_shape(secret: Any, declaration: dict[str, Any]) -> None:
     _validate_secret_arn(secret["arn"], declaration)
 
 
-def _validate_secret_version(version: Any, *, seeded: bool) -> None:
+def _validate_secret_version(version: Any, *, seeded: bool = False) -> None:
     """Accept only native version identifiers; a seeded secret may have none yet."""
     if seeded and version is None:
         return

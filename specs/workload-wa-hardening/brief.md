@@ -4,7 +4,7 @@ workflow: _bmad/bmm/workflows/1-analysis/bmad-create-product-brief (Create mode,
 task: workload-wa-hardening
 source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa
 date: 2026-09-30
-revision: 6 (front matter only: decisions D-1…D-14 of 2026-09-30 applied, R6-m1; body unchanged since the revision-5 round-5 m7 alignment)
+revision: 7 (AS-4 lists D-14, R7-n1; otherwise unchanged since the revision-5 round-5 m7 alignment; decisions D-1…D-14 of 2026-09-30 applied)
 inputDocuments: [specs/poc/README.md, specs/poc/secret-lifecycle.md, docs/poc-workload-recovery.md, research.md]
 ---
 
@@ -157,6 +157,10 @@ Each assumption is recorded and none changes scope.
   - D-6: two gates approved. `@Kravalg` approval of the README PR is still
     required.
   - D-7: TEST-only abandon through a Kravalg-approved manifest.
+  - D-14: recovery targets RPO ≤ 1 hour and RTO ≤ 24 hours for TEST and
+    PROD. The S4.8 point-in-time restore measures them; the plan treats a
+    measured miss as a STOP at gate 2a (architecture AD-19).
 
-  No decision is left at a default. A recorded decision never authorizes a
+  The derived details D-8…D-13 were confirmed the same day. No decision
+  is left at a default. A recorded decision never authorizes a
   live action on its own.

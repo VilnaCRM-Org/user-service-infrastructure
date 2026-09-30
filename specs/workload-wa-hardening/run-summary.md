@@ -11,7 +11,7 @@ This file is the execution ledger. It is not a planning input.
 | Worktree | wt-usi-hardening |
 | Branch | feat/workload-wa-hardening |
 | Source baseline | 66776772979956de9c5abdbee7c45641a1b533fa (PR #56 head) |
-| Bundle revision | 6 (answers readiness round 6; parent commit 68584e1, which is revision 5 (7d55105) plus the D-14 record) |
+| Bundle revision | 7 (answers readiness round 7 and audit F2, F6, F8 of a fresh-context audit of revision 6; parent commit 5cc069c, which is revision 6) |
 | Specs directory | `specs/workload-wa-hardening/` (slug chosen by the caller) |
 | Target | pulumi (Python Pulumi), stacks test and prod |
 | Environment | none selected; planning is offline |
@@ -44,6 +44,41 @@ This file is the execution ledger. It is not a planning input.
 
 - `specs/poc/README.md` sha256: 8ad9ccf4ae28083c36e30909a21d8ebec4fc0d40a9b716c9bb8b78b6276ed5b7
 - `decisions.md` (the user decisions, a planning input; hash below)
+- Repository source read for revision 7 at `5cc069c` (the workload source is
+  unchanged from the baseline), without executing it: `self-deploy.yml`
+  (lines 62, 79-86, 135, 274, 284, 570-697, 783-797), `scheduled-drift.yml`,
+  `.github/actions/setup-service-execution/action.yml`,
+  `scripts/service_execution_host.py`, `scripts/service_execution_worker.py`,
+  `scripts/poc_workload_runner.py`, `scripts/poc_workload_materializer.py`
+  (lines 80-143), `scripts/poc_workload_phase_entrypoint.py` (lines 100-118),
+  `scripts/poc_workload_capabilities.py` (lines 20-48, 92-133, 286),
+  `scripts/poc_workload_images.py` (lines 44-126, 200-212, 282, 349),
+  `scripts/poc_workload_admission.py` (lines 464-475),
+  `scripts/poc_registry_runner.py` (lines 94-103, 236-283, 335-368),
+  `scripts/poc_registry_plan.py` (lines 18-40, 60-73),
+  `scripts/poc_registry_completion.py` (lines 103-200, 635-680),
+  `scripts/reviewed_source_admission.py` (lines 118-140),
+  `scripts/poc_backend_observer.py` (lines 160-205, 415-480),
+  `scripts/poc_scheduled_registry_drift.py` (lines 1-140),
+  `scripts/poc_source_artifact.py` (lines 60-70),
+  `scripts/poc_phase_source_adapter.py` (lines 176-186, 236-246, 280-292),
+  `scripts/poc_phase_admission.py` (lines 24, 34-43),
+  `scripts/poc_contract.py` (line 17), `scripts/run_pulumi_command.py`
+  (lines 483-510, 585-639), `scripts/poc_workload_reconciliation.py` (lines
+  1-10), `schemas/poc-test-v1.schema.json` (lines 155-215), and the tests
+  `tests/pulumi/test_ci_guardrails.py`,
+  `tests/unit/test_trusted_test_controller_workflow.py`,
+  `tests/unit/test_poc_source_workflow.py`,
+  `tests/unit/test_poc_registry_workflow.py`,
+  `tests/unit/test_service_execution_host.py`,
+  `tests/unit/test_service_execution_worker.py`,
+  `tests/unit/test_service_reviewed_credentials.py`,
+  `tests/unit/test_service_execution_workflow.py`,
+  `tests/unit/test_poc_scheduled_registry_workflow.py`,
+  `tests/unit/test_poc_registry_completion_workflow.py`,
+  `tests/unit/test_poc_phase_source_adapter.py`,
+  `tests/unit/test_service_initializer.py` and
+  `tests/pulumi/test_quality_contracts.py`
 - Repository source read for revision 6 at `68584e1` (the workload source is
   unchanged from the baseline), without executing it: `self-deploy.yml`
   (job graph, lines 62, 79-86, 478-730), `scheduled-drift.yml`,
@@ -106,19 +141,19 @@ This file is the execution ledger. It is not a planning input.
 - User decisions given in chat on 2026-09-30 and relayed by the coordinator: D-1…D-7 (`decisions.md`). The D-4 and D-5 clarifications came in a second message the same day, and D-8…D-13 (derived details) were confirmed in a third. D-14 (recovery targets RPO ≤ 1 hour, RTO ≤ 24 hours) is a user decision of the same date, recorded in `decisions.md` by commit `68584e1`.
 - Read-only cross-repository reconnaissance: bootstrap-infrastructure @debd88b, api-gateway-infrastructure, and user-service @main via `gh api`
 
-## Artifacts (sha256, revision 6)
+## Artifacts (sha256, revision 7)
 
-`run-summary.md` is not hashed here, because it contains the hashes. `decisions.md` is a planning input and is hashed. Commit `68584e1` added its D-14 row after revision 5; revision 6 changes only that row's label (a user decision, not a planning default).
+`run-summary.md` is not hashed here, because it contains the hashes. `decisions.md` is a planning input and is hashed. Commit `68584e1` added its D-14 row after revision 5; revision 6 changed only that row's label (a user decision, not a planning default); revision 7 does not change it. `research.md` is unchanged since revision 4.
 Check with `sha256sum -c` over the block below, from `specs/workload-wa-hardening/`.
 
 ```
 beca16ba9ab95d76cd28ed47ac8e806549b94805ddca9a2d138a790ee0f0ca59  research.md
-6633d77ef016cf1c5238ca357011ccec1e47f627063432037711a0c2f274e409  brief.md
-94fb859a38d75be101d5b0fd53942976ed23dcab9dd48eae516f728157179aed  prd.md
-2b92e27989f20b468a06998a5401da15fe752e7b00fa1d4e1e0ec1a9ec3086e2  architecture.md
-99bad4c768de84af3525d3b885811fd001eeeadb96b9cbd48844b98752ce5c0c  epics-stories.md
+d4ab4288bd8b99daa5fc9181db040dcd49a22593670c1820412480559c68fd3a  brief.md
+b0a1ee6c37a55bb5309cb8d3ba2bf9abd05cc34c5eef272920604617c799a99e  prd.md
+46aa4f89d02c33fa80bc200fe49249925b6d6a18bb36a198b9b748fd6bc43472  architecture.md
+734e1788203ebfaa9dffec1e05827184fe462d96f73bca59e9d686348b29bdf6  epics-stories.md
 4f2911c3b75d890ad0d37b161cf5568909f049d51bf289509cc14f66d5f2a76e  decisions.md
-266dbe081058f9c2ec81fd6b2d60013b2c106497f57849cc328c6e7405326206  readiness.md
+bcf6cd291857c1fd110e88fe38a32b5259b1184ae8b10ac9ada93d9c1b1ea3a2  readiness.md
 ```
 
 ## Gates
@@ -133,23 +168,36 @@ beca16ba9ab95d76cd28ed47ac8e806549b94805ddca9a2d138a790ee0f0ca59  research.md
 | 4 | FAIL (R4-B1…B3, R4-M1…M10, m1…m12); fixed in revision 4 |
 | 5 | FAIL (R5-M1…M5, m1…m18; every round-4 finding confirmed resolved); fixed in revision 5 |
 | 6 | FAIL (R6-M1, R6-M2; R6-m1 and R6-m3…m14; no R6-m2 was relayed); fixed in revision 6 |
+| 7 | FAIL (R7-M1, R7-M2; R7-m1…m9; R7-n1…n3), plus a fresh-context audit of revision 6 (F1…F8; F2, F6 and F8 not covered by round 7); fixed in revision 7, after a pre-commit fresh-context audit of the revision-7 changes (recorded in `readiness.md`) |
 
-Stage status: **BLOCKED** until an independent review of revision 6 reports
-PASS. Round 5 was recorded as the last allowed round, and round 6 ran after
-it; whether another independent round runs is for the coordinator and the
-user to decide. `readiness.md` is written by the author and says PENDING;
+Stage status: **BLOCKED** until an independent review of revision 7 reports
+PASS. Round 5 was recorded as the last allowed round, and rounds 6 and 7 ran
+after it; whether another independent round runs is for the coordinator and
+the user to decide. `readiness.md` is written by the author and says PENDING;
 it is not a PASS.
 
-**Attempt ledger:** canonical `attempts.json` was NOT initialized. The atomic reservation needs verified host write isolation for the copied ledger_reference package, and a same-user host cannot provide it. The ledger is therefore BLOCKED. Attempt count by caller record: 1 procedure run, with 6 recorded review rounds (round 6: FAIL, answered by revision 6). This count is not canonical.
+**Attempt ledger:** canonical `attempts.json` was NOT initialized. The atomic reservation needs verified host write isolation for the copied ledger_reference package, and a same-user host cannot provide it. The ledger is therefore BLOCKED. Attempt count by caller record: 1 procedure run, with 7 recorded review rounds (round 7: FAIL, answered by revision 7). This count is not canonical.
 
 ## Acceptance checklist for the next independent reviewer
 
 A reviewer ticks each item from the bundle text and the cited source, not
 from this list.
 
-- [ ] Every round-6 finding in `readiness.md` maps to text that resolves it
-      at the cited file and line, and the cited source lines say what the
-      plan claims.
+- [ ] Every round-7 finding and audit F2, F6 and F8 in `readiness.md` maps
+      to text that resolves it at the cited file and line, and the cited
+      source lines say what the plan claims.
+- [ ] S4.14 lists every workflow-shape pin the PROD jobs break with its
+      exact new assertion (R7-M1), and every TEST-only pin on the PROD path
+      has a PROD fixture or an XP-14 assignment (R7-m3); the PROD host tests
+      stub the XP-14 observer coordinates, and S4.7 owns the unstubbed case.
+- [ ] S4.17 runs in the isolated worker container with scheduled-main
+      provenance, calls no PR-bound function, projects from the latest
+      success receipt and the contract it applied, and writes a
+      `checked`/`before-acceptance` record; only `checked` satisfies gate 2b.
+- [ ] `workload_route` comes from the authenticated receipt lineage; a
+      pre-acceptance `rollback-zero` or `policy-update` runs no drift job.
+- [ ] The PROD contract schema is S4.14's, S4.7 owns the PROD workload
+      contract PRs, and S5.24 grants the Drift-role reads before S4.17.
 - [ ] D-1…D-7, D-14, and D-8…D-13 are dated 2026-09-30 in `decisions.md`;
       RPO ≤ 1 hour and RTO ≤ 24 hours are labelled user decision D-14
       everywhere, and only the 20% TEST cost threshold and the PROD
@@ -207,7 +255,7 @@ from this list.
 - [ ] The artifact hashes above match the committed files
       (`sha256sum -c`).
 
-## Scope limits of revisions 4, 5 and 6
+## Scope limits of revisions 4, 5, 6 and 7
 
 - No aws or pulumi command ran against any account; no repository test, lint
   or preview ran; no secret value was read; nothing was pushed or commented.
@@ -215,3 +263,5 @@ from this list.
   the read-only bootstrap-infrastructure clone, AWS documentation lookups
   (aws-knowledge MCP, revision 4 only), Python text edits and table checks
   over the bundle, `sha256sum`, and a local `git commit` of the bundle.
+  Revision 7 also ran one read-only fresh-context audit subagent
+  (`claude-router:audit`) over the uncommitted changes.

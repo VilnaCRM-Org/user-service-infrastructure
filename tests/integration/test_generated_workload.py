@@ -256,7 +256,9 @@ def test_native_legacy_workload_program_registers_managed_planes(native_stack):
     assert "user-service-infrastructure:messaging:Plane" in types
     assert "user-service-infrastructure:compute:Plane" in types
     assert types.count("aws:ec2/vpc:Vpc") == 1
-    assert types.count("aws:sqs/queue:Queue") == 6
+    # Four work/health queues plus three dead-letter queues.
+    assert types.count("aws:sqs/queue:Queue") == 7
+    assert types.count("aws:docdb/clusterParameterGroup:ClusterParameterGroup") == 1
     assert types.count("aws:ecs/service:Service") == 2
     assert not any(kind.startswith("aws:iam/") for kind in types)
 

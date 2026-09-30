@@ -928,18 +928,23 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
       `prd.md` §6 and `decisions.md` (defaults do not count); or
     - gate 2a: every gate-1 condition, plus `admission.prod: "preview"`,
       plus the campaign-complete TEST acceptance receipt (PRD §3.3), plus
-      the restore item (S4.8, measured against D-14) and XP-14. It admits only the PROD `plan`
+      the restore item (S4.8, measured against D-14), XP-14, XP-15 and XP-16 (R8-m6). It admits only the PROD `plan`
       (`prod_preview` job), which produces the P-1 PROD-shaped preview
       evidence (FR-19); or
     - gate 2b: every gate-2a condition, plus `admission.prod: true`, plus the
       P-1 item in the receipt, which is then complete and schema-valid with
       no placeholder, plus **scheduled workload drift detection for the
-      `prod` workload stack** (R6-m11): S4.17 merged, its PROD scheduled job
-      enabled, and a clean scheduled run on the TEST workload stack linked
-      in the receipt as a `poc-workload-scheduled-drift-result-v1` record
-      with `status: checked` (R7-m1; a `before-acceptance` record never
-      counts). PROD is never admitted without scheduled drift
-      detection, and no risk acceptance replaces this condition.
+      `prod` workload stack** (R6-m11): S4.17 merged, and two uploaded
+      `poc-workload-scheduled-drift-result-v1` records linked in the
+      receipt, each with its run link, `artifact_id` and
+      `artifact_sha256` (R8-M1): a clean scheduled run on the TEST
+      workload stack with `status: checked` (R7-m1; a `before-acceptance`
+      record never counts as the TEST item), and a PROD record with
+      `status: before-acceptance` or `checked` from a scheduled run after
+      the gate-2a PR that first set `poc-prod.json` `phase: workload`
+      (R8-m1; the S4.17 jobs are data-driven, and a `registry-phase`
+      record never counts). PROD is never admitted without scheduled
+      drift detection, and no risk acceptance replaces this condition.
   - S4.15 owns the offline part: the acceptance-receipt schema and validator
     (`schemas/poc-test-acceptance-receipt-v1.schema.json`,
     `test_poc_acceptance_receipt.py`, with `campaign` and `complete`
@@ -1163,9 +1168,15 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   `{version, etag, sha256}`, `run_id`, `run_attempt`, `source_sha`,
   contract digest, projection digest, generated-files digest and the
   secret-metadata observation; a `success` receipt also records the
-  projection inputs (the `SourceAdmission` facts, image digests and
-  certificate ARN; runner lines 177-184), which the scheduled path uses
-  instead of a PR request (R7-M2). **Failure path (m4, audit).** Two processes
+  projection inputs (the `SourceAdmission` facts, the full image rows
+  `uri`, `manifest_media_type`, `config_digest`, `config_size` and
+  `platform` of `scripts/poc_workload_phase_entrypoint.py` lines 52-93,
+  and the certificate observation `{parameter_arn, parameter_version,
+  certificate_arn}` of `scripts/poc_workload_capabilities.py` line 277;
+  runner lines 177-184) and the program trees (the git object IDs of
+  `scripts`, `pulumi`, `policy`, `schemas`, `pyproject.toml` and
+  `uv.lock` in the installed checkout), which the scheduled path uses
+  instead of a PR request (R7-M2, R8-m4). **Failure path (m4, audit).** Two processes
   fail the job on a non-zero status. The worker raises at
   `scripts/service_execution_worker.py` line 127
   (`require(result == 0, "worker-execution")`). The host,
@@ -1326,8 +1337,9 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
      `epics-stories.md` S4.14). The source binding accepts
      `prod` only when the installed `main` contract has `admission.prod` =
      `"preview"` (PROD `plan` only, gate 2a) or `true` (gate 2b). The runner
-     accepts `prod` with the PROD certificate parameter (the PROD counterpart
-     of XP-10, SSM name recorded with the gateway owner and pinned), the PROD
+     accepts `prod` with the PROD certificate parameter (XP-15, the PROD
+     counterpart of XP-10; its TEST-analogous name is pinned as an
+     assumption the gateway owner confirms in the S4.14 PR, R8-m6), the PROD
      topology (S4.10), the PROD registry anchor (XP-14) and `prod-recovery`.
      `abandon` is never admitted for PROD. S4.14 also owns the PROD
      contract schema (AD-04, R7-m4), the PROD baseline-drift exclusion
@@ -1349,12 +1361,28 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
      69-71); an
      XP-14 change to that file is outside this plan and outside the R6-m13
      rule. It rewrites every workflow-shape pin the PROD jobs break
-     (R7-M1; the list is in `epics-stories.md` S4.14).
+     (R7-M1; the list is in `epics-stories.md` S4.14). **Revision 8
+     (R8-m2):** S4.14's first case is a grep-derived inventory of every
+     TEST literal and TEST-constant use in `scripts/` (87, 38 and 41 hits at
+     `72873f9`), each with an owner or an exclusion reason, re-checked by
+     a test. New S4.14 rows: the materializer's `Pulumi.test.yaml`
+     (lines 24 and 126), `poc_contract.py` `_registry_semantics` (lines
+     116-126, run for every contract including XP-14's `poc-prod.json`)
+     and `_mail_semantics` (lines 102-113; the PROD domain is XP-14's, and
+     the map ships without it, fail closed), `poc_secret_observation.py`
+     `SECRET_PREFIX` (line 11) and every `CONTRACT_PATH` consumer. New
+     XP-14 rows: the observer's `_caller`, `_key` and `LOCKS`,
+     `_REGISTRIES`, the registry completion and the mail prerequisite.
+     The PROD host-test stand-ins check the PROD coordinates and raise the
+     observer's own error on a mismatch (R8-A1).
   5. **S4.17 scheduled workload drift (R6-m11, R7-M2).** One schedule-only
      job per workload stack in `.github/workflows/scheduled-drift.yml`
      (`scheduled_test_workload_drift`, `scheduled_prod_workload_drift`;
-     environments `test-drift` and `prod-drift`; the Drift role; the
-     stack's `pulumi-state-…` concurrency group). **Isolated launch:** the
+     environments `test-drift` and `prod-drift`; the Drift role with
+     `role-session-name` `gha-scheduled-test-drift-${{ github.run_id }}`
+     or `gha-scheduled-prod-drift-${{ github.run_id }}`, the names the
+     observer's `_caller` checks at lines 219-223, R8-n1; the stack's
+     `pulumi-state-…` concurrency group). **Isolated launch:** the
      materializer's `_worker()` (`scripts/poc_workload_materializer.py`
      lines 137-143) requires euid 0, pid 1 and a read-only `/` and
      `/trusted` with no local bypass, and the runner requires
@@ -1371,48 +1399,88 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
      artifact. The jobs use `setup-service-execution`, a host `recheck`
      before each credential step and one host `execute`, with exactly
      `contents`, `actions` and `deployments` read plus `id-token: write`,
-     and `GH_TOKEN` (host line 158). `scripts/poc_scheduled_workload_drift.py`
-     builds the projection from the projection inputs recorded in the
-     authenticated latest success receipt (instead of a PR
-     `SourceAdmission`, runner lines 158-184) and from the contract that
-     receipt applied (read at its recorded `head_sha` and `blob_sha`, as
-     the source adapter does at lines 239-245, so a merged but unapplied
-     operation PR does not change the check; the digest binding of
-     `scripts/poc_workload_phase_entrypoint.py` line 104 holds). It
-     re-runs the image, capability and certificate reads under the Drift
-     role and requires them to equal the receipt. It has its own gate,
-     modelled on `poc_scheduled_registry_drift._gate`, because the
+     and `GH_TOKEN` (host line 158). **Result publication (R8-M1):** the
+     worker copies to `/public` only for `plan` today (lines 129-132) and
+     the host copies out only for `_preview` jobs (lines 214-219); for the
+     two scheduled jobs the worker's scheduled route copies the result
+     record to `/public/workload-drift-result/record.json` after a
+     zero status, the host copies it to
+     `.trusted/.artifacts/workload-drift-result/record.json` (a no-op when
+     absent), and one pinned `actions/upload-artifact` step directly after
+     `execute` uploads it as
+     `poc-workload-scheduled-drift-<env>-${{ github.run_id }}-${{ github.run_attempt }}`
+     with `if-no-files-found: error`, `overwrite: false` and
+     `retention-days: 7`; the sibling test pins "execute, followed only by
+     that upload". **Data-driven enablement (R8-m1):** both jobs run
+     nightly from S4.17's merge. Each reads its stack's installed `main`
+     contract; on `phase: registry` it writes a `registry-phase` record,
+     emits a notice and exits 0 (the baseline still covers that stack), and
+     on `phase: workload` it checks drift. So the PROD job starts checking
+     after the gate-2a PR that first sets `poc-prod.json`
+     `phase: workload`, the same PR that removes `prod` from the baseline
+     (R7-m2), with no enabling PR. **Projection (R7-M2, R8-m4):**
+     `scripts/poc_scheduled_workload_drift.py` builds the projection only
+     from the authenticated latest success receipt: its `SourceAdmission`
+     facts, the contract that receipt applied (read at its recorded
+     `head_sha` and `blob_sha`, as the source adapter does at lines
+     239-245, so a merged but unapplied operation PR does not change the
+     check; the digest binding of
+     `scripts/poc_workload_phase_entrypoint.py` line 104 holds), the full
+     image rows and the certificate observation. Fresh Drift-role reads
+     are comparisons, never inputs: the image, capability and certificate
+     reads, the captured checkpoint and the registry-row checks must equal
+     the receipt. Because the program is imported from installed `main`
+     (entrypoint lines 194-208) and the old contract is validated against
+     the installed schema (line 101), the script first compares the
+     receipt's program trees with its installed checkout and fails with
+     the distinct reason `workload-drift-installed-program-changed` on any
+     difference; it then compares the projection digest and the
+     generated-files digest with the receipt's. Whenever code changed
+     after the last TEST apply, a TEST release (a no-op re-apply through
+     the normal PR path, AD-24 release row) runs before the gate-2b clean
+     `checked` run. **Gate:** its own, modelled on
+     `poc_scheduled_registry_drift._gate` (line 136 on), because the
      runner's gate and `execute` are PR-bound (`registry._review`,
      `observe_workload`, `revalidate_requester`, `capture_backend` and
      `_trusted_root`, which requires `repository_dispatch`): it captures
      the checkpoint with `capture_scheduled_backend` (observer lines
-     428-435) and runs `validate_drift` through the plan-plus-gate
-     dispatch. The plan is discarded and nothing is applied. Any change outside AD-23 fails the scheduled job with the
-     field named, as a failed baseline scheduled drift does today. **Result
-     record (R7-m1):** each verdict is a
+     428-435), binds the provider identity with S4.14's stack-aware
+     binding (the registry `_binding`, `scripts/poc_registry_runner.py`
+     lines 266-283, is TEST-only; R8-A4), and runs `validate_drift`
+     through the plan-plus-gate dispatch. The plan is discarded and
+     nothing is applied. Any change outside AD-23 fails the scheduled job
+     with the field named, as a failed baseline scheduled drift does
+     today. **Result record (R7-m1):** each run that exits 0 writes one
      `poc-workload-scheduled-drift-result-v1` record (schema owned by
-     S4.15) with `status: checked`, or `status: before-acceptance` while
-     the lineage has no accepted receipt, bound to the captured checkpoint
-     sha256 and the latest success receipt. Before acceptance the same
-     drift check still runs against the latest success receipt (a
+     S4.15): `checked`; `before-acceptance` while the lineage has no
+     accepted receipt, bound to the captured checkpoint sha256 and the
+     latest success receipt; or `registry-phase`. Before acceptance the
+     same drift check still runs against the latest success receipt (a
      read-only diagnostic, distinct from the PR `drift` command of the
      table above) and fails on drift; a clean run exits 0 with a warning
      annotation. With no workload success receipt yet no check runs (the
-     registry resources are the registry owner's recorded case). Only
-     `checked` satisfies gate 2b. The PROD job is enabled by the PR that
-     first sets `phase: workload` in `poc-prod.json`, the same PR that
-     removes `prod` from the baseline (R7-m2). A receipt-lineage lookup
-     error, including an incomplete pagination, exits non-zero. **Reads
-     (R7-m9):** the capability, image and certificate checks read IAM,
-     ECR (including `GetDownloadUrlForLayer`), SSM and ACM, which the S5.17
-     Drift-role set does not grant; the BI story S5.24 (unconditional,
-     because S5.17 grants none of them) inventories and adds them after
-     XP-14 and before S4.17.
-     The PROD job needs the PROD observer coordinates of XP-14. S4.17 is a
-     gate-2b precondition (AD-21), and it rewrites the scheduled workflow
-     pins with Kravalg's approval (`tests/unit/test_poc_scheduled_registry_workflow.py`
-     lines 1, 19 and a sibling test; `tests/pulumi/test_ci_guardrails.py`
-     lines 177 and 347-353).
+     registry resources are the registry owner's recorded case). Gate 2b
+     needs a TEST `checked` record and a PROD `before-acceptance` or
+     `checked` record from a run after the flip (AD-21). A receipt-lineage
+     lookup error, including an incomplete pagination, exits non-zero.
+     **Reads (R7-m9, R8-m3):** the capability, image and certificate
+     checks read IAM, ECR (including `GetDownloadUrlForLayer`), SSM and
+     ACM, and the refresh and the capture's registry-row checks read the
+     ECR repositories, the SES identity and the Route53 DKIM records. The
+     BI story S5.24 (unconditional) inventories and adds them after
+     XP-14, XP-15 and XP-16 and before S4.17, with
+     `iam:SimulatePrincipalPolicy` on the execution role only, citing the
+     existing TEST registry-read grants of BI `origin/main` and narrowing
+     the Drift role's explicit deny of `ssm:GetParameter` and
+     `ecr:GetAuthorizationToken`. The PROD job needs the PROD observer
+     coordinates of XP-14. S4.17 is a gate-2b precondition (AD-21), and it
+     rewrites the scheduled workflow pins and the host and worker
+     copy-out pins with Kravalg's approval
+     (`tests/unit/test_poc_scheduled_registry_workflow.py` lines 1, 19 and
+     a sibling test; `tests/pulumi/test_ci_guardrails.py` lines 177 and
+     347-353; `tests/unit/test_service_execution_worker.py` lines 128-130;
+     `tests/unit/test_service_execution_host.py` lines 109-112 and
+     140-144).
   - **Regression tests (all four stories):** `step2` without a step-1
     receipt refused, admitted with one; `resume` without a failed or export
     receipt refused; a failed receipt → `clear-pending` (with its export
@@ -1442,8 +1510,13 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   It changes them in one PR:
   - **both stacks:** the graphs, names and accounts are parameterized by
     stack (`test`, `prod`) through `build_resource_name` and the contract
-    account, replacing the hard-coded `-test-` names (topology lines 61, 859
-    and 1058); the PROD graph adds the S3.5-A HTTPS target group on 8443;
+    account, replacing the hard-coded `-test-` names (topology lines 61,
+    859, 955 and 1058) and the TEST URN prefix and root imported at lines
+    149-151 (R8-m2), with the service and provider URNs derived from the
+    stack's prefix and the registry nodes from a stack-selected registry
+    set whose PROD entry is XP-14's, stubbed in S4.10's PROD fixtures (so
+    S4.10 needs nothing from XP-14); the PROD graph adds the S3.5-A HTTPS
+    target group on 8443;
   - the **step-1 graph**: removes Random/TLS, `SecretVersion`s and the eight
     removed purposes (FR-09, S1.1), and deletes the pre-hardening program
     branch together with the Random and TLS runtime pins (`pyproject.toml`
@@ -1512,11 +1585,11 @@ after its predecessor merges.
 
 | Chain | Order |
 | --- | --- |
-| C-BI (IAM/KMS/Lambda, governance apply) | S5.1 (every central role: execution, task, app-rotation, redeploy, bootstrap-job, restore-operator, restore-reader, exercise; no KMS statements) → S5.2 (apply capability, including the managed-password and log-group KMS describe grants) → S5.17 (preview/drift read without KMS; `iam:SimulatePrincipalPolicy` for the preview role) → S5.4 (CMKs whose key policies name only existing roles, per AD-15a; then the matching identity statements, including the preview/drift KMS read) → S5.3 (functions that use the S5.1 roles; KMS-encrypted function log groups; rules) → S5.23 (TEST exercise role) → S5.7 (test-recovery role and grants, derived from the S4.10 graph) → S5.18a (grants on the S5.1 restore-operator and restore-reader roles, reader package, no VPC) → [live, after USI step 1] S5.5 (XP-8 metadata, exact-ARN grant, bootstrap-job VPC attach, job run) → S5.18b (restore-reader VPC attach, after XP-8) → S5.6 (conditional) → S5.19 (prod-recovery role and grants) → [after XP-14] S5.24 (Drift-role IAM, ECR, SSM and ACM read inventory and grants for S4.17, R7-m9) |
+| C-BI (IAM/KMS/Lambda, governance apply) | S5.1 (every central role: execution, task, app-rotation, redeploy, bootstrap-job, restore-operator, restore-reader, exercise; no KMS statements) → S5.2 (apply capability, including the managed-password and log-group KMS describe grants) → S5.17 (preview/drift read without KMS; `iam:SimulatePrincipalPolicy` for the preview role) → S5.4 (CMKs whose key policies name only existing roles, per AD-15a; then the matching identity statements, including the preview/drift KMS read) → S5.3 (functions that use the S5.1 roles; KMS-encrypted function log groups; rules) → S5.23 (TEST exercise role) → S5.7 (test-recovery role and grants, derived from the S4.10 graph) → S5.18a (grants on the S5.1 restore-operator and restore-reader roles, reader package, no VPC) → [live, after USI step 1] S5.5 (XP-8 metadata, exact-ARN grant, bootstrap-job VPC attach, job run) → S5.18b (restore-reader VPC attach, after XP-8) → S5.6 (conditional) → S5.19 (prod-recovery role and grants) → [after XP-14, XP-15 and XP-16] S5.24 (Drift-role registry-row, refresh, IAM, ECR, SSM and ACM read inventory and grants for S4.17, with `SimulatePrincipalPolicy` on the execution role only and the Drift-role deny narrowed; R7-m9, R8-m3) |
 | C-controls (USI GitHub repository controls, m3: `scripts/configure_github_repository_controls.py`, `scripts/_github_repository_controls.py`, `scripts/_github_environment_controls.py`, `tests/unit/test_configure_repository_controls.py`; admin apply by Kravalg) | S5.21 (Kravalg-only environments `test`, `prod`, `test-recovery`, `test-exercise`, `prod-recovery`; `governance-evidence` checked unchanged) → S5.22 (ruleset: `abandon-manifest-approval` required with a pinned issuer, after S4.3) |
 | C-contract (`schemas/` (including the S4.14 PROD contract schema `poc-prod-v1.schema.json` and the S4.15 `poc-workload-scheduled-drift-result-v1.schema.json`; R7-m4, R7-m1), `scripts/poc_contract.py`, `scripts/poc_phase_admission.py` (the stack → contract mapping, S4.14), secret validators, admission, drift allow-list, receipt schemas, `scripts/poc_workload_reconciliation.py` and `docs/poc-workload-reconciliation.md` (R5-M1, R5-M5), `scripts/poc_registry_plan.py` (only S4.3's post-abandon baseline acceptance, R6-m13), acceptance-receipt validator) | S1.1 → S1.7 → S1.9 → S1.8 → S1.11 → S4.10 → S4.11 → S4.9 → S4.2 → S4.3 → S4.12 → S4.13 → S4.14 → S4.15 → S4.6 → S4.7. S1.11 follows S1.8, which follows S2.1 in C-compute, so the program's `ignore_changes` exist when S1.11 checks them (R5-M4). S4.9 precedes S4.2 (R6-M2): S4.2's `resume` applies S4.9's per-mode admission rules and `start_at` window, while S4.9 depends only on S4.10, S4.11 and S2.6. |
 | C-topology (`scripts/poc_workload_topology.py`, `scripts/poc_workload_secret_result.py`, the native integration test, the Random/TLS pins, `recovery/delete-actions.json`, the runner-spec topology text) | S4.10 only (AD-25) |
-| C-runner (`scripts/poc_workload_runner.py`, `scripts/service_execution_worker.py`, `scripts/service_execution_host.py` (receipt copy-out; PROD `JOBS`, lines 27-31; the S4.17 scheduled entries with scheduled-main provenance, R7-M2), the worker diagnostics, `.github/workflows/self-deploy.yml`, `.github/workflows/scheduled-drift.yml`, `scripts/run_pulumi_command.py` (the scheduled exclusion), `scripts/poc_phase_source_adapter.py` (the `workload_route` and `workload_observation` outputs, R6-M1), `scripts/poc_workload_observation.py`, `scripts/poc_scheduled_workload_drift.py` (S4.17), the admission observation functions, receipt modules, `specs/poc-workload-runner.md` lifecycle text, the README line-127 sentence, `docs/poc-workload-log-health.md`, `test_workload_apply_docs_consistency.py`, `tests/unit/test_service_execution_worker.py`, and the workflow-shape tests that pin the CI graph (R6-M1): `tests/pulumi/test_ci_guardrails.py`, `tests/unit/test_trusted_test_controller_workflow.py`, `tests/unit/test_service_execution_workflow.py`, `tests/unit/test_poc_registry_completion_workflow.py`, `tests/unit/test_poc_registry_workflow.py`, `tests/unit/test_poc_source_workflow.py`, `tests/unit/test_poc_phase_source_adapter.py`, `tests/unit/test_service_initializer.py`, `tests/unit/test_service_execution_host.py`, `tests/unit/test_poc_scheduled_registry_workflow.py`, `tests/unit/test_service_reviewed_credentials.py` (R7-m7)) | S4.1 → S4.4 → S4.5 → S4.11 → S4.12 → S4.13 → S4.14 → S4.17. S4.1 heads it because its FR-20 test is `tests/unit/test_service_execution_worker.py` (m5). S4.11–S4.14 also hold the C-contract slot at their position in that chain, because they edit `poc_workload_admission.py`. S4.17 follows XP-14 and S5.24 and is a gate-2b precondition only. Every rewrite of a workflow-shape test is a guardrail change that needs an `APPROVED` review by `@Kravalg` specifically, recorded like the round-5 m14 hard-stop amendment (`epics-stories.md` S4.11, S4.13, S4.14, S4.17). |
+| C-runner (`scripts/poc_workload_runner.py`, `scripts/service_execution_worker.py`, `scripts/service_execution_host.py` (receipt copy-out; PROD `JOBS`, lines 27-31; the S4.17 scheduled entries with scheduled-main provenance, R7-M2), the worker diagnostics, `.github/workflows/self-deploy.yml`, `.github/workflows/scheduled-drift.yml`, `scripts/run_pulumi_command.py` (the scheduled exclusion), `scripts/poc_phase_source_adapter.py` (the `workload_route` and `workload_observation` outputs, R6-M1), `scripts/poc_workload_observation.py`, `scripts/poc_scheduled_workload_drift.py` (S4.17), the admission observation functions, receipt modules, `specs/poc-workload-runner.md` lifecycle text, the README line-127 sentence, `docs/poc-workload-log-health.md`, `test_workload_apply_docs_consistency.py`, `tests/unit/test_service_execution_worker.py`, and the workflow-shape tests that pin the CI graph (R6-M1): `tests/pulumi/test_ci_guardrails.py`, `tests/unit/test_trusted_test_controller_workflow.py`, `tests/unit/test_service_execution_workflow.py`, `tests/unit/test_poc_registry_completion_workflow.py`, `tests/unit/test_poc_registry_workflow.py`, `tests/unit/test_poc_source_workflow.py`, `tests/unit/test_poc_phase_source_adapter.py`, `tests/unit/test_service_initializer.py`, `tests/unit/test_service_execution_host.py`, `tests/unit/test_poc_scheduled_registry_workflow.py`, `tests/unit/test_service_reviewed_credentials.py` (R7-m7)) | S4.1 → S4.4 → S4.5 → S4.11 → S4.12 → S4.13 → S4.14 → S4.17 → S4.7 (R8-m7: S4.7's unstubbed PROD host seam test edits `tests/unit/test_service_execution_host.py`). S4.1 heads it because its FR-20 test is `tests/unit/test_service_execution_worker.py` (m5). S4.11–S4.14 also hold the C-contract slot at their position in that chain, because they edit `poc_workload_admission.py`. S4.17 follows XP-14, XP-15, XP-16 and S5.24 and is a gate-2b precondition only. Every rewrite of a workflow-shape test is a guardrail change that needs an `APPROVED` review by `@Kravalg` specifically, recorded like the round-5 m14 hard-stop amendment (`epics-stories.md` S4.11, S4.13, S4.14, S4.17, S4.7). |
 | C-composition (`pulumi/app/workload_phase.py`: the plane imports and wiring at lines 13-29 and in `WorkloadPhaseStack.__init__`, `TAGGABLE_TYPES`, `_validate_target`) (m6) | S1.1 (`workload_step` branch) → S1.3 (step-1/step-2 structure, XP-8 exports) → S1.4 (ElastiCache user and group types) → S2.1 (autoscaling plane) → S2.3 (observability plane, with every taggable type S2.4 and S2.5 add) → S3.2 (default SG) → S3.1 (flow-log plane and bucket family) → S3.3 (endpoints and endpoint SG) → S3.5-A (`_validate_target` parameterized by stack so the program renders `prod`; today it pins `test` and the TEST registries, lines 125-160; before S4.10, whose PROD native plan needs it) |
 | C-autoscaling (`pulumi/app/autoscaling.py`) | S2.1 → S2.2 → S2.6 (TEST schedules) |
 | C-observability (`pulumi/app/observability.py`) | S2.3 → S2.4 → S2.5 |

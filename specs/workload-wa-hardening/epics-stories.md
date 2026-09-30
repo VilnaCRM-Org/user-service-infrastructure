@@ -21,7 +21,7 @@ inputDocuments: [prd.md, architecture.md, decisions.md]
   derived details D-8…D-13, confirmed the same day. The 20% TEST cost
   threshold and the PROD justification rule (NFR-11) are planning
   defaults, not decisions.
-- **External prerequisites:** XP-1…XP-14.
+- **External prerequisites:** XP-1…XP-16 (XP-15 and XP-16, the PROD counterparts of XP-10 and XP-11, are numbered in revision 8, R8-m6).
 - **Verification items:** V-1…V-27 (method and place in `architecture.md` §5).
 
 All of these are defined in `prd.md` and `architecture.md`.
@@ -78,7 +78,7 @@ All of these are defined in `prd.md` and `architecture.md`.
 | FR-29 | S1.10 |
 | FR-30 | S4.8 (point-in-time restore; RPO/RTO per D-14, AD-19), S5.18a, S5.18b, S4.9 (`rollback-zero`) |
 | FR-31 | S4.15, S4.6, S4.7, S4.14 (stack → contract mapping), S4.17 (gate 2b) |
-| FR-32 | S1.11 (list and program check), S4.10 (checkpoint-field allowance), S4.13 (drift reducer on the executed path), S4.17 (scheduled workload drift), S4.6 step 14 |
+| FR-32 | S1.11 (list and program check), S4.10 (checkpoint-field allowance), S4.13 (drift reducer on the executed path), S4.14 (`prod_workload_drift` and the PROD baseline exclusion, R8-n3), S4.17 (scheduled workload drift), S4.6 step 14 |
 | FR-33 | S5.17, S5.4 (KMS read), S5.24 (Drift-role reads for S4.17, R7-m9), S4.6 step 3 |
 | FR-34 | S4.9, S4.10, S1.3, S4.6 steps 4–7 |
 | FR-35 | S4.11, S4.12, S4.13, S4.14, S4.3 (export, clear-pending, import and abandon receipts), S4.6 steps 4, 7, 7b, 13, 14, 20 |
@@ -90,7 +90,7 @@ All of these are defined in `prd.md` and `architecture.md`.
 | NFR-03 | all |
 | NFR-04 | S4.6, S4.7, S5.21, S5.22 |
 | NFR-05 | S1.4, S5.13, S1.6, S4.6 steps 9–10 |
-| NFR-06 | S5.1–S5.7, S5.17, S5.18a, S5.18b, S5.19, S5.21, S4.6 step 3 |
+| NFR-06 | S5.1–S5.7, S5.17, S5.18a, S5.18b, S5.19, S5.21, S5.24 (Drift-role reads, R8-m3), S4.6 step 3 |
 | NFR-07 | S1.1, S4.2, S4.4, S4.9, S4.10, S4.11–S4.14, S4.6 |
 | NFR-08 | S2.4, S4.6 step 11 |
 | NFR-09 | S4.3 (receipt after every checkpoint-writing subcommand), S4.2, S4.6 steps 13, 19 and 20 |
@@ -157,10 +157,20 @@ Every hard-stop precondition has an FR:
     receipt has `cause` ∈ {`export`, `clear-pending`} and, for
     `clear-pending`, a required `predecessor` (receipt ID and checkpoint
     sha256) (R5-M2). A step receipt with `outcome: success` also records
-    the **projection inputs** of the applied program (R7-M2): the
-    `SourceAdmission` facts, the observed image digests and the
-    certificate ARN, so the scheduled path (S4.17) can rebuild the same
-    projection without a PR request. The observation schema carries the
+    the **projection inputs** of the applied program (R7-M2, R8-m4): the
+    `SourceAdmission` facts; the **full image rows** of both images as
+    `project_workload_phase` checks them (`uri`, `manifest_media_type`,
+    `config_digest`, `config_size`, `platform`;
+    `scripts/poc_workload_phase_entrypoint.py` lines 52-93), not only
+    the digests; the **certificate observation**
+    `{parameter_arn, parameter_version, certificate_arn}` (the closed set
+    of `scripts/poc_workload_capabilities.py` line 277), or `null` when the
+    contract pins `certificate_arn`; and the **program trees**: the git
+    object IDs of `scripts`, `pulumi`, `policy`, `schemas`,
+    `pyproject.toml` and `uv.lock` in the installed checkout that ran the
+    apply (the applied base). The scheduled path (S4.17) rebuilds the same
+    projection from these values without a PR request and compares the
+    program trees with its own installed `main`. The observation schema carries the
     bound success receipt's ID, run ID, run attempt and checkpoint sha256
     (R7-m6, audit F6);
   - `poc_contract.py`;
@@ -769,7 +779,16 @@ step 13 (induced failure).
 - **Scope (the only story that edits these files):**
   - `scripts/poc_workload_topology.py`: `expected_graph` split into the
     step-1 and step-2 graphs, parameterized by stack (`test`, `prod`;
-    replacing the hard-coded `-test-` names at lines 61, 859 and 1058), for
+    replacing the hard-coded `-test-` names at lines 61, 859, 955 (the
+    `awslogs-group` name; R8-m2) and 1058, and the TEST URN prefix and
+    root that lines 149-151 import from `poc_registry_plan` with the
+    stack's own, derived deterministically as in the S4.14 reconciliation
+    row, as are the service and provider URNs of lines 159, 175, 349 and
+    393; the registry nodes of lines 144, 372 and 388, and of
+    `scripts/poc_workload_secret_result.py` line 68, come from a
+    stack-selected registry set, whose PROD entry is XP-14's and is
+    stubbed in this story's PROD fixtures; see the S4.10 registry-set
+    note in S4.14), for
     every resource those stories add or remove (AD-25 list), including
     `kms_key_id` on every log group and the pre-created Container Insights
     group; the PROD HTTPS target group (S3.5-A); the named URN sets that S4.9 admits (step-2 set,
@@ -872,9 +891,13 @@ step 13 (induced failure).
     the failure path (final checkpoint through the trusted backend,
     `outcome: failed`), written before `execute` returns the status;
     `_capture` (lines 44-47) binds to the mode's anchor; a success receipt
-    records the projection inputs (`SourceAdmission` facts, image digests,
-    certificate ARN; runner lines 177-184) that S4.17 rebuilds the
-    projection from (R7-M2);
+    records the projection inputs that S4.17 rebuilds the projection from
+    (R7-M2, R8-m4): the `SourceAdmission` facts, the full image rows
+    (`initial.images`) and the certificate observation
+    (`initial.certificate`) exactly as runner lines 177-184 pass them to
+    `project_workload_phase`, next to the projection digest and the
+    generated-files digest the receipt already carries (AD-24), and the
+    program trees of the installed checkout (the S1.1 field);
   - **result-inspection failure (R6-m9):** when the apply succeeds but
     `_inspect_first_result` (runner lines 124-148) or the S4.10 checker
     raises, the runner captures the final checkpoint through the trusted
@@ -1563,9 +1586,12 @@ step 13 (induced failure).
     `docs/poc-workload-reconciliation.md` (R7-n3);
   - the **reviewed amendment** (Kravalg-approved governance PR): the README
     sentence (`specs/poc/README.md` line 127), the runner spec (lines
-    37-40) and `docs/poc-workload-log-health.md` line 57 become "Workload
-    drift is admitted only with an authenticated accepted-workload receipt
-    and is rejected without one."; `tests/unit/test_workload_apply_docs_consistency.py`
+    37-40) and `docs/poc-workload-log-health.md` line 57 become "The PR
+    `drift` command is admitted only with an authenticated
+    accepted-workload receipt and is rejected without one." (R8-m5: the
+    sentence names the PR `drift` command, because the S4.17 scheduled
+    diagnostic also runs before acceptance and is not this command);
+    `tests/unit/test_workload_apply_docs_consistency.py`
     line 175 carries the new sentence, and line 185 becomes two assertions
     (drift not routed without a receipt; routed with one).
 
@@ -1650,6 +1676,77 @@ step 13 (induced failure).
 ### S4.14 (USI): PROD path (FR-35 part 4)
 
 - **Chains:** C-runner after S4.13; C-contract after S4.13.
+- **First case: grep-derived TEST-pin inventory (R8-m2).** The pin table
+  below is complete by construction: the story first runs, read-only,
+  over `scripts/`,
+
+  ```
+  grep -rnE --include='*.py' '891377212104|-test|"test"|Pulumi\.test\.yaml|CONTRACT_PATH' scripts/
+  grep -rnE --include='*.py' '/test/|(backend|registry)\.(ACCOUNT|BUCKET|PROVIDER|PREFIX|ROOT|STACK|ENVIRONMENT)\b|SECRET_PREFIX|mail\.(DOMAIN|ZONE|ARN)\b|^(DOMAIN|ZONE) = ' scripts/
+  grep -rnE --include='*.py' '\b(registry|graph)\.(REGISTRIES|DEFAULT_TAGS|[A-Z_]+_URN|_graph)\b|from poc_registry_plan import|urn:pulumi:test::|/test\.json|vilnacrmtest' scripts/
+  ```
+
+  The first command is the requested literal inventory (the TEST account
+  ID, `-test`, `"test"`, `Pulumi.test.yaml` and `CONTRACT_PATH`); the
+  second and third catch the indirect uses of the TEST constants that the
+  first misses (for example `backend.ACCOUNT`, the `/test/` path
+  segments, the TEST registry set and tags, the TEST URNs, the checkpoint
+  key and the TEST mail domain; the third was added from the pre-commit
+  audit). At `72873f9` (the workload source is unchanged from the
+  baseline) they return 87, 38 and 41 lines. Every hit has an owner or an
+  exclusion reason below. The story adds a test that re-runs the three
+  commands and fails on any hit outside this table, keyed on the file and
+  the matched text, not on line numbers (which this story's own edits
+  shift), so a new TEST pin cannot land unowned.
+
+  | File | Lines hit (grep 1; grep 2; grep 3) | Owner | Row or exclusion reason |
+  | --- | --- | --- | --- |
+  | `scripts/service_execution_worker.py` | 26, 27, 28, 30, 74, 93 | S4.14 (26-30 also S4.17) | `JOBS`/`ACCOUNTS` gain the PROD jobs and account (scope below) and the two scheduled jobs (S4.17); 74 and 93: pin-table rows |
+  | `scripts/service_execution_host.py` | 142 | S4.14 | pin-table row |
+  | `scripts/poc_workload_runner.py` | 53, 82, 164, 202; 190, 191, 194, 195; 42 | S4.14 | pin-table rows (53, 82, 164, 202, 194-195; 42: the capture row). 190-191 excluded: `registry.ROOT` there is `poc_registry_runner.ROOT`, the installed repository path (`scripts/poc_registry_runner.py` line 35), not a stack coordinate |
+  | `scripts/poc_workload_materializer.py` | 24, 89, 126 | S4.14 | pin-table rows |
+  | `scripts/poc_workload_capabilities.py` | 22, 23; 30, 32, 92, 111, 130, 133, 286 | S4.14 (with XP-15 and XP-16) | pin-table row |
+  | `scripts/poc_workload_images.py` | —; 44, 68, 126, 282, 349; 53, 239, 346 | S4.14 (the PROD registry set: XP-14) | pin-table row |
+  | `scripts/poc_workload_phase_entrypoint.py` | 18, 41, 111 | S4.14 | 18 and 41: the `CONTRACT_PATH` row; 111: the role-prefix row (109-116) |
+  | `scripts/poc_workload_admission.py` | 110; —; 148, 154 | S4.14 (the PROD registry set: XP-14) | 110: the `CONTRACT_PATH` row; 148 and 154: the `inspect_registry` row |
+  | `scripts/poc_phase_admission.py` | 24, 119, 216, 219 | S4.14 | 24: the stack → contract mapping (scope below); 119, 216, 219: the `CONTRACT_PATH` row |
+  | `scripts/poc_source_artifact.py` | 256, 314 | S4.14 | the `CONTRACT_PATH` row |
+  | `scripts/poc_phase_source_adapter.py` | 119, 181, 213, 241 | S4.14 | the `CONTRACT_PATH` row |
+  | `scripts/poc_contract.py` | 17, 99, 109, 122, 125; —; 112 | S4.14 (the PROD mail domain: XP-14) | 17: the schema dispatch (scope below); 99, 109, 112, 122, 125: the `poc_contract.py` rows |
+  | `scripts/poc_secret_observation.py` | 11; 11, 19 | S4.14 | the `SECRET_PREFIX` row |
+  | `scripts/poc_workload_topology.py` | 61, 859, 955, 1058; 149, 151, 1160; 144, 159, 175, 349, 372, 388, 393 | S4.10 (the PROD registry set: XP-14, stubbed) | 61, 149-151, 859, 955, 1058: parameterized by stack in S4.10 (the only C-topology writer); 144, 372 and 388 (`registry.REGISTRIES`, `registry._graph`) and 159, 175, 349 and 393 (`SERVICE_URN`, `PROVIDER_URN`): the S4.10 registry-set note below. 1160 excluded: `registry.STACK` and `registry.ENVIRONMENT` are Pulumi type tokens (`scripts/poc_registry_plan.py` lines 22 and 25), not stack coordinates |
+  | `scripts/poc_backend_observer.py` | 37, 40, 41, 183, 194, 206, 220, 222, 225, 325; 43; 42, 345, 363 | XP-14 | the observer rows (constants including `CHECKPOINT` at 42, `_target`, `_target_coordinates`, `_caller`, `_key`, `LOCKS`, the provider URN at 345 and the URN prefix at 363) |
+  | `scripts/poc_registry_runner.py` | 175, 176, 272, 305, 338, 364; 130, 131, 194, 240, 242, 245, 269, 270, 358, 359; 187, 232, 258, 262, 347, 367 | XP-14 | 269-272: the `_binding` row; 187, 194, 232, 240-245, 258 and 262: the capture row. 130-131 (`_runtime_environment`), 175-176 (`_project`), 305 (`_gate`), 338, 347, 358-359, 364 and 367 (`execute`) excluded from S4.14: registry-phase code that the workload path never calls (it calls only `_capture`, `_review`, `_binding`, `_read_plan`, `_trusted_root` and the module handles) |
+  | `scripts/poc_registry_plan.py` | 21, 27, 36, 55, 61, 63, 69, 71; —; 26 | XP-14 | the `poc_registry_plan.py` row |
+  | `scripts/poc_registry_phase_entrypoint.py` | 16, 20 | XP-14 | the `_REGISTRIES` row |
+  | `scripts/poc_registry_completion.py` | 30, 32, 33, 105, 257, 367; 118; 116, 150, 153, 159, 173, 198, 200, 280, 282 | XP-14 | the registry-completion row |
+  | `scripts/poc_mail_prerequisite.py` | —; 13, 14, 15; 13, 27, 394 | XP-14 | the capture row (the SES and DKIM inventory) and the `_mail_semantics` row |
+  | `scripts/poc_scheduled_registry_drift.py` | 24, 106, 138, 184; 177, 178; 125, 126, 128 | XP-14 | excluded from S4.14 and S4.17: the TEST registry scheduled diagnostic, connected to no workflow (`specs/poc/README.md` lines 52-57); S4.17 models its gate and does not call it |
+  | `scripts/poc_publisher_dispatch.py` | 89 | XP-14 (with the PROD counterpart of XP-12) | excluded from S4.14: the TEST image publisher environment `poc-test-images`, used by the TEST registry dispatch job (`self-deploy.yml` lines 762 and 780); PROD image publication is outside this plan |
+  | `scripts/poc_workload_reconciliation.py` | —; —; 15 | S4.14 | the reconciliation row (`PREFIX`/`ROOT` imports) |
+  | `scripts/poc_workload_secret_result.py` | —; —; 68 | S4.10 (the PROD registry set: XP-14, stubbed) | the S4.10 registry-set note below |
+  | `scripts/configure_github_repository_controls.py` | 80, 85 | — | excluded: environment-name lists that already include `prod` and `prod-preview` (S5.21 edits the file for other reasons) |
+  | `scripts/governance_promotion.py` | 160, 265 | — | excluded: loops over both `test` and `prod` |
+  | `scripts/initialize_service_stack.py` | 33 | — | excluded: accepts both `test` and `prod` |
+  | `scripts/pulumi_command_preflight.py` | 304 | — | excluded: the environment list already adds `prod-preview` and `prod` for a `prod` request |
+  | `scripts/pulumi_pr_comment.py` | 11, 36 | — | excluded: `/pulumi <action>` defaults to `test`, and `/pulumi prod <action>` is already parsed |
+  | `scripts/run_mutation_tests.py` | 64, 66 | — | excluded: false positives (`--tests-dir`, `--test-time-multiplier`) |
+
+  **S4.10 registry-set note (pre-commit audit).** The expected graphs of
+  `scripts/poc_workload_topology.py` (lines 144, 372, 388) and
+  `scripts/poc_workload_secret_result.py` (line 68) start from the TEST
+  registry graph (`registry._graph(RegistryPhaseProjection(registry.REGISTRIES))`)
+  and hang workload nodes under `registry.SERVICE_URN` and
+  `registry.PROVIDER_URN` (topology lines 159, 175, 349, 393). S4.10
+  derives the stack's service and provider URNs from the stack's own
+  prefix, which is deterministic (`scripts/poc_registry_plan.py` lines
+  26-30 build them from `PREFIX`), and takes the registry nodes (names,
+  tags, outputs) from a stack-selected registry set. For `test` that set
+  is today's; for `prod` it is XP-14's (the `_REGISTRIES` and
+  `poc_registry_plan.py` rows), so S4.10's PROD fixtures stub it, as
+  S4.14's do, and S4.10 reads nothing from row 48. No PROD registry name
+  is assumed.
+
 - **Scope:**
   - `scripts/service_execution_worker.py` `JOBS`/`ACCOUNTS` (lines 25-30)
     and `scripts/service_execution_host.py` `JOBS` (lines 27-31, with the
@@ -1699,9 +1796,10 @@ step 13 (induced failure).
     when the installed `main` `specs/poc/poc-prod.json` exists and has
     `phase: workload`. A missing `poc-prod.json` (before XP-14) or
     `phase: registry` keeps the baseline drift for `prod` running;
-  - the runner accepts `prod` with the PROD certificate parameter (the
-    PROD counterpart of XP-10, SSM name recorded with the gateway owner and
-    pinned), the PROD topology (S4.10), the PROD registry anchor (XP-14)
+  - the runner accepts `prod` with the PROD certificate parameter (XP-15,
+    the PROD counterpart of XP-10; the TEST-analogous name is pinned as an
+    assumption that the gateway owner confirms in this PR before it merges,
+    R8-m6), the PROD topology (S4.10), the PROD registry anchor (XP-14)
     and `prod-recovery`; `abandon` is never admitted for PROD.
     `prod_workload_drift` runs the S4.13 drift path under the PROD preview
     role, and the PROD observation and acceptance jobs mirror
@@ -1724,15 +1822,40 @@ step 13 (induced failure).
     | `scripts/poc_backend_observer.py` line 183 (with the constants at lines 37-43), line 363 and line 389 | TEST account, bucket, provider, URN prefix and stack name | **assigned to XP-14**: the PROD registry phase owns the observer's PROD coordinates, because the PROD registry capture needs the same ones (PRD §7). S4.14's PROD fixtures stub `backend.capture_backend` with PROD coordinates, and gate 2a refuses PROD without XP-14. Line 184 (operations `plan` and `up-plan` only) is not a TEST pin and does not change; the drift capture maps to `plan` (S4.13). |
     | `scripts/poc_backend_observer.py` lines 199-201 (R7-m3) | the target check reads `poc_contract.SCHEMA_PATH` and requires its `account_id` `const` to equal the TEST `ACCOUNT` | **assigned to XP-14** with the other observer coordinates. S4.14 keeps this read working: the PROD schema is a separate file and `poc-test-v1.schema.json`'s `account_id` stays a `const` (R7-m4). |
     | `scripts/poc_registry_runner.py` lines 266-283 (`_binding`), called by the workload gate at `scripts/poc_workload_runner.py` line 58 (R7-m3) | the provider identity must carry `backend.ACCOUNT`, `s3://{backend.BUCKET}` and `stack: "test"` | the workload gate binds with the request's stack and that stack's observer coordinates through a stack-aware binding in `poc_workload_runner.py`; the registry `_binding` itself is unchanged (the registry path stays TEST until XP-14). Fixture: a `prod` provider identity (PROD account, PROD bucket, `stack: "prod"`) passes; a TEST identity under a `prod` request fails; the TEST binding is unchanged. |
-    | `scripts/poc_workload_capabilities.py` lines 22-23 (`ROLE_NAMES` `-test-EcsExecution`, `-test-EcsTask`), 30 (`CERTIFICATE_PARAMETER_NAME` `/vilnacrm/test/user-service/gateway-certificate-arn`), 32 (SSM parameter ARN), 92 (role ARN), 111 (`policy/issue219/test/boundary/`), 130-133 (trust `aws:SourceAccount`/`aws:SourceArn`) and 286 (ACM certificate ARN pattern); reached through `scripts/poc_workload_admission.py` line 470 (R7-m3) | TEST role names, certificate parameter, account and boundary path | parameterized by the request's stack: `-{stack}-EcsExecution`/`-{stack}-EcsTask`, the PROD certificate parameter (the PROD counterpart of XP-10, pinned as above), the PROD account in every ARN, and the PROD boundary path recorded with the bootstrap owner (the PROD counterpart of XP-11) and pinned. Fixture: PROD role, certificate and boundary reads pass for a `prod` request; a TEST role name or the TEST certificate parameter under a `prod` request fails; the TEST fixtures are unchanged. |
-    | `scripts/poc_workload_images.py` lines 44 (`REGISTRY_HOST`), 68 (`--registry-id`), 126 (`get-authorization-token --registry-ids`), 282 (`registryId` check) and 349 (image URI) (R7-m3) | the TEST account's ECR registry | the request's stack account (the PROD registries are XP-14's). Fixture: PROD image digests from `933245420672.dkr.ecr.eu-central-1.amazonaws.com` pass for a `prod` request; a TEST registry ID under a `prod` request fails. |
-    | `scripts/poc_registry_plan.py` lines 21 (TEST `ACCOUNT`), 26-27 (`PREFIX` `urn:pulumi:test::…`, `ROOT`), 36 (`user-service-test-{kind}` registry names), 60-65 (`ENVIRONMENT_OUTPUTS`, `environment: test`) and 69-71 (`ROOT_OUTPUTS` TEST backend URL and secrets provider) (R7-m3) | the TEST registry graph, URN prefix and root outputs | **assigned to XP-14**: the PROD registry graph is registry-phase work. The R6-m13 rule ("`poc_registry_plan.py` changes only in S4.3") scopes this plan's stories only; any XP-14 change to this file is outside that rule and outside this plan. For `prod`, S4.14 reads the PROD counterparts that XP-14 provides (the registry graph, `_ecr_inventory` coordinates and tags used by the capture, row below) and its fixtures stub them; the reconciliation row above replaces the `PREFIX`/`ROOT` imports with the stack's own. |
-    | `scripts/poc_workload_runner.py` lines 40-48 (`_capture`) → `scripts/poc_registry_runner.py` lines 254-263 (`_capture`: TEST registry graph, `_ecr_inventory` at lines 240-245 with `backend.ACCOUNT`, `graph.DEFAULT_TAGS`) (audit) | the registry rows of every capture are checked against the TEST registry graph and TEST ECR | the S4.11 workload-aware capture checks the registry rows against the request stack's registry graph, ECR coordinates and tags (TEST today; PROD from XP-14). Fixture: a PROD checkpoint with PROD registry rows passes for a `prod` request with the XP-14 counterparts stubbed; TEST registry rows under a `prod` request fail. |
+    | `scripts/poc_workload_capabilities.py` lines 22-23 (`ROLE_NAMES` `-test-EcsExecution`, `-test-EcsTask`), 30 (`CERTIFICATE_PARAMETER_NAME` `/vilnacrm/test/user-service/gateway-certificate-arn`), 32 (SSM parameter ARN), 92 (role ARN), 111 (`policy/issue219/test/boundary/`), 130-133 (trust `aws:SourceAccount`/`aws:SourceArn`) and 286 (ACM certificate ARN pattern); reached through `scripts/poc_workload_admission.py` line 470 (R7-m3) | TEST role names, certificate parameter, account and boundary path | parameterized by the request's stack: `-{stack}-EcsExecution`/`-{stack}-EcsTask`, the PROD certificate parameter (XP-15, the PROD counterpart of XP-10), the PROD account in every ARN, and the PROD boundary path (XP-16, the PROD counterpart of XP-11). **Assumption, not a decision (R8-m6):** S4.14 pins the deterministic, TEST-analogous names `/vilnacrm/prod/user-service/gateway-certificate-arn` and `arn:aws:iam::933245420672:policy/issue219/prod/boundary/`; the gateway owner (XP-15) and the bootstrap owner (XP-16) confirm the names in this PR before it merges (a naming statement recorded here, not the row-49 deliverable, which is the parameter and path existing live), and S4.7 verifies them live. `iam:SimulatePrincipalPolicy` runs only for the execution role (`_pull`, lines 193-232, called at line 338 with `roles["execution"]`); `iam:GetRole` reads both roles (lines 333 and 341). Fixture: PROD role, certificate and boundary reads pass for a `prod` request; a TEST role name or the TEST certificate parameter under a `prod` request fails; the TEST fixtures are unchanged. |
+    | `scripts/poc_workload_images.py` lines 44 (`REGISTRY_HOST`), 68 (`--registry-id`), 126 (`get-authorization-token --registry-ids`), 282 (`registryId` check) and 349 (image URI) (R7-m3), and the TEST registry set at lines 53, 239 and 346 (`graph.REGISTRIES`; R8-m2, pre-commit audit) | the TEST account's ECR registry | the request's stack account and the stack's registry set (the PROD registry names are XP-14's and stubbed). Fixture: PROD image digests from `933245420672.dkr.ecr.eu-central-1.amazonaws.com` pass for a `prod` request; a TEST registry ID under a `prod` request fails. |
+    | `scripts/poc_registry_plan.py` lines 21 (TEST `ACCOUNT`), 26-27 (`PREFIX` `urn:pulumi:test::…`, `ROOT`), 36 (`user-service-test-{kind}` registry names), 51-59 (`DEFAULT_TAGS`, `Environment: test` at line 55; R8-m2), 60-65 (`ENVIRONMENT_OUTPUTS`, `environment: test`, `stackTag` at line 63) and 69-71 (`ROOT_OUTPUTS` TEST backend URL and secrets provider) (R7-m3) | the TEST registry graph, URN prefix and root outputs | **assigned to XP-14**: the PROD registry graph is registry-phase work. The R6-m13 rule ("`poc_registry_plan.py` changes only in S4.3") scopes this plan's stories only; any XP-14 change to this file is outside that rule and outside this plan. For `prod`, S4.14 reads the PROD counterparts that XP-14 provides (the registry graph, `_ecr_inventory` coordinates and tags used by the capture, row below) and its fixtures stub them; the reconciliation row above replaces the `PREFIX`/`ROOT` imports with the stack's own. |
+    | `scripts/poc_workload_runner.py` lines 40-48 (`_capture`) → `scripts/poc_registry_runner.py` lines 254-263 (`_capture`: TEST registry graph, `_ecr_inventory` at lines 240-245 with `backend.ACCOUNT`, `graph.DEFAULT_TAGS`; `ecr_read`, lines 185-199, with `--registry-id` `backend.ACCOUNT` at line 194; and `graph.mail.inspect_inventory`, with the TEST domain, zone and identity ARN of `scripts/poc_mail_prerequisite.py` lines 13-15 and the TEST zone name at lines 27 and 394; R8-m2) (audit) | the registry rows of every capture are checked against the TEST registry graph and TEST ECR | the S4.11 workload-aware capture checks the registry rows against the request stack's registry graph, ECR coordinates and tags (TEST today; PROD from XP-14). Fixture: a PROD checkpoint with PROD registry rows passes for a `prod` request with the XP-14 counterparts stubbed; TEST registry rows under a `prod` request fail. |
     | `scripts/poc_workload_runner.py` lines 194-195 (`backend_url`, `secrets_provider` from `registry.backend.BUCKET`/`PROVIDER`) (audit) | TEST backend | the request stack's observer coordinates (XP-14 for PROD). Fixture: the PROD context carries the PROD bucket and provider. |
     | `scripts/poc_workload_phase_entrypoint.py` lines 109-116 (role prefix `…-test`, `workload-role-binding`), reached from runner line 179 (audit) | the central ECS role ARNs must be the TEST ones | the prefix uses the contract's stack (`…-{stack}`). Fixture: PROD central role ARNs pass for a PROD contract; TEST role ARNs in a PROD contract fail. |
     | `scripts/poc_workload_materializer.py` line 89 (`"environment": "test"` in the expected baseline configuration), reached from runner line 90 (audit) | TEST stack configuration | the request's stack. Fixture: the PROD baseline configuration materializes; a TEST configuration under a `prod` request fails. |
-    | `scripts/service_execution_host.py` line 164 (`backend._target_coordinates`) and the observer target check (lines 183 and 188-210) (audit) | TEST coordinates before the container starts | **assigned to XP-14** (observer coordinates); S4.14's host fixtures stub them with PROD coordinates, and S4.7 adds the unstubbed PROD case after XP-14. |
+    | `scripts/poc_workload_materializer.py` lines 24 (`FILES` names `Pulumi.test.yaml`) and 126 (the generated `Pulumi.test.yaml` document) (R8-m2) | the generated stack configuration file is named for stack `test` | `Pulumi.<stack>.yaml` from the projection's `backend.stack`, in `FILES` and in `_documents`. Fixture: a PROD projection materializes exactly `Pulumi.yaml`, `Pulumi.prod.yaml`, `__main__.py` and `python`; a `Pulumi.test.yaml` under a `prod` request fails. |
+    | `scripts/poc_contract.py` lines 116-126 (`_registry_semantics`: ECR ARN and URI with the TEST account), run by `_semantics` (line 185) inside `_validate_document` (line 190) for **every** contract, including XP-14's `phase: registry` `poc-prod.json` (R8-m2) | a PROD contract's registries fail "registry ARN/name mismatch" | **owned by S4.14 in the C-contract chain:** the account comes from the contract's own `account_id`, which each stack's schema pins as a `const` (TEST `891377212104`, PROD `933245420672`). Fixture: a PROD `phase: registry` contract with PROD ECR ARNs and URIs validates; a PROD contract with TEST ECR identifiers fails; the TEST fixtures are unchanged. |
+    | `scripts/poc_contract.py` lines 102-113 (`_mail_semantics`: the TEST SES identity ARN at line 109 and the owned domain `user.vilnacrmtest.com`), run through `_workload_semantics` (line 153) for every `phase: workload` contract, so for the S4.7 PROD workload PRs (R8-m2) | a PROD workload contract fails "SES identity/sender must match the TEST owned domain" | **S4.14 owns the code; XP-14 owns the PROD domain (explicit note).** The identity ARN's account comes from the contract's `account_id`, and the owned domain comes from a per-stack map whose `test` entry is today's value. The PROD sending identity is a PROD registry-phase resource (XP-14; `scripts/poc_mail_prerequisite.py` lines 13-15 hold the TEST domain, zone and ARN), and this plan does not decide its domain, so S4.14 ships the map with no `prod` entry: every PROD workload contract fails `_mail_semantics` until XP-14 adds the entry, and gate 2a refuses PROD without XP-14. XP-14's edit to this map is outside this plan, like its `poc_registry_plan.py` constants. Fixture: with the `prod` entry stubbed, a PROD workload contract validates; a PROD contract with the TEST identity fails; with no entry it fails closed. |
+    | `scripts/poc_contract.py` line 99 (the error text names `poc-test-v1`) (R8-m2) | names the TEST schema | names the schema of the contract's stack. Fixture: a PROD shape failure reports `poc-prod-v1`. |
+    | `scripts/poc_secret_observation.py` line 11 (`SECRET_PREFIX`, the TEST secret ARN prefix), used at line 19 and reached through `validate_secret_observation` from `scripts/poc_workload_secret_result.py` (imported at line 17; called at lines 206, 254 and 272) (R8-m2) | every observed secret ARN must be in the TEST account | **owned by S4.14** (C-contract; S1.1 also edits this file): the prefix is built from the `account_id` of the contract that `validate_secret_observation(contract, …)` already receives, so `scripts/poc_workload_secret_result.py` (C-topology, S4.10 only) is not edited. Fixture: PROD secret ARNs pass for a PROD contract; TEST ARNs under a PROD contract fail; the TEST fixtures are unchanged. |
+    | `CONTRACT_PATH` consumers (R8-m2): `scripts/poc_phase_admission.py` lines 119 (metadata `path`), 216 and 219 (`main`: the contract read and the `schemas/poc-test-v1.schema.json` read); `scripts/poc_source_artifact.py` lines 256 and 314; `scripts/poc_phase_source_adapter.py` lines 119, 181, 213 and 241; `scripts/poc_workload_phase_entrypoint.py` lines 18 and 41 (`_source` requires `source.path == CONTRACT_PATH`); `scripts/poc_workload_admission.py` line 110 (the registry contract read at the registry receipt's head) | every source path, contents read and path check is `specs/poc/poc-test.json` | each uses the contract path (and, at line 219, the schema path) of the request's stack from the stack → contract mapping; `poc-test.json` stays the only `admission` record and is still read for `admission.prod`. Fixture: a `prod` request's source metadata, contents reads and entrypoint `_source` check use `specs/poc/poc-prod.json` and `schemas/poc-prod-v1.schema.json`; `poc-test.json` as the contract of a `prod` request fails `workload-source-path`; a `test` request never reads `poc-prod.json` (B). |
+    | `scripts/service_execution_host.py` line 164 (`backend._target_coordinates`) and the observer target check (lines 183 and 188-210) (audit) | TEST coordinates before the container starts | **assigned to XP-14** (observer coordinates); S4.14's host fixtures stub them with checking PROD stand-ins (R8-A1, host-test item below), and S4.7 adds the unstubbed PROD case after XP-14. |
+    | `scripts/poc_backend_observer.py` lines 42 (`CHECKPOINT`, `.pulumi/stacks/…/test.json`), 345 (the TEST provider URN) and 213-228 (`_caller`: the session names `gha-scheduled-test-drift-{run_id}` and `gha-pr-test-{purpose}-{run_id}` at lines 219-223 and the `-test` assumed-role ARN at line 225), line 325 (`_key`: the KMS alias `alias/pulumi-…-test-secrets`) and line 43 (`LOCKS`, the TEST lock prefix) (R8-m2) | TEST caller identity, secrets key and lock prefix | **assigned to XP-14** with the other observer coordinates. The PROD analogues are the session names the workflows use (`gha-scheduled-prod-drift-${{ github.run_id }}`, already at `scheduled-drift.yml` line 139; `gha-pr-prod-{purpose}-${{ github.run_id }}` for the S4.14 jobs), the `-prod` role and alias, and the `…/prod/` lock prefix; S4.14's fixtures stub them. |
+    | `scripts/poc_registry_phase_entrypoint.py` lines 13-22 (`_REGISTRIES`: `user-service-test-web`, `user-service-test-worker`), checked by `_stable_registries` (lines 38-52), which the workload path calls at `scripts/poc_workload_phase_entrypoint.py` lines 107 and 314 and `scripts/poc_workload_capabilities.py` line 326 (R8-m2) | a PROD contract's registries fail "Registry ownership differs" | **assigned to XP-14**: the PROD registry names are PROD registry-phase data. S4.14's workload callers select the request stack's registry set, and its fixtures stub the PROD set. Fixture: a PROD contract with the stubbed PROD names passes; TEST names in a PROD contract fail. |
+    | `scripts/poc_workload_admission.py` lines 147-155 (`inspect_registry`: the anchor capture uses `registry.graph.REGISTRIES` and `registry.graph._graph`, the TEST registry set and graph) (R8-m2, pre-commit audit) | the first-workload anchor check counts the TEST registry graph | the stack's registry set and graph (TEST today; PROD from XP-14, stubbed). Fixture: a PROD checkpoint with exactly the stubbed PROD registry resources passes for a `prod` request; the TEST set under a `prod` request fails. |
+    | `scripts/poc_registry_completion.py` lines 30, 32-33 (TEST environment `poc-test-registry` and the record kinds), 105, 257 and 367 (TEST request and contract path) and 118 (TEST ECR ARN), reached from `scripts/poc_workload_admission.py` line 134 (`completion.verify_completion`, the registry anchor of the first workload) (R8-m2) | the registry anchor is verified only as a TEST registry completion | **assigned to XP-14**: the PROD registry completion receipt is XP-14's. S4.14's PROD admission fixtures stub it; gate 2a refuses PROD without XP-14. |
 
+  - **docs (NFR-10, R8-m5):** `specs/poc/README.md` lines 52-57 ("The
+    scheduled TEST and PROD jobs retain the installed main-only
+    `make test-drift` route … the TEST-only launcher does not accept
+    scheduled jobs") state the per-stack baseline exclusion (`test` from
+    S4.13, `prod` from this story) and that the PR launcher now accepts
+    the PROD jobs behind `admission.prod`; this is a README governance
+    change and needs the same `@Kravalg` approval as the rest of this
+    PR; `docs/poc-workload-admission.md` line 10 ("PROD remains absent;
+    scheduled drift retains the installed-main path") names the seven
+    PROD jobs behind `admission.prod` and the per-stack exclusion;
+    `docs/ci-guardrails.md` line 147 (the `Scheduled Test Drift` and
+    `Scheduled Prod Drift` row) and lines 170-181 ("Scheduled drift and
+    PR commands") state that the baseline jobs skip a workload-phase
+    stack with `workload-drift-routed-to-runner`. S4.17 amends the same
+    three places for the scheduled workload jobs;
   - **workflow-shape tests (R6-M1; guardrail change):**
     - `tests/pulumi/test_ci_guardrails.py`: lines 262-273, the closed job
       set gains exactly the seven `prod_*` jobs; lines 280-306, their exact
@@ -1750,12 +1873,15 @@ step 13 (induced failure).
         exists; it has no `id-token` permission and no
         `configure-aws-credentials` or `load-aws-ci-env` step; its `needs`
         is exactly `["preflight", "poc_prepare_source", "prod_preview"]`;
-        its `if` contains `github.event_name == 'repository_dispatch'`
-        (as its TEST twin, so scheduled execution stays excluded),
-        `needs.poc_prepare_source.outputs.admission_prod == 'preview' || needs.poc_prepare_source.outputs.admission_prod == 'true'`
-        and `needs.preflight.outputs.target_environment == 'prod'`; its
-        last step runs `destructive-gate`. Lines 250-255 (the TEST job)
-        stay byte-equal;
+        its `if` is pinned exactly (`job["if"] == …`, not a substring
+        check; R8-A3), with the `||` parenthesized as the
+        `poc_prepare_source` guard below does, because `&&` binds tighter
+        than `||` in a GitHub Actions expression:
+        `github.event_name == 'repository_dispatch' && needs.preflight.outputs.target_environment == 'prod' && (needs.poc_prepare_source.outputs.admission_prod == 'preview' || needs.poc_prepare_source.outputs.admission_prod == 'true')`
+        (the dispatch clause, as its TEST twin, keeps scheduled execution
+        excluded); an unparenthesized form fails the test; its last step
+        runs `destructive-gate`. Lines 250-255 (the TEST job) stay
+        byte-equal;
       - `tests/pulumi/test_ci_guardrails.py` lines 281-284, the
         `poc_prepare_source` guard, becomes exactly
         `${{ needs.preflight.result == 'success' && (needs.preflight.outputs.target_environment == 'test' || needs.preflight.outputs.target_environment == 'prod') }}`
@@ -1785,10 +1911,26 @@ step 13 (induced failure).
         `backend._target_coordinates` (host line 164; observer lines
         188-210, TEST account, `-test` role, TEST bucket and provider) and,
         in the seam test, `backend._target` (observer line 183), both
-        XP-14-owned; so for a `prod_*` job S4.14's fixtures stub
-        `_target_coordinates`, `_target` and `capture_backend` with PROD
-        coordinates. The unstubbed real-seam PROD case is S4.7's, after
-        XP-14 (below). Line 141,
+        XP-14-owned; so for a `prod_*` job S4.14's fixtures replace
+        `_target_coordinates`, `_target` and `capture_backend` with
+        **checking PROD stand-ins (R8-A1)**, not pass-through stubs: each
+        compares `AWS_ACCOUNT_ID` with `933245420672`, the job's role key
+        with `arn:aws:iam::933245420672:role/GitHubCi<Kind>-user-service-infrastructure-prod`,
+        `PULUMI_BACKEND_URL` with
+        `s3://pulumi-user-service-infrastructure-prod-state` and
+        `PULUMI_SECRETS_PROVIDER` with the PROD alias URL, and `_target`
+        also requires the request's `target_environment == "prod"`. On a
+        mismatch the stand-in raises the observer's own error through
+        `backend._require` (`ValueError("Backend observation precondition
+        failed")`, observer lines 76-79); on a match `capture_backend`
+        calls the patched `aws_read` boundary
+        (`("sts", "get-caller-identity", {})`). So the `None`,
+        `"missing"`, `"role"`, `"account"`, cross-environment and
+        `"worker"` faults of lines 233-322 keep their meaning for PROD
+        jobs: `calls` is `["docker", "native-sts"]` on success, `[]` for a
+        host-side fault and `["docker"]` for the worker fault, as today.
+        The unstubbed real-seam PROD case is S4.7's, after XP-14
+        (below). Line 141,
         `destination = root if job == "test_preview" else workspace`,
         becomes `destination = root` for every `_preview` job, matching
         the host's copy to `ROOT` for every `_preview` job
@@ -1869,6 +2011,9 @@ step 13 (induced failure).
 - **P2 (R6-m5, R7-m3):** every row of the pin table passes its PROD
   fixture, with the observer and the XP-14 registry counterparts stubbed
   for the XP-14 rows.
+- **P3 (R8-m2):** the inventory test re-runs the three grep commands of
+  the first case, and every hit maps to a row or an exclusion of the
+  inventory table.
 - **N1:** PROD with `admission.prod: false` is refused; a PROD `up-plan`
   under `"preview"` is refused.
 - **N2:** PROD `recovery-abandon` is refused; PROD without XP-14 is refused.
@@ -1877,8 +2022,15 @@ step 13 (induced failure).
   tests.
 - **N4 (R7-M1):** a `-prod` role on a TEST job and a `-test` role on a PROD
   job both fail the host seam test; a `prod_destructive_diff` with
-  credentials, without `prod_preview` in `needs` or without the
-  `admission_prod` guard fails; a PROD state job on `…-test-test` fails.
+  credentials, without `prod_preview` in `needs`, without the
+  `admission_prod` guard, or with the `||` not parenthesized (R8-A3)
+  fails; a PROD state job on `…-test-test` fails; a PROD stand-in given a
+  TEST account, role, bucket or provider raises the observer's error
+  (R8-A1).
+- **N6 (R8-m2):** a new TEST literal in `scripts/` that neither grep row
+  nor exclusion covers fails the inventory test; a PROD contract with TEST
+  ECR identifiers fails `_registry_semantics`; a PROD workload contract
+  fails `_mail_semantics` while the `prod` domain entry is absent.
 - **N5 (R7-m4):** a PROD contract with `scheduled_scaling_suspended: true`,
   with an `admission` object, with `environment: test`, or with the TEST
   account or backend fails `poc-prod-v1.schema.json`; a TEST contract with
@@ -1900,23 +2052,37 @@ step 13 (induced failure).
   (`campaign`: every S4.6 item, where step 17 (front door) is required only
   when the contract records `public_exposure: true`; `complete`: plus the
   S4.8 restore item with its measured RPO and RTO against D-14, the S4.7
-  P-1 item and the S4.17 scheduled-drift item (a clean scheduled TEST run;
-  R6-m11)), `tests/unit/test_poc_acceptance_receipt.py`, and the
+  P-1 item and the S4.17 scheduled-drift items (a clean scheduled TEST run
+  and a PROD record after the flip; R6-m11, R8-m1)),
+  `tests/unit/test_poc_acceptance_receipt.py`, and the
   offline two-gate rewrite of `tests/unit/test_workload_phase_hard_stop.py`
   (gate 1, 2a, 2b; AD-21; gate 2b also checks the S4.17 story marker, which
   defines a check and adds no code dependency on S4.17). The README text and the phase flip stay in the
   S4.6 step-1 PR.
-- **Scheduled-drift result record (R7-m1).** This story also owns
+- **Scheduled-drift result record (R7-m1, R8-m1).** This story also owns
   `schemas/poc-workload-scheduled-drift-result-v1.schema.json`, the record
-  that S4.17 emits: `stack`, `status` ∈ {`checked`, `before-acceptance`},
-  the captured checkpoint sha256, the latest success receipt's ID and
-  checkpoint sha256 (`null` only for `before-acceptance` when the stack
-  has no success receipt yet), the accepted receipt's ID (required for `checked`,
-  absent for `before-acceptance`), the scheduled run ID and attempt and
-  the installed `main` SHA. The `complete` level (and gate 2b) accepts the
-  S4.17 item only with `status: checked`, a checkpoint sha256 equal to the
-  bound success receipt's, and a run link; `before-acceptance` or any other
-  value is refused. S4.15 owns the schema so that the validator and the
+  that S4.17 emits: `stack`, `status` ∈ {`checked`, `before-acceptance`,
+  `registry-phase`}, the captured checkpoint sha256 (`null` for
+  `registry-phase`, whose run captures no checkpoint; pre-commit audit),
+  the latest success receipt's ID and checkpoint sha256 (`null` only for
+  `before-acceptance` when the stack has no success receipt yet, and
+  always for `registry-phase`), the accepted receipt's ID (required for `checked`,
+  absent otherwise), the scheduled run ID and attempt and the installed
+  `main` SHA. `registry-phase` is the record of a run whose installed
+  `main` contract for the stack has `phase: registry`: no drift check ran
+  (R8-m1). The acceptance receipt's S4.17 items (PRD §3.3) carry the
+  uploaded artifact's numeric `artifact_id` and its `artifact_sha256`
+  (the sha256 of the uploaded `record.json`), next to the run link
+  (R8-M1). The `complete` level (and gate 2b) requires **two** S4.17
+  items: (1) the TEST item with `status: checked`, a checkpoint sha256
+  equal to the bound success receipt's, and a run link; and (2) a PROD
+  item from a scheduled run after the S4.7 PR that first set
+  `poc-prod.json` `phase: workload`, with `status: before-acceptance` or
+  `checked` (either status exists only when the installed `poc-prod.json`
+  had `phase: workload`, so the record itself proves the run followed the
+  flip; R8-m1). `registry-phase`, any other status, a missing
+  `artifact_id` or `artifact_sha256`, or a PROD item with `stack: test`
+  is refused. S4.15 owns the schema so that the validator and the
   emitter share one definition without a forward dependency on S4.17.
 - **Hard stop for `poc-prod.json` (R7-m4).** The rewritten hard-stop test
   also reads `specs/poc/poc-prod.json` when it exists, validated by the
@@ -1939,9 +2105,12 @@ step 13 (induced failure).
 - **N1:** a placeholder link, an all-zero hash or an equal requester and
   approver is refused.
 - **N2:** a `complete` validation without the restore, P-1 or S4.17
-  scheduled-drift item is refused; so is one whose S4.17 item has
+  scheduled-drift item is refused; so is one whose TEST S4.17 item has
   `status: before-acceptance`, a checkpoint sha256 different from its
-  bound success receipt, or no accepted receipt ID (R7-m1).
+  bound success receipt, or no accepted receipt ID (R7-m1); one without
+  the PROD S4.17 item, or whose PROD item has `status: registry-phase`;
+  and one whose S4.17 item lacks `artifact_id` or `artifact_sha256`
+  (R8-M1, R8-m1).
 - **N3 (R7-m4):** a `poc-prod.json` fixture with `phase: workload` while
   `admission.prod` is `false` fails the hard-stop test; with
   `admission.prod: "preview"` and a missing gate-2a condition it fails
@@ -1950,6 +2119,12 @@ step 13 (induced failure).
   restore item; the rewritten hard-stop test passes on the installed
   `phase: registry` contract, with no `poc-prod.json` and with a
   `phase: registry` `poc-prod.json` fixture.
+- **B2 (R8-m1, pre-commit audit):** a `registry-phase` record with a
+  `null` captured checkpoint and `null` receipt fields validates against
+  the result schema and is refused as either gate-2b item; a
+  `registry-phase` record with a non-null captured checkpoint, or a
+  `checked` or `before-acceptance` record with a `null` one, fails the
+  schema.
 
 ### S4.16 (USI): TEST exercise workflow
 
@@ -1998,6 +2173,17 @@ step 13 (induced failure).
     (authenticated image publication), XP-13 (SES prerequisites) present
     (R4-M10);
   - the R-02 metadata observation receipt.
+- **No scheduled workload drift during the campaign (R8-n2).** This is a
+  consequence of D-6's two-gate order, recorded here and not a new risk
+  acceptance: the gate-1 flip makes the baseline scheduled drift skip
+  stack `test` (S4.13), and S4.17 (ordered after this campaign; a gate-2b
+  precondition, as revision 6 ordered) is not merged yet. From the flip
+  until S4.17 merges, the TEST workload stack gets drift checks only from
+  `test_workload_drift` after each post-acceptance apply (step 14), not
+  nightly. The registry resources of the stack are outside the baseline
+  program either way (the registry owner's recorded case, S4.13). No
+  PROD workload exists in this window, and PROD is never admitted without
+  S4.17 (AD-21).
 - **Operation PRs.** Every apply below is preceded by a reviewed contract PR
   that sets `workload_operation` (and, where needed, `workload_step`,
   `scaling` or `documentdb_secret_policy`), approved by Kravalg. The runner
@@ -2249,27 +2435,38 @@ measured value or change the design); a default never relaxes D-14.
   PROD workload stack would have no scheduled drift detection. The user
   has not accepted that risk, so no risk acceptance is recorded, and gate
   2b requires this story (PRD FR-31, architecture AD-21).
-- **Chains:** C-runner after S4.14; ordered after XP-14 (row 48) and the
-  BI amendment S5.24 (row 49); this story is row 50.
+- **Chains:** C-runner after S4.14; ordered after XP-14 (row 48), XP-15
+  and XP-16 (row 49) and the BI amendment S5.24 (row 50); this story is
+  row 51, and S4.7 (row 52) follows it in C-runner (R8-m7).
 - **Depends on:** S4.11 (the receipt library, including the projection
   inputs of a success receipt), S4.13 (the drift gate and
-  `validate_drift`), S4.14 (the stack → contract mapping, the PROD schema
-  and the PROD path), S4.15 (the scheduled-drift result schema and the
-  `checked` rule), S5.17 and S5.24 (the Drift-role read set), and XP-14
-  (the observer's PROD coordinates and the committed
-  `specs/poc/poc-prod.json`).
-- **First case (R7-m9):** the story checks that the S5.24 read inventory
-  (row 49) covers every AWS call the scheduled path makes, derived from
-  the code, not from a summary: the state bucket, KMS key and checkpoint
-  (observer), the program refresh reads, and the image, capability and
-  certificate checks. The S5.17 row grants none of the IAM, ECR, SSM or
-  ACM reads, so S5.24 is unconditional (the round-7 request for a
-  conditional row "like S5.6" is kept in position, after XP-14 and before
-  this story, but its condition is always true, and an inventory that
-  lived here would be a forward trigger from row 50 to row 49). A call
-  missing from the inventory stops this story until a reviewed S5.24
-  amendment lands. The receipts are read from GitHub deployments and
-  statuses, not AWS.
+  `validate_drift`), S4.14 (the stack → contract mapping, the PROD schema,
+  the PROD path and its stack-aware provider-identity binding), S4.15
+  (the scheduled-drift result schema and the gate-2b rule), S5.17 and
+  S5.24 (the Drift-role read set), XP-14 (the observer's PROD coordinates
+  and the committed `specs/poc/poc-prod.json`), and XP-15 and XP-16 (the
+  PROD certificate parameter and boundary path that the PROD capability
+  reads use).
+- **First case (R7-m9, R8-m3):** the story checks that the S5.24 read
+  inventory (row 50) covers every AWS call the scheduled path makes,
+  derived from the code, not from a summary: the state bucket, KMS key
+  and checkpoint (observer); the program refresh reads, including the
+  eleven registry resources (ECR repositories, the SES identity and the
+  Route53 DKIM records) that the refresh also reads; the registry-row
+  checks of the capture (`ecr:DescribeRepositories` through
+  `scripts/poc_registry_runner.py` `ecr_read`, lines 185-199;
+  `sesv2 get-email-identity`, `route53 get-hosted-zone` and
+  `route53 list-resource-record-sets` through
+  `scripts/poc_mail_prerequisite.py`, lines 301-310 and 389-424, as
+  `scripts/poc_scheduled_registry_drift.py` lines 122-129 already does
+  under the Drift identity); and the image, capability and certificate
+  checks. S5.24 is unconditional because the Drift role holds none of the
+  IAM, ECR image, SSM or ACM reads (the round-7 request for a conditional
+  row "like S5.6" is kept in position, before this story, but its
+  condition is always true, and an inventory that lived here would be a
+  forward trigger from row 51 to row 50). A call missing from the
+  inventory stops this story until a reviewed S5.24 amendment lands. The
+  receipts are read from GitHub deployments and statuses, not AWS.
 - **Isolated launch (R7-M2).** The scheduled path uses the same isolated
   container as the PR jobs and never bypasses it: the materializer's
   `_worker()` (`scripts/poc_workload_materializer.py` lines 137-143)
@@ -2294,13 +2491,25 @@ measured value or change the design); a default never relaxes D-14.
     back), and never call `preflight.read_request`,
     `revalidate_requester` or `verify_reviewed_source`. The container gets
     no `REQUEST_*`, `EXPECTED_BASE_SHA` or `POC_SOURCE_*` variable for
-    them. Every PR job keeps today's `recheck`;
+    them. Every PR job keeps today's `recheck`. **Result copy-out
+    (R8-M1):** today the host copies out only for `_preview` jobs (lines
+    214-219). For the two scheduled jobs, after the worker container
+    exits 0, `execute` copies `/public/workload-drift-result/record.json`
+    to the fixed path `.trusted/.artifacts/workload-drift-result/record.json`
+    (it requires the target not to exist, as the `_preview` copy does);
+    the copy is a no-op when the file is absent, and a non-zero container
+    status raises before any copy, as today;
   - **worker:** `JOBS` gains the two jobs as (`test`, `scheduled-drift`)
     and (`prod`, `scheduled-drift`). `admit` verifies the same
     scheduled-main provenance for them, with no PR request; `execute`
     routes them to `scripts/poc_scheduled_workload_drift.py` and never to
     `_test` (lines 82-103), which reads the PR source artifact. The
-    `before_program` recheck repeats the provenance check;
+    `before_program` recheck repeats the provenance check. **Result
+    publication (R8-M1):** today the worker copies to `/public` only for
+    `plan` (lines 129-132). The scheduled route copies the script's
+    result record to `/public/workload-drift-result/record.json` after the
+    script returns 0 and the final provenance recheck passes; a non-zero
+    status copies nothing;
   - **workflow:** `.github/workflows/scheduled-drift.yml` gains
     `scheduled_test_workload_drift` and `scheduled_prod_workload_drift`
     (schedule and `main` only; environments `test-drift` and `prod-drift`;
@@ -2315,18 +2524,71 @@ measured value or change the design); a default never relaxes D-14.
     line 158). Their steps, in order: check out `.trusted` at
     `github.sha` without persisted credentials;
     `./.trusted/.github/actions/setup-service-execution` (which runs host
-    `prepare` and `build` from installed `main`); host `recheck`; `load-aws-ci-env` (Drift keys only); host `recheck`;
-    `configure-aws-credentials` with the Drift role; host `execute`. The
-    baseline jobs keep excluding workload-phase stacks (S4.13, S4.14).
-    The PROD job is enabled by the S4.7 PR that first sets
-    `phase: workload` in `poc-prod.json`, the same PR that removes `prod`
-    from the baseline (R7-m2, audit).
+    `prepare` and `build` from installed `main`); host `recheck`;
+    `load-aws-ci-env` (Drift keys only); host `recheck`;
+    `configure-aws-credentials` with the Drift role and
+    `role-session-name: gha-scheduled-test-drift-${{ github.run_id }}`
+    (TEST) or `gha-scheduled-prod-drift-${{ github.run_id }}` (PROD)
+    (R8-n1; the names the observer's `_caller` checks,
+    `scripts/poc_backend_observer.py` lines 219-223, and that the
+    baseline jobs already use, `scheduled-drift.yml` lines 76 and 139;
+    the observer accepts the PROD name once XP-14 makes `_caller`
+    stack-aware); host `execute`; and **exactly one upload step directly
+    after it (R8-M1):**
+    `actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02`
+    (the SHA every upload in `self-deploy.yml` pins, lines 131, 268, 278
+    and 651) with `name: poc-workload-scheduled-drift-<env>-${{ github.run_id }}-${{ github.run_attempt }}`,
+    `path: .trusted/.artifacts/workload-drift-result/record.json`,
+    `if-no-files-found: error`, `overwrite: false` and
+    `retention-days: 7` (the retention of every upload in `self-deploy.yml`,
+    `self-deploy.yml` lines 137, 275, 285 and 657; so a record is linked
+    into the acceptance receipt within seven days, or a later nightly run
+    is linked instead). The upload has no `if`, so it runs only after a
+    successful `execute`; a successful run that left no record fails the
+    job at the upload. The baseline jobs keep excluding workload-phase
+    stacks (S4.13, S4.14).
+  - **enablement is data-driven (R8-m1).** Both jobs exist and run
+    nightly from this story's merge; no later PR enables or disables a
+    job. Each run reads the installed `main` contract of its stack (the
+    AD-04 mapping, `git show <GITHUB_SHA>:<path>` in the trusted
+    checkout, as `scripts/poc_scheduled_registry_drift.py` lines 104-113
+    does). On `phase: registry` it takes no Drift-role read beyond the
+    provenance and contract reads, writes a `status: registry-phase`
+    record (S4.15 schema), emits `::notice::workload-drift-registry-phase`
+    and exits 0: the baseline scheduled drift still covers that stack
+    (S4.14 B2), and gate 2b never counts this record. On
+    `phase: workload` it runs the checks below. A missing contract file
+    exits non-zero (`workload-drift-contract-missing`); XP-14 commits
+    `poc-prod.json` before this story (row 48). So the PROD job starts
+    checking on the first night after the gate-2a PR (S4.7) that first
+    sets `poc-prod.json` `phase: workload`, the same PR that removes
+    `prod` from the baseline, and no night leaves the `prod` stack
+    uncovered.
 - **Scope:**
   - `scripts/poc_scheduled_workload_drift.py`, running only inside the
     worker container (it calls `materializer._worker()` before any
     materialization). It looks up, through the S4.11 library, the
     authenticated latest success receipt and the accepted receipt of the
     stack's lineage;
+  - **installed program must equal the applied base (R8-m4):** the
+    program that renders the projection is imported from installed
+    `main` (`scripts/poc_workload_phase_entrypoint.py` lines 194-208:
+    `/trusted/scripts` and `/trusted/pulumi`), and the old contract is
+    validated against the installed schema
+    (`poc_contract._validate_document`, entrypoint line 101). So before
+    any projection the script compares the program trees that the latest
+    success receipt records (the git object IDs of `scripts`, `pulumi`,
+    `policy`, `schemas`, `pyproject.toml` and `uv.lock`; S1.1, S4.11)
+    with the same object IDs of its installed checkout; any difference
+    fails with the distinct reason
+    `workload-drift-installed-program-changed`, writes no record and exits
+    non-zero, so a code change is never reported as infrastructure drift
+    and never passes silently. After building the projection and the
+    generated files, it compares their digests with the receipt's
+    projection digest and generated-files digest (AD-24); a projection
+    difference fails with `workload-drift-projection-binding`, a
+    generated-files difference with
+    `workload-drift-installed-program-changed`;
   - **applied contract, not the current file (audit):**
     `project_workload_phase` requires the contract digest to equal
     `SourceAdmission.contract_sha256`
@@ -2338,35 +2600,53 @@ measured value or change the design); a default never relaxes D-14.
     must equal the recorded `blob_sha`). It requires that blob to equal the
     receipt's `SourceAdmission.blob_sha` and its digest to equal the
     receipt's contract digest; otherwise it fails with
-    `workload-drift-contract-binding`. The current file on `main` is not
-    used for the projection, so an operation PR that is merged but not yet
-    applied does not change the check;
-  - **projection inputs from the receipt (R7-M2):** the runner builds
-    today's projection from a PR `SourceAdmission` and the admission
-    observation (`scripts/poc_workload_runner.py` lines 158-184); this
-    script builds it from the projection inputs that the latest success
-    receipt records (the `SourceAdmission` facts, the image digests and
-    the certificate ARN; S1.1, S4.11). It re-runs the image, capability and
-    certificate reads under the Drift role and requires them to equal the
-    receipt's values; a difference fails with the item named;
-  - **scheduled gate with no PR call (audit):** the runner's path is
-    PR-bound: `_gate` (runner lines 51-75) calls `registry._review`,
+    `workload-drift-contract-binding`. The current file on `main` is used
+    only for the phase decision above, never for the projection, so an
+    operation PR that is merged but not yet applied does not change the
+    check;
+  - **where each projection field comes from (R7-M2, R8-m4):** the
+    projection is built only from the latest success receipt: the
+    `SourceAdmission` facts, the applied contract (read and bound as
+    above), the full image rows (`uri`, `manifest_media_type`,
+    `config_digest`, `config_size`, `platform`; entrypoint lines 52-93)
+    and the certificate observation
+    `{parameter_arn, parameter_version, certificate_arn}` (capabilities
+    line 277), or `null`. Fresh Drift-role reads are **comparisons, never
+    projection inputs**: `images.inspect_images(contract)` must return rows
+    equal to the receipt's rows; `capabilities.inspect_capabilities(contract)`
+    (role reads, the execution-role pull simulation and the certificate
+    parameter and certificate reads) must return a certificate
+    observation equal to the receipt's; the checkpoint captured with
+    `capture_scheduled_backend` must equal the latest success receipt's;
+    and the refresh plan is the drift observation itself. A difference in
+    an image row, the certificate observation or the checkpoint fails
+    with the item named;
+  - **scheduled gate with no PR call (audit, R8-A4):** the runner's path
+    is PR-bound: `_gate` (runner lines 51-75) calls `registry._review`,
     `admission.observe_workload(source, …)` and
-    `revalidate_requester(source["request"])` (line 72); `_capture` reaches
-    `capture_backend` and `_target`, which reads `source["request"]`
-    (observer line 183); and `execute` calls `registry._trusted_root()`,
-    which requires `GITHUB_EVENT_NAME == "repository_dispatch"`
+    `revalidate_requester(source["request"])` (line 72); `_capture`
+    reaches `capture_backend` and `_target`, which reads
+    `source["request"]` (observer line 183); and `execute` calls
+    `registry._trusted_root()`, which requires
+    `GITHUB_EVENT_NAME == "repository_dispatch"`
     (`scripts/poc_source_artifact.py` line 66). So the script has its own
     gate, modelled on `poc_scheduled_registry_drift._gate` (line 136 on):
     it re-verifies the scheduled provenance, captures with
     `backend.capture_scheduled_backend` (observer lines 428-435, Drift
     identity), requires the checkpoint to equal the latest success
-    receipt's, checks the plan bytes, and runs `validate_drift` against
+    receipt's, runs the registry-row checks of the S4.11 workload-aware
+    capture for the job's stack (the registry graph, ECR and SES/DKIM
+    inventory; S4.14 capture row), checks the plan bytes, binds the
+    provider identity with **S4.14's stack-aware binding** in
+    `poc_workload_runner.py` (the registry `_binding`,
+    `scripts/poc_registry_runner.py` lines 266-283, stays TEST-only and is
+    never called here), requires the job's stack (not the registry
+    gate's `stack == "test"`, line 138), and runs `validate_drift` against
     that receipt's checkpoint. It calls `images.inspect_images(contract)`
     and `capabilities.inspect_capabilities(contract)` directly (each takes
     only the contract) and none of `_review`, `observe_workload`,
-    `revalidate_requester`, `capture_backend` or `_trusted_root`. It reuses
-    the materializer, `run_pulumi_command._dispatch_command("plan", …)`
+    `revalidate_requester`, `capture_backend` or `_trusted_root`. It
+    reuses the materializer, `run_pulumi_command._dispatch_command("plan", …)`
     and `validate_drift` unchanged. The saved plan stays in the worker's
     private area and is discarded; nothing is applied. It exits non-zero,
     with the drifted field named, on any change outside AD-23 (a protected
@@ -2376,27 +2656,45 @@ measured value or change the design); a default never relaxes D-14.
     receipt but no accepted receipt, the script runs the same drift check
     against the latest success receipt and fails on drift. This is a
     read-only diagnostic; AD-24's `drift` row governs the PR `drift`
-    command, which opens releases, not this check. When the stack has no
-    workload success receipt yet (only the registry resources, or a failed
-    or export receipt), no drift check runs: the registry resources are
-    the registry owner's recorded case (S4.13), which the baseline program
-    does not cover either;
-  - **result record (R7-m1):** every run that reaches a verdict writes a
-    `poc-workload-scheduled-drift-result-v1` record (schema owned by S4.15)
-    into an uploaded artifact (`if-no-files-found: error`): `status:
-    checked` after a passing drift check with an accepted receipt, bound
-    to the captured checkpoint sha256, the latest success receipt and the
-    accepted receipt; or `status: before-acceptance` when the lineage has
-    no accepted receipt yet, bound to the captured checkpoint sha256 and
-    the latest success receipt (its ID is `null` only when the stack has
-    no success receipt). A `before-acceptance` run exits 0 only when its
-    drift check passed or no success receipt exists, and it emits a GitHub
-    warning annotation (`::warning::workload-drift-before-acceptance`), so
-    it is visible in the run and never counts as a clean scheduled run:
-    the S4.15 `complete` level accepts only `checked`. Any receipt-lineage
-    lookup error, including an incomplete pagination, exits non-zero and
-    writes no record; after the first accepted receipt, a missing or stale
-    latest receipt fails;
+    command, which opens releases, not this check. When a `phase: workload`
+    stack has no workload success receipt yet (only the registry
+    resources, or only failed or export receipts), no drift check runs:
+    the registry resources are the registry owner's recorded case
+    (S4.13), which the baseline program does not cover either (the
+    failed-or-export case is a recorded residual, `readiness.md`, R8-n4);
+  - **result record (R7-m1, R8-M1):** every run that exits 0 writes
+    exactly one `poc-workload-scheduled-drift-result-v1` record (schema
+    owned by S4.15), which the worker and the host copy out and the
+    upload step publishes: `status: checked` after a passing drift check
+    with an accepted receipt, bound to the captured checkpoint sha256,
+    the latest success receipt and the accepted receipt; `status:
+    before-acceptance` when the lineage has no accepted receipt yet, bound
+    to the captured checkpoint sha256 and the latest success receipt (its
+    ID is `null` only when the stack has no success receipt); or `status:
+    registry-phase` (above). A `before-acceptance` run exits 0 only when
+    its drift check passed or no success receipt exists, and it emits a
+    GitHub warning annotation (`::warning::workload-drift-before-acceptance`),
+    so it is visible in the run and never counts as a clean TEST run: the
+    S4.15 `complete` level accepts a TEST item only with `checked`, and a
+    PROD item with `before-acceptance` or `checked` from a run after the
+    flip. Any run that fails (drift, a binding or program difference, a
+    denied read, a lineage lookup error including an incomplete
+    pagination) exits non-zero and publishes no record; after the first
+    accepted receipt, a missing or stale latest receipt fails;
+  - **docs (NFR-10, R8-m5):** `specs/poc/README.md` lines 52-57 (the
+    candidate `poc_scheduled_registry_drift.py` is not connected; "the
+    TEST-only launcher does not accept scheduled jobs") state that the
+    launcher accepts exactly the two scheduled workload jobs, with
+    scheduled-main provenance and no PR input, that the registry
+    diagnostic stays unconnected, and that a result record cannot
+    authorize a transition; this README change needs the story's
+    `@Kravalg` approval; `docs/poc-workload-admission.md` line 10 names
+    the scheduled workload drift for workload-phase stacks;
+    `docs/ci-guardrails.md` line 147 gains the two workload jobs in the
+    nightly table, and lines 170-181 state that the scheduled file now
+    also runs the isolated service-execution container for the two
+    workload jobs, still with read-only drift roles and no apply or
+    promotion job;
   - **workflow-shape tests (guardrail change):**
     `tests/unit/test_poc_scheduled_registry_workflow.py`: line 1 (the
     module docstring "Schedule retains installed drift until an isolated
@@ -2411,28 +2709,57 @@ measured value or change the design); a default never relaxes D-14.
     `if`, the environment, the concurrency group, the exact permissions
     and `GH_TOKEN` env above, `setup-service-execution`
     before any credential step, a host `recheck` immediately before each
-    credential step with no `if` and no `continue-on-error`, exactly one
-    host `execute` as the last step, the Drift role only (no preview or
-    apply key), no `make`, no `needs`, no `client_payload` and no
-    `head_sha`. `tests/pulumi/test_ci_guardrails.py` lines 185-186 (no
-    `needs.preflight` and no `client_payload` in the workflow) and the
-    baseline loop at lines 191-243 stay; lines 347-353 (the state-job set)
-    gain the two jobs, and the predicate (lines 341-345) needs no change
-    because it already recognises the host `execute` launch.
-    `tests/unit/test_service_execution_host.py` (lines 78-144 and 233-271
-    run over `host.JOBS`) and `tests/unit/test_service_execution_worker.py`
-    gain the scheduled jobs with Drift-role fixtures and no request, and
-    `tests/unit/test_service_execution_workflow.py` lines 9-13 (`CASES`)
-    gain (`scheduled-drift`, `scheduled_test_workload_drift`) and
-    (`scheduled-drift`, `scheduled_prod_workload_drift`). The
-    PR needs an `APPROVED` review by `@Kravalg` specifically, recorded like
-    the round-5 m14 amendment.
+    credential step with no `if` and no `continue-on-error`, the exact
+    `role-session-name` of each job (R8-n1), exactly one host `execute`
+    **followed only by the one upload step above** (its pinned action SHA,
+    exact `name`, `path`, `if-no-files-found: error`, `overwrite: false`,
+    `retention-days: 7`, and no `if` or `continue-on-error`; R8-M1), the
+    Drift role only (no preview or apply key), no `make`, no `needs`, no
+    `client_payload` and no `head_sha`. `tests/pulumi/test_ci_guardrails.py`
+    lines 185-186 (no `needs.preflight` and no `client_payload` in the
+    workflow) and the baseline loop at lines 191-243 stay; lines 347-353
+    (the state-job set) gain the two jobs, and the predicate (lines
+    341-345) needs no change because it already recognises the host
+    `execute` launch. `tests/unit/test_service_execution_workflow.py`
+    lines 9-13 (`CASES`) gain (`scheduled-drift`,
+    `scheduled_test_workload_drift`) and (`scheduled-drift`,
+    `scheduled_prod_workload_drift`);
+  - **pinned host and worker assertions this story changes (R8-M1),**
+    each with its new form; every PR-job assertion stays:
+    - `tests/unit/test_service_execution_worker.py` lines 128-130, run
+      over every `worker.JOBS` member: line 128
+      (`calls[-3:] == ["execute", "admit", "admit"]`) stays for the PR
+      jobs, and for the two scheduled jobs becomes
+      `calls[-3:] == ["scheduled", "admit", "admit"]` (the scheduled script
+      call, its `before_program` recheck and the final recheck, where
+      `admit` is the scheduled-provenance check for these jobs), with no
+      `execute` (the PR route, `registry.execute`) and no
+      `load_verified_contract` call; line 129
+      (`replay` only for `up-plan`) stays; line 130
+      (`len(copied) == (2 if command == "plan" else 0)`) becomes
+      `len(copied) == {"plan": 2, "scheduled-drift": 1}.get(command, 0)`,
+      the scheduled copy targeting `/public/workload-drift-result`, so
+      line 131 (every target's parent is `/public`) stays; a scheduled
+      fixture whose script exits non-zero copies nothing;
+    - `tests/unit/test_service_execution_host.py` lines 109-112 (the fake
+      worker writes `/public` files only for `_preview` jobs) also write
+      `workload-drift-result/record.json` for the two scheduled jobs, and
+      lines 140-144 (the copy-out check) assert that record under
+      `root / ".artifacts/workload-drift-result"` for them, next to
+      S4.14's `destination = root` for every `_preview` job; a scheduled
+      fixture with no record copies nothing and does not raise. Lines
+      78-144 and 233-322 run the scheduled jobs with Drift-role
+      fixtures, no request and scheduled provenance;
+    The PR needs an `APPROVED` review by `@Kravalg` specifically, recorded
+    like the round-5 m14 amendment.
 
 **Acceptance criteria:**
 
 - **P:** a scheduled fixture on a workload stack with an accepted receipt
   and a refresh that changes only AD-23 fields passes and writes a
-  `checked` record bound to the captured checkpoint and both receipts.
+  `checked` record bound to the captured checkpoint and both receipts;
+  the host copies it to `.trusted/.artifacts/workload-drift-result/record.json`
+  and the workflow fixture uploads it.
 - **P2 (R7-M2):** the scheduled job launches through host `execute` into
   the worker container, and `_worker()` passes there.
 - **N1:** a refresh fixture that changes an unlisted field fails with that
@@ -2444,8 +2771,9 @@ measured value or change the design); a default never relaxes D-14.
   scheduled path reads a PR request (R7-M2):** a fixture in which host
   `recheck`, worker `admit` or the script calls `preflight.read_request`,
   `revalidate_requester`, `verify_reviewed_source`, `registry._review`,
-  `admission.observe_workload`, `backend.capture_backend` or
-  `registry._trusted_root` for a scheduled job fails the test.
+  `admission.observe_workload`, `backend.capture_backend`,
+  `registry._binding` or `registry._trusted_root` for a scheduled job
+  fails the test.
 - **N8 (audit):** a contract read at the receipt's `head_sha` whose blob
   differs from the recorded `blob_sha`, or whose digest differs from the
   receipt's contract digest, fails with `workload-drift-contract-binding`;
@@ -2457,26 +2785,53 @@ measured value or change the design); a default never relaxes D-14.
   there is no bypass flag or environment variable.
 - **N5 (R7-m1):** a receipt lookup that fails, or whose deployment or
   status listing is incomplete, exits non-zero and writes no record.
-- **N6 (R7-M2):** an image digest, capability or certificate observation
-  that differs from the latest success receipt's projection inputs fails
-  with the item named.
+- **N6 (R7-M2, R8-m4):** an image row, capability or certificate
+  observation that differs from the latest success receipt's fails with
+  the item named; a projection digest that differs from the receipt's
+  fails with `workload-drift-projection-binding`.
 - **N7 (R7-m9):** a denied Drift-role read fails the job; no read is
   skipped.
+- **N9 (R8-M1):** a workflow fixture whose workload job lacks the upload,
+  has a step after it, has an `if` or `continue-on-error` on it, uses
+  another action SHA, or sets `if-no-files-found` to anything but
+  `error` fails the sibling test; a job with another `role-session-name`
+  fails it too (R8-n1).
 - **B:** a stack with a success receipt but no accepted receipt runs the
   drift check, writes a `before-acceptance` record bound to the captured
   checkpoint sha256 and the latest success receipt, emits the warning
   annotation, exits 0 on a clean refresh and non-zero on an unlisted
-  change; a stack with no workload success receipt writes a
-  `before-acceptance` record with a `null` receipt and exits 0 with the
-  warning; the S4.15 `complete` level refuses both records. A `phase: registry` stack is not handled here
-  (the registry owner's case stays as recorded in S4.13); the baseline
-  scheduled jobs are unchanged.
+  change; a `phase: workload` stack with no workload success receipt
+  writes a `before-acceptance` record with a `null` receipt and exits 0
+  with the warning; the S4.15 `complete` level refuses both as the TEST
+  item.
+- **B2 (R8-m1):** on a stack whose installed `main` contract has
+  `phase: registry`, the job takes no Drift-role read beyond provenance
+  and the contract, writes a `registry-phase` record, emits the notice
+  and exits 0, and the upload publishes that record; S4.15 refuses it as
+  either gate-2b item; the baseline scheduled jobs keep previewing that
+  stack (S4.14 B2). A missing contract file exits non-zero.
+- **B3 (R8-m4):** installed program trees or a generated-files digest
+  that differ from the latest success receipt's (for example after a
+  merged code change and before the next apply) fail with
+  `workload-drift-installed-program-changed`, write no record and exit
+  non-zero, before any projection or refresh; with equal trees the run
+  proceeds.
 - **Live:** a clean scheduled TEST run (`status: checked`), appended to
-  the acceptance receipt before gate 2b; the PROD job is enabled at gate
-  2b (S4.7).
+  the acceptance receipt before gate 2b. **Sequencing (R8-m4):** when any
+  file in the program trees changed on `main` after the TEST workload
+  stack's latest success receipt, a TEST release that re-applies the
+  current accepted image digests (a no-op re-apply through the normal PR
+  path, AD-24 release row) runs first, so the clean `checked` run is bound
+  to the installed code. Both jobs exist from this story's merge; the
+  PROD job starts checking on the first night after the gate-2a PR (S4.7)
+  that first sets `poc-prod.json` `phase: workload`, and gate 2b requires
+  a linked PROD `before-acceptance` or `checked` record from a scheduled
+  run after that flip (S4.15, S4.7 N3; R8-m1).
 
 ### S4.7 (USI): Gate 2 (PROD admission) and the PROD plan
 
+- **Chains:** C-runner after S4.17 (R8-m7: its host-test change below
+  edits a C-runner file); C-contract after S4.6.
 - **Scope:** gate 2a (`admission.prod: "preview"`), then gate 2b
   (`admission.prod: true`), and the PROD promotion plan: recovery
   environment `prod-recovery`, the S4.14 PROD path, PROD live acceptance.
@@ -2488,31 +2843,47 @@ measured value or change the design); a default never relaxes D-14.
   the S4.14 PROD schema and each Kravalg-approved. The S4.15 hard-stop test
   refuses a `phase: workload` `poc-prod.json` unless `poc-test.json`
   satisfies gate 2a or 2b. The `admission.prod` PRs stay in
-  `poc-test.json`. The PR that first sets `phase: workload` in
-  `poc-prod.json` also enables the S4.17 PROD scheduled job (R7-m2, audit),
-  so there is no night on which neither the baseline nor S4.17 covers the
-  `prod` stack.
+  `poc-test.json`. The S4.17 jobs are data-driven (R8-m1): the PROD job
+  exists from S4.17's merge and writes `registry-phase` records until the
+  gate-2a PR that first sets `phase: workload` in `poc-prod.json`; from
+  the next night it checks the `prod` stack. That PR also removes `prod`
+  from the baseline (S4.14), so there is no night on which neither the
+  baseline nor S4.17 covers the `prod` stack.
 - **Real-seam PROD test (R7-M1, audit).** Once XP-14's observer
   coordinates exist, this story adds the unstubbed PROD parametrization of
   `tests/unit/test_service_execution_host.py` lines 233-322 (host →
   worker → backend coordinates → native STS boundary), with the
-  environment-dependent faults of S4.14; S4.14's PROD cases stub the
-  observer because XP-14 comes later (row 48).
+  environment-dependent faults of S4.14; S4.14's PROD cases use checking
+  stand-ins for the observer because XP-14 comes later (row 48). This is
+  a rewrite of a pinned C-runner test, so the PR that adds it needs an
+  `APPROVED` review by `@Kravalg` specifically, recorded with the PR
+  number in the acceptance receipt like the round-5 m14 amendment (R8-m7).
 - **Preconditions:**
   - S4.6, S4.8, S4.14, S5.6 (if triggered), S5.19, S5.20 merged and
     published (with S3.5-A already merged; D-2 PROD), D-3 resolved, S5.16
     with S4.6 step 17 evidence if PROD is publicly exposed, XP-14 (PROD
-    registry), the PROD counterparts of XP-10 (the PROD gateway
-    certificate parameter) and XP-11 (the PROD permissions-boundary path
-    that `scripts/poc_workload_capabilities.py` line 111 pins for TEST),
-    each recorded with its owner and pinned in S4.14 (R7-m3), and a PROD
-    live simulator run;
-  - **S4.17 (R6-m11), before gate 2b:** merged, with a clean scheduled TEST
-    workload drift run in the receipt (a result record with
-    `status: checked`, R7-m1); its PROD scheduled job is enabled by the PR
-    that first sets `phase: workload` in `poc-prod.json` (under gate 2a),
-    and gate 2b requires it to be enabled. No risk acceptance replaces
-    it;
+    registry), XP-15 (the PROD gateway certificate parameter, the PROD
+    counterpart of XP-10) and XP-16 (the PROD permissions-boundary path,
+    the PROD counterpart of XP-11, which
+    `scripts/poc_workload_capabilities.py` line 111 pins for TEST), both
+    gate-2a prerequisites (ordered row 49; R8-m6); S4.14 pins their
+    TEST-analogous names as an assumption the owners confirm in the S4.14
+    PR, row 49 makes them exist live under those names, and this story
+    verifies them live (the PROD capability
+    reads of `prod_preview` pass with the pinned names; a difference is a
+    STOP before gate 2a); and a PROD live simulator run;
+  - **S4.17 (R6-m11), before gate 2b:** merged, with two linked result
+    records in the receipt, each with its run link, `artifact_id` and
+    `artifact_sha256` (R8-M1): a clean scheduled TEST workload drift run
+    (`status: checked`, R7-m1), and a PROD record with
+    `status: before-acceptance` or `checked` from a scheduled run after the
+    gate-2a PR that first set `poc-prod.json` `phase: workload` (R8-m1). If
+    any file in the program trees (S1.1) changed on `main` after the TEST
+    workload stack's latest success receipt, a TEST release that re-applies
+    the current accepted image digests (a no-op re-apply through the
+    normal PR path, AD-24 release row) runs before that clean TEST run, so
+    it does not fail with `workload-drift-installed-program-changed`
+    (R8-m4). No risk acceptance replaces this;
   - **P-1 (m1), under gate 2a:** the PROD `plan` (`prod_preview` job, S4.14)
     shows the HTTPS target group and health check on 8443 (FR-19); its
     evidence is appended to the receipt. STOP: an HTTP target group or any
@@ -2521,13 +2892,17 @@ measured value or change the design); a default never relaxes D-14.
 **Acceptance criteria:**
 
 - **P:** gate 2b is accepted with every gate-1 check passing and a
-  `complete`-valid receipt, including P-1 and the S4.17 scheduled-drift
-  item.
+  `complete`-valid receipt, including P-1 and both S4.17 scheduled-drift
+  items (TEST `checked`; PROD after the flip).
 - **N1:** any gate-1 check failing is refused.
 - **N2:** any missing receipt item or placeholder link is refused.
 - **N3:** a PROD stack with an HTTP target group is refused; gate 2b
-  without the S4.17 scheduled-drift item, or with one whose status is
-  `before-acceptance`, is refused (R7-m1).
+  without the TEST S4.17 item, or with a TEST item whose status is
+  `before-acceptance`, is refused (R7-m1); gate 2b without a PROD S4.17
+  record (`before-acceptance` or `checked`) from a scheduled run after the
+  flip, or with only a `registry-phase` PROD record, is refused; an S4.17
+  item without `artifact_id` or `artifact_sha256` is refused (R8-m1,
+  R8-M1).
 - **N4 (R7-m4):** a PROD workload contract PR that fails the S4.14 PROD
   schema, or a `phase: workload` `poc-prod.json` while `admission.prod`
   is `false`, is refused.
@@ -2551,7 +2926,7 @@ measured value or change the design); a default never relaxes D-14.
 | S5.22 | USI (repository controls; admin apply by Kravalg) | **Required manifest approval check (R4-M4, m2, m3), after S4.3:** USI's own ruleset requires the status check `abandon-manifest-approval` (created by S4.3): it joins `REQUIRED_STATUS_CHECKS` (USI `scripts/_github_repository_controls.py` line 13). The ruleset's checks are branch-wide (only a `ref_name` condition), so the check succeeds on PRs that do not change `recovery/abandon-manifest.json` and enforces Kravalg's approval on PRs that do. **Own issuer-pinning code (m2):** today `required_status_checks_rule` (lines 46-60) and `_harden_status_check` (lines 64-78) pin only `Governance Promotion`; this story adds a pinned-context map so `abandon-manifest-approval` is emitted with `integration_id` = the GitHub Actions App ID, `_harden_status_check` sets it and refuses an existing entry with another issuer, and `ruleset_verification_blockers` (line 385) reports a missing or different issuer. | Required check present with the pinned issuer / a ruleset without it, or an entry without `integration_id` or with another App's ID (spoofing test), fails verification / other contexts and paths unaffected; the `Governance Promotion` pin is unchanged |
 | S5.23 | BI | **TEST exercise role (R4 audit, live-action identities):** grants on the S5.1 role `GitHubCiExercise-user-service-infrastructure-test`, trusted only for OIDC `sub` `repo:VilnaCRM-Org/user-service-infrastructure:environment:test-exercise` on `main`: `secretsmanager:RotateSecret` on the declared patterns and `rds!cluster-*` (TEST), with `lambda:InvokeFunction` on the BI rotation function ARNs (V-6); `sqs:SendMessage` on the three DLQs only; `cloudwatch:SetAlarmState` on the workload alarms and the Application Auto Scaling policy alarms of the two services; `s3:GetObject`/`ListBucket` on the flow-log bucket plus the AD-15a runtime-key row (`kms:Decrypt` via S3); `cloudtrail:LookupEvents`; `logs:StartQuery`/`GetQueryResults` on the workload log groups. No `GetSecretValue`, `PutSecretValue` or write outside this list, so `denied-read` is refused. TEST account only. | Matrix allows exactly the list / `GetSecretValue`, `PutSecretValue` and PROD denied / PR-head assumption denied |
 | S5.6 | BI (conditional) | `MaxSessionDuration` plus `role-duration-seconds` | Covers the measured time plus the 300 s margin / below-margin value refused / exactly at the margin accepted |
-| S5.24 | BI (R7-m9; after XP-14, before S4.17) | **Drift-role read inventory and grants for scheduled workload drift.** The story derives, from the existing modules that the S4.17 path calls (the observer, `poc_workload_images.py`, `poc_workload_capabilities.py` and the program refresh), every AWS call the Drift role makes beyond the S5.17 set, and grants `GitHubCiDrift-user-service-infrastructure-{env}` exactly those reads: `iam:GetRole` and `iam:SimulatePrincipalPolicy` on the stack's ECS execution and task roles (`scripts/poc_workload_capabilities.py` lines 37-48, 92-94); `ecr:GetAuthorizationToken` (account-wide by AWS design) and `ecr:BatchGetImage`, `ecr:BatchCheckLayerAvailability` and `ecr:GetDownloadUrlForLayer` on the stack's two workload repositories (`scripts/poc_workload_images.py` lines 77-87, 126 and 206-209; the same pull set as `PULL_ACTIONS`, capabilities lines 25-29); `ssm:GetParameter` on the stack's gateway certificate parameter; `acm:DescribeCertificate` on that certificate. It is unconditional, because S5.17 grants none of these reads; the round-7 request for a conditional row is kept in position (row 49, like S5.6) but its condition is always true. | Each listed read allowed for the Drift role / any write, `GetSecretValue`, `kms:Decrypt`, and the same reads on other roles, repositories or parameters denied / the existing registry and baseline drift matrices are unchanged |
+| S5.24 | BI (R7-m9, R8-m3; after XP-14, XP-15 and XP-16, before S4.17) | **Drift-role read inventory and grants for scheduled workload drift.** The story derives, from the existing modules that the S4.17 path calls (the observer, `poc_registry_runner.py` `ecr_read`, `poc_mail_prerequisite.py`, `poc_workload_images.py`, `poc_workload_capabilities.py` and the program refresh), every AWS call the Drift role `GitHubCiDrift-user-service-infrastructure-{env}` makes beyond the S5.17 set, and grants exactly those reads. **Registry rows and refresh (R8-m3):** the refresh also reads the eleven registry resources, and S4.17 runs the capture's registry-row checks: `ecr:DescribeRepositories` (`scripts/poc_registry_runner.py` lines 185-199), `ses:GetEmailIdentity`, `route53:GetHostedZone` and `route53:ListResourceRecordSets` (`scripts/poc_mail_prerequisite.py` lines 301-310 and 389-424; the calls `scripts/poc_scheduled_registry_drift.py` lines 122-129 already makes under the Drift identity), plus the refresh reads of those three resource types from the pinned `pulumi-aws` provider source (derived as S4.10 derives delete paths). Checked read-only against BI: the local bootstrap-infrastructure clone's fetched `origin/main` (`bea5252`) grants the TEST Drift role `ecr:DescribeRepositories`/`ecr:ListTagsForResource` on `user-service-test-{web,worker}`, `ses:GetEmailIdentity`/`ses:ListTagsForResource` on `user.vilnacrmtest.com` and `route53:GetHostedZone`/`route53:ListResourceRecordSets` on the TEST zone (`pulumi/infra/governance.py` `_test_poc_capability_statements`, line 289 on, statements `PocRegistryMetadata`, `PocMailIdentityMetadata` and `PocDkimZoneMetadata` at lines 347, 356 and 364, attached to every purpose at lines 457-461 while the packaged TEST PoC identity is enabled, line 329; not present at the clone's checked-out `debd88b`); the story cites those grants for TEST, adds any refresh read they miss, and adds the PROD equivalents on XP-14's PROD repositories, identity and zone, which no BI grant covers. **Workload reads:** `iam:GetRole` on the stack's ECS execution and task roles (`_role`, `scripts/poc_workload_capabilities.py` line 89 on, with the native read set at lines 37-48; called at lines 333 and 341); `iam:SimulatePrincipalPolicy` on the stack's **execution role only** (`_pull`, lines 193-232, called at line 338 with the execution role; R8-m3); `ecr:GetAuthorizationToken` (account-wide by AWS design) and `ecr:BatchGetImage`, `ecr:BatchCheckLayerAvailability` and `ecr:GetDownloadUrlForLayer` on the stack's two workload repositories (`scripts/poc_workload_images.py` lines 77-87, 126 and 206-209; the same pull set as `PULL_ACTIONS`, capabilities lines 25-29); `ssm:GetParameter` on the stack's gateway certificate parameter (TEST XP-10, PROD XP-15); `acm:DescribeCertificate` on that certificate. **Explicit deny (R8-m3, found while checking BI):** the read-only policy of the service preview and drift roles carries the `DenySecretLeakingReads` statement (`pulumi/infra/governance.py` line 267, at both `debd88b` and `bea5252`) over `_READ_ONLY_SECRET_DENY_ACTIONS` (`pulumi/infra/ci_bootstrap.py` lines 132-145), which include `ssm:GetParameter` and `ecr:GetAuthorizationToken`; an explicit deny overrides any allow, so the story must narrow that deny for the Drift role only (for `ssm:GetParameter`, a `NotResource` carve-out of the exact certificate parameter ARN, as the apply role's `DenySecretLeakingReadsApply` already carves out its own CI secrets, `pulumi/infra/ci_bootstrap.py` `_apply_secret_deny_document`; for `ecr:GetAuthorizationToken`, removal from the Drift role's deny, because the token grants nothing without the repository-scoped pull grants above). The exact form is the BI owner's security review, approved by Kravalg; without it the story does not merge. It is unconditional, because the Drift role holds none of the IAM, ECR image, SSM or ACM reads; the round-7 request for a conditional row is kept in position (row 50, like S5.6) but its condition is always true. | Each listed read allowed for the Drift role, including through the narrowed deny / any write, `GetSecretValue`, `kms:Decrypt`, `ssm:GetParameter` on any other parameter, `iam:SimulatePrincipalPolicy` on the task role or any other role, and the same reads on other roles, repositories, identities, zones or parameters denied / the existing registry and baseline drift matrices, and the deny for the preview role, are unchanged |
 | S5.19 | BI | **PROD recovery (M-9):** the role `GitHubCiRecovery-user-service-infrastructure-prod`, trusted only for the USI `prod-recovery` environment on `main` (the environment itself is USI S5.21), with grants mirroring S5.7 **without** any delete, abandon or `DeleteSecret` grant. | Exactly the recovery set / delete actions denied / PR-head assumption denied |
 | S5.9 | US | Non-root images (UID ≥1000, :8080, supervisor socket under `/srv/app/var/run`) | Non-root `User` / bind to :80 fails / healthchecks pass |
 | S5.20 | US | **In-container TLS for PROD (D-2):** Caddy internal certificate on :8443, HTTPS health endpoint | HTTPS responds on 8443 / plain HTTP on 8443 refused / certificate renewal before expiry |
@@ -2582,8 +2957,11 @@ measured value or change the design); a default never relaxes D-14.
   The workflow-shape tests (including
   `tests/unit/test_service_reviewed_credentials.py`, R7-m7) and
   `scripts/poc_phase_source_adapter.py` are C-runner (S4.11, S4.13, S4.14,
-  S4.17; R6-M1); S4.17 also adds the scheduled host and worker entries
-  (R7-M2). `pulumi/app/workload_phase.py` is C-composition
+  S4.17, then S4.7 for the unstubbed PROD host seam test; R6-M1, R8-m7);
+  S4.17 also adds the scheduled host and worker entries and the result
+  copy-out (R7-M2, R8-M1). S4.14 makes `poc_contract.py`'s registry and
+  mail semantics and `poc_secret_observation.py`'s ARN prefix
+  stack-aware in its C-contract slot (R8-m2). `pulumi/app/workload_phase.py` is C-composition
   (S1.1 → S1.3 → S1.4 → S2.1 → S2.3 → S3.2 → S3.1 → S3.3 → S3.5-A).
 - **Independent:** these can run in parallel with at most three agents, after
   their chain heads:
@@ -2649,34 +3027,51 @@ measured value or change the design); a default never relaxes D-14.
 | 45 | S4.8 point-in-time restore rehearsal (D-14 targets) | USI (+BI live) | live TEST |
 | 46 | S5.20 in-container TLS merged and published | US | before gate 2 |
 | 47 | S5.19 prod-recovery role and grants (environment from S5.21) | BI | C-BI |
-| 48 | XP-14 PROD registry proof (registry-phase work outside this plan; includes the observer's PROD coordinates, the TEST registry constants of `poc_registry_plan.py`, and the committed `poc-prod.json` under the S4.14 PROD schema) | USI registry | prerequisite |
-| 49 | S5.24 Drift-role read inventory and grants (IAM, ECR incl. `GetDownloadUrlForLayer`, SSM, ACM) for the S4.17 path (R7-m9) | BI | C-BI; before S4.17 |
-| 50 | S4.17 scheduled workload drift for the TEST and PROD workload stacks (isolated scheduled launch through the host and worker; result record) | USI | C-runner; gate-2b precondition |
-| 51 | S4.7 gate 2a (P-1 PROD preview), then gate 2b + PROD plan; PROD workload contract PRs (the first one also enables the S4.17 PROD job); the unstubbed PROD host seam test after XP-14 | USI | PROD gate |
+| 48 | XP-14 PROD registry proof (registry-phase work outside this plan; includes the observer's PROD coordinates, `_caller`, `_key` and `LOCKS`; the TEST registry constants of `poc_registry_plan.py` and `_REGISTRIES`; the PROD registry completion; the PROD mail domain for `_mail_semantics`; and the committed `poc-prod.json` under the S4.14 PROD schema) | USI registry | prerequisite |
+| 49 | XP-15 PROD gateway certificate parameter (gateway owner) and XP-16 PROD permissions-boundary path (bootstrap owner), each existing live under the TEST-analogous name its owner confirmed in the S4.14 PR (R8-m6) | gateway, BI | gate-2a prerequisite |
+| 50 | S5.24 Drift-role read inventory and grants (registry rows and refresh reads; IAM `GetRole`, `SimulatePrincipalPolicy` on the execution role only; ECR incl. `GetDownloadUrlForLayer`; SSM; ACM; the Drift-role deny narrowed) for the S4.17 path (R7-m9, R8-m3) | BI | C-BI; before S4.17 |
+| 51 | S4.17 scheduled workload drift for the TEST and PROD workload stacks (isolated scheduled launch through the host and worker; data-driven per stack; result record copied out and uploaded) | USI | C-runner; gate-2b precondition |
+| 52 | S4.7 gate 2a (P-1 PROD preview), then gate 2b + PROD plan; PROD workload contract PRs (the first one starts the S4.17 PROD checks and removes `prod` from the baseline); the unstubbed PROD host seam test after XP-14 (Kravalg-approved) | USI | C-runner tail; PROD gate |
 
-**No forward dependencies (re-verified over all 52 rows, rows 0-51, in
-revision 7, including test-level and ownership-level dependencies; R6-M2,
-R7-m4, R7-m6).** Every story depends only on lower-numbered rows. S4.9
+**No forward dependencies (re-verified over all 53 rows, rows 0-52, in
+revision 8, including test-level and ownership-level dependencies; R6-M2,
+R7-m4, R7-m6, R8-m6).** Every story depends only on lower-numbered rows. S4.9
 (row 30) depends only on S4.10 (row 28), S4.11 (row 29) and S2.6 (row 24);
 its `hold` rule reads the observation record through the S4.11 library,
 and its N8 fixtures are S4.11-written records, so neither the code nor the
 tests need S4.13 (row 38), which later writes the live records. The
 observation schema is S1.1's (row 2). S4.2 (row 31) uses S4.9's per-mode
 admission rules, its `start_at` window and the `rollback-zero` resume
-boundary, and S4.3 (row 35) follows S4.2. S4.13 (row 38) derives
-`workload_route` with the S4.11 lookup (row 29). S4.14 (row 39) owns the
-PROD contract schema, which S4.15 (row 40) uses for the `poc-prod.json`
-hard-stop cases (offline fixtures), XP-14 (row 48) uses for its committed
-`phase: registry` file, and S4.7 (row 51) uses for the PROD workload
-contract PRs. S4.15 (row 40) owns the scheduled-drift result schema and
-defines the gate-2b check that names S4.17; S4.17 (row 50) only emits
-records of that schema, so the check is a definition, not a code
-dependency. S4.17 (row 50) follows S1.1 (row 2, projection inputs in the
-success-receipt schema), S4.11 (row 29), S4.13 (row 38), S4.14 (row 39),
-S4.15 (row 40), XP-14 (row 48) and S5.24 (row 49), and S4.7 (row 51)
-needs it. S5.24 (row 49) holds its own read inventory, derived from
-modules that exist today (the observer, images and capabilities modules),
-so nothing in row 49 waits for row 50.
+boundary, and S4.3 (row 35) follows S4.2. S4.10 (row 28) derives the
+stack's URN prefix, root, provider and service URNs deterministically and
+stubs the PROD registry set in its PROD fixtures (the S4.10 registry-set
+note in S4.14), so it reads nothing from XP-14 (row 48). S4.13 (row 38) derives `workload_route` with the S4.11
+lookup (row 29). S4.14 (row 39) owns the PROD contract schema, which S4.15
+(row 40) uses for the `poc-prod.json` hard-stop cases (offline fixtures),
+XP-14 (row 48) uses for its committed `phase: registry` file, and S4.7
+(row 52) uses for the PROD workload contract PRs. S4.14's XP-14 rows
+(including the PROD mail domain, which its code leaves absent so a PROD
+workload contract fails closed) use stubs and checking stand-ins, never
+row-48 data. S4.14 pins the TEST-analogous XP-15 and XP-16 names as an
+assumption that the owners confirm in the S4.14 PR before it merges: a
+naming statement recorded in row 39 itself, not the row-49 deliverable
+(pre-commit audit). XP-15 and XP-16 (row 49) are the parameter and the
+boundary path existing live under those names; S5.24 (row 50) grants
+`ssm:GetParameter` on the XP-15 parameter, and S4.7 (row 52) verifies
+both live. S4.15 (row 40)
+owns the scheduled-drift result schema, including `registry-phase`, and
+defines the two-item gate-2b check that names S4.17 and the S4.7 flip;
+S4.17 (row 51) only emits records of that schema, so the check is a
+definition, not a code dependency. S4.17 (row 51) follows S1.1 (row 2,
+projection inputs, full image rows, certificate observation and program
+trees in the success-receipt schema), S4.11 (row 29, the writer), S4.13
+(row 38), S4.14 (row 39, the PROD schema and the stack-aware binding),
+S4.15 (row 40), XP-14 (row 48), XP-15 and XP-16 (row 49) and S5.24 (row
+50), and S4.7 (row 52) follows it in C-runner and needs it. S5.24 (row
+50) holds its own read inventory, derived from modules and BI code that
+exist today (the observer, `poc_registry_runner.py`,
+`poc_mail_prerequisite.py`, the images and capabilities modules, and the
+BI governance policy), so nothing in row 50 waits for row 51.
 S1.11 (row 20) checks the program's `ignore_changes`, which S2.1 (row 16)
 adds; S1.8 (row 19) is its C-contract predecessor (R5-M4). The C-composition
 writers (rows 2, 5, 6, 16, 17, 21, 25) run in row order, and S3.5-A (row 25)

@@ -2,33 +2,32 @@
 artifact: implementation-readiness
 workflow: _bmad/bmm/workflows/3-solutioning/bmad-check-implementation-readiness (Validate mode)
 task: workload-wa-hardening
-source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa (workload source); bundle parent 5cc069c (revision 6)
+source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa (workload source); bundle parent 72873f9 (revision 7)
 date: 2026-09-30
-revision: 7
-author: the planning agent that wrote revision 7 (NOT an independent reviewer)
-independent_reviewer: none yet for revision 7
-status: PENDING independent review of revision 7
+revision: 8
+author: the planning agent that wrote revision 8 (NOT an independent reviewer)
+independent_reviewer: none yet for revision 8
+status: PENDING independent review of revision 8
 ---
 
 # Implementation readiness
 
 ## Verdict
 
-**PENDING. Not PASS.** The author of revision 7 wrote this file. It records
+**PENDING. Not PASS.** The author of revision 8 wrote this file. It records
 what changed and the repository source each fix was checked against. It does
 not grade itself.
 
 - Only an independent reviewer's PASS satisfies the planning gate.
-- Revision 7 answers independent readiness round 7 (FAIL: 2 major, R7-M1
-  and R7-M2; 9 minor, R7-m1…m9; 3 nits, R7-n1…n3) and three further
-  findings of a fresh-context audit of revision 6 (F2, F6 and F8; its F1,
-  F3, F4, F5 and F7 duplicate R7-m5, R7-m3, R7-M1 plus R7-m7, R7-m6 and
-  R7-n2).
-- A fresh-context, read-only audit of the revision-7 changes ran before the
+- Revision 8 answers independent readiness round 8 (FAIL: 1 major, R8-M1;
+  7 minor, R8-m1…m7; 4 nits, R8-n1…n4) and the four residual items
+  A1…A4 of the recheck of the revision-7 pre-commit audit (A2 is merged
+  into R8-m1).
+- A fresh-context, read-only audit of the revision-8 changes ran before the
   commit; its result and what was folded in are recorded in "Pre-commit
-  audit of revision 7" below. It is an author-side check, not the
+  audit of revision 8" below. It is an author-side check, not the
   independent review.
-- Rounds 5, 6 and 7 ran after round 5 was recorded as the last allowed
+- Rounds 5, 6, 7 and 8 ran after round 5 was recorded as the last allowed
   round. Whether another independent round runs is for the coordinator and
   the user to decide. Until an independent reviewer reports PASS, the stage
   stays BLOCKED.
@@ -43,16 +42,20 @@ not grade itself.
 | 4 | independent reviewer (relayed by the coordinator) | FAIL: R4-B1…B3, R4-M1…M10, m1…m12 | revision 4 |
 | 5 | independent reviewer (relayed by the coordinator) | FAIL: R5-M1…M5, m1…m18; every round-4 finding confirmed resolved | revision 5 |
 | 6 | independent reviewer (relayed by the coordinator) | FAIL: R6-M1, R6-M2, R6-m1, R6-m3…m14 | revision 6 |
-| 7 | independent reviewer (relayed by the coordinator), plus a fresh-context audit of revision 6 | FAIL: R7-M1, R7-M2, R7-m1…m9, R7-n1…n3; audit F1…F8 (F2, F6, F8 new) | revision 7 (this file) |
+| 7 | independent reviewer (relayed by the coordinator), plus a fresh-context audit of revision 6 | FAIL: R7-M1, R7-M2, R7-m1…m9, R7-n1…n3; audit F1…F8 (F2, F6, F8 new) | revision 7 |
+| 8 | independent reviewer (relayed by the coordinator), plus the recheck of the revision-7 pre-commit audit | FAIL: R8-M1, R8-m1…m7, R8-n1…n4; recheck residuals A1…A4 | revision 8 (this file) |
 
 ## User decisions (all explicit, dated 2026-09-30)
 
 `decisions.md` is the source. Commit `68584e1` added D-14 after revision
-5; revision 6 changed only the label of the D-14 row; revision 7 does not
-change `decisions.md`, and no round-7 finding needed a new user decision. Every decision is
+5; revision 6 changed only the label of the D-14 row; revisions 7 and 8 do
+not change `decisions.md`, and no round-7 or round-8 finding needed a new
+user decision. Every decision is
 resolved, and none is a default: D-1…D-7 and D-14, and the derived details
 D-8…D-13 that the user confirmed the same day. XP-14 (the PROD registry) is
-still an open ownership item that blocks gate 2.
+still an open ownership item that blocks gate 2, and XP-15 and XP-16 (the
+PROD counterparts of XP-10 and XP-11, numbered in revision 8) block gate
+2a.
 
 - **D-14 is a user decision (R6-m1):** DocumentDB RPO ≤ 1 hour and RTO ≤ 24
   hours for TEST and PROD. A measured miss is a STOP at gate 2a for a new
@@ -60,6 +63,136 @@ still an open ownership item that blocks gate 2.
 - **Planning defaults, not user decisions:** only the 20% TEST cost forecast
   threshold and the rule that every PROD increase is justified (NFR-11,
   m17). The user may change them.
+
+## Round-8 finding → resolution map
+
+Line numbers refer to revision 8. "Source" is the repository file and lines
+each fix was checked against, in the current tree at `72873f9` (the
+workload source is unchanged from the baseline: `git diff --stat
+66776772 72873f9 -- scripts schemas tests .github docs specs/poc` is
+empty). BI citations are from the read-only local clone
+`bootstrap-infrastructure` (checked-out `debd88b`; its fetched
+`origin/main` is `bea5252`). Every rewrite of a pinned workflow-shape or
+C-runner test still needs an `APPROVED` review by `@Kravalg`
+specifically, recorded with the PR number in the acceptance receipt. The
+revision-7 audit recheck residuals are cited as "A<n>". Where this map
+differs from the round-7 map below (R7-m2's "the PROD job is enabled by
+the PR", the R7-m3 pin table, the R7-m9 inventory), this map is
+authoritative.
+
+| Finding | Resolution | Location | Source checked |
+| --- | --- | --- | --- |
+| R8-M1 S4.17 cannot publish its result record | The worker's scheduled route copies the script's record to `/public/workload-drift-result/record.json` after a zero status (today it copies only for `plan`); the host copies it to `.trusted/.artifacts/workload-drift-result/record.json` for the two scheduled jobs, a no-op when absent (today only `_preview` jobs); one pinned upload step directly after `execute`: `actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02`, name `poc-workload-scheduled-drift-<env>-${{ github.run_id }}-${{ github.run_attempt }}`, `if-no-files-found: error`, `overwrite: false`, `retention-days: 7` (the pin and retention of every upload in `self-deploy.yml`), no `if`. The sibling test pins "execute, followed only by that upload" (N9). Changed pinned assertions: worker test 128 (`calls[-3:]` stays for PR jobs; for the scheduled jobs `["scheduled", "admit", "admit"]`, with no PR `execute`), 130 (`len(copied) == {"plan": 2, "scheduled-drift": 1}.get(command, 0)`), 131 stays; host test 109-112 (the fake worker writes the record for the scheduled jobs) and 140-144 (the record under `root`). The S4.15 items, FR-31, AD-21 and PRD §3.3 carry `artifact_id` and `artifact_sha256`. | `epics-stories.md:2481-2549,2665-2683,2698-2755,2758-2762,2794-2798,2062-2086,2107-2113,2122-2128`; `architecture.md:937-947,1402-1413,1453-1465,1478-1483`; `prd.md:212,227-229` | `scripts/service_execution_worker.py:129-132`; `scripts/service_execution_host.py:214-219`; `.github/workflows/self-deploy.yml:131-137,268-285,651-657`; `tests/unit/test_service_execution_worker.py:128-131`; `tests/unit/test_service_execution_host.py:109-112,140-144` |
+| R8-m1 (with A2) S4.17 PROD enablement | (a) Live now says the PROD job starts checking after the gate-2a PR (S4.7) that first sets `phase: workload`. (b) Enablement is data-driven: both jobs run from S4.17's merge; each reads its stack's installed `main` contract; on `phase: registry` it writes a distinct `registry-phase` record (S4.15 schema), emits a notice and exits 0; a missing contract exits non-zero. The self-contradiction ("enabled by the PR" vs. "a `phase: registry` stack is not handled here") is removed in S4.17, S4.7, AD-21, the architecture S4.17 item and FR-31; B2 is the new B case. (c) Gate 2b (S4.15 `complete`, S4.7 precondition and N3, FR-31, AD-21) requires a linked PROD `before-acceptance` or `checked` record from a scheduled run after the flip; `registry-phase` never counts. | `epics-stories.md:2550-2566,2807-2812,2819-2829,2062-2086,2838-2851,2875-2886,2899-2905`; `architecture.md:937-947,1414-1420`; `prd.md:212-213,291` | `scripts/poc_scheduled_registry_drift.py:104-119`; `.github/workflows/scheduled-drift.yml:23-147` |
+| R8-m2 S4.14 pin table incomplete | S4.14's first case is a grep-derived inventory over `scripts/` (three commands: the requested literals, 87 hits; indirect TEST-constant uses, 38 hits; and, from the pre-commit audit, the TEST registry set, tags, URNs, checkpoint key and mail domain, 41 hits; the check is keyed on file and matched text), with every hit owned or excluded, and a test that re-runs both (P3, N6). New S4.14 rows: materializer 24 and 126; `poc_contract.py` 99, 102-113 (`_mail_semantics`; S4.14 owns the code, XP-14 the PROD domain, map shipped without it so PROD fails closed) and 116-126 (`_registry_semantics`, account from the contract; runs for every contract, including XP-14's `poc-prod.json`); `poc_secret_observation.py` 11 (prefix from the contract account, so the S4.10-only `poc_workload_secret_result.py` is not edited); every `CONTRACT_PATH` consumer (`poc_phase_admission.py` 119, 216, 219; `poc_source_artifact.py` 256, 314; `poc_phase_source_adapter.py` 119, 181, 213, 241; entrypoint 18, 41; `poc_workload_admission.py` 110). New XP-14 rows: observer `_caller` 213-228, `_key` 325, `LOCKS` 43; `_REGISTRIES` 13-22; registry completion; the capture row gains `ecr_read` and the mail inventory; `poc_registry_plan.py` gains 51-59 and 63. S4.10 gains topology 955 and 149-151, and the S4.10 registry-set note (service and provider URNs derived from the stack's prefix; the PROD registry set is XP-14's and stubbed, so S4.10 needs nothing from row 48). New S4.14 row: `poc_workload_admission.py` `inspect_registry` (147-155); the images row gains the registry set (53, 239, 346); the observer row gains 42 and 345. Exclusions are listed with reasons. | `epics-stories.md:1679-1749,1810-1842,2014-2016,2030-2033,782-796`; `architecture.md:1364-1377,1514-1519`; `prd.md:429-439` | the three grep commands (87, 38 and 41 lines); `scripts/poc_workload_materializer.py:24,89,126`; `scripts/poc_contract.py:99,102-113,116-126,153,185,190`; `scripts/poc_secret_observation.py:11,19,52-73`; `scripts/poc_workload_secret_result.py:17,206,254,272`; `scripts/poc_phase_admission.py:24,119,216,219`; `scripts/poc_source_artifact.py:256,314`; `scripts/poc_phase_source_adapter.py:119,181,213,241`; `scripts/poc_workload_phase_entrypoint.py:18,41,107,111,314`; `scripts/poc_workload_admission.py:110,134`; `scripts/poc_backend_observer.py:43,213-228,325`; `scripts/poc_registry_phase_entrypoint.py:13-22,38-52`; `scripts/poc_registry_completion.py:30-33,105,118,257,367`; `scripts/poc_registry_runner.py:35,130-131,175-176,185-199,305,338,358-364`; `scripts/poc_mail_prerequisite.py:13-15`; `scripts/poc_workload_topology.py:61,149-151,859,955,1058,1160` |
+| R8-m3 S5.24 inventory | S5.24 adds the registry-row and refresh reads: `ecr:DescribeRepositories`, `ses:GetEmailIdentity`, `route53:GetHostedZone`, `route53:ListResourceRecordSets` and the provider refresh reads of those types; S4.17's gate runs the capture's registry-row checks. BI checked read-only: `origin/main` `bea5252` already grants those registry reads to the TEST Drift role (`_test_poc_capability_statements`, statements at 347, 356, 364, attached to every purpose at 457-461 while the TEST PoC identity is enabled, 329); `debd88b` does not; no BI grant covers PROD, so S5.24 adds the PROD equivalents. **Found while checking:** the read-only policy's explicit `DenySecretLeakingReads` (governance line 267) denies `ssm:GetParameter` and `ecr:GetAuthorizationToken` (ci_bootstrap 132-145), so S5.24 must narrow it for the Drift role; the exact form is the BI owner's security review with Kravalg's approval. `iam:SimulatePrincipalPolicy` is restricted to the execution role; `iam:GetRole` covers both roles. NFR-06 lists S5.24. | `epics-stories.md:2929,2450-2469,93`; `architecture.md:1466-1483,1588`; `prd.md:214` | `scripts/poc_scheduled_registry_drift.py:122-129`; `scripts/poc_registry_runner.py:185-199,254-263`; `scripts/poc_mail_prerequisite.py:301-310,389-424`; `scripts/poc_workload_capabilities.py:25-29,37-48,89,193-232,333,338,341`; BI `origin/main` `pulumi/infra/governance.py:267,289,329,347,356,364,457-461`, `pulumi/infra/ci_bootstrap.py:132-145` |
+| R8-m4 S4.17 projection and program semantics | The projection comes only from the latest success receipt (`SourceAdmission` facts, the applied contract, the full image rows, the certificate observation); fresh Drift-role reads (images, capabilities and certificate, checkpoint, registry rows) are comparisons, never inputs. The success receipt records the full image rows, the certificate observation `{parameter_arn, parameter_version, certificate_arn}` and the program trees (S1.1 schema, S4.11 writer, AD-24). S4.17 compares the program trees first (distinct reason `workload-drift-installed-program-changed`, B3), then the projection digest (`workload-drift-projection-binding`) and the generated-files digest. A TEST release (a no-op re-apply through the normal PR path, AD-24 release row) runs before the gate-2b clean `checked` run whenever code changed after the last apply (S4.17 Live, S4.7 precondition). | `epics-stories.md:160-175,894-900,2573-2591,2607-2623,2788-2793,2813-2829,2875-2886`; `architecture.md:1171-1178,1421-1440`; `prd.md:213` | `scripts/poc_workload_phase_entrypoint.py:52-93,101,104,194-208`; `scripts/poc_workload_capabilities.py:269-292`; `scripts/poc_workload_runner.py:177-184`; `scripts/poc_registry_runner.py:37` (`TRUSTED_PATHS`) |
+| R8-m5 docs drift | S4.14 and S4.17 amend `specs/poc/README.md` lines 52-57 (with the story's Kravalg approval), `docs/poc-workload-admission.md` line 10 and `docs/ci-guardrails.md` lines 147 and 170-181; NFR-10 lists `docs/ci-guardrails.md`. S4.13's amended sentence names the PR `drift` command. | `epics-stories.md:1844-1858,2684-2697,1589-1597`; `prd.md:249` | `specs/poc/README.md:52-57`; `docs/poc-workload-admission.md:10`; `docs/ci-guardrails.md:147,170-181`; `tests/unit/test_workload_apply_docs_consistency.py:175` (no test pins the three doc passages: grep of `tests/`) |
+| R8-m6 PROD counterparts of XP-10 and XP-11 | Numbered XP-15 and XP-16 in PRD §7, with the assumption that S4.14 pins the TEST-analogous names `/vilnacrm/prod/user-service/gateway-certificate-arn` and `arn:aws:iam::933245420672:policy/issue219/prod/boundary/`, which the owners confirm in the S4.14 PR before it merges (a naming statement recorded in row 39, so no forward dependency; pre-commit audit) and S4.7 verifies live. The parameter and the path existing live are a gate-2a prerequisite row (row 49) in the ordered list, and gate 2a (FR-31, AD-21) names them. | `prd.md:212,291,440-452`; `epics-stories.md:24,1799-1803,1825,2865-2874,3031`; `architecture.md:931,1340-1342` | `scripts/poc_workload_capabilities.py:30,111` |
+| R8-m7 S4.7 chain and approval | C-runner is S4.1 → … → S4.14 → S4.17 → S4.7; S4.7's unstubbed host seam test needs the `@Kravalg`-specific approval. | `architecture.md:1592`; `epics-stories.md:2833-2834,2852-2860,2960-2964` | `tests/unit/test_service_execution_host.py:233-322` |
+| R8-n1 role-session-name | The S4.17 steps and sibling test pin `gha-scheduled-test-drift-${{ github.run_id }}` and `gha-scheduled-prod-drift-${{ github.run_id }}`; the observer accepts the TEST name today and the PROD name once XP-14 makes `_caller` stack-aware (inventory row). | `epics-stories.md:2526-2535,2698-2726,2794-2798`; `architecture.md:1378-1384` (the session names at 1382-1383) | `scripts/poc_backend_observer.py:219-223`; `.github/workflows/scheduled-drift.yml:76,139` |
+| R8-n2 TEST campaign window | Recorded in S4.6 as a consequence of D-6's gate order, not a new risk acceptance. | `epics-stories.md:2176-2186` | — |
+| R8-n3 FR-32 coverage | The FR-32 row lists S4.14. | `epics-stories.md:81` | — |
+| R8-n4 residuals | Recorded below: a PROD stack with only failed or export receipts gets no drift check; a queued scheduled job can be cancelled by the concurrency group. | this file, "Residuals recorded in revision 8" | GitHub Actions concurrency: one running and at most one pending job per group; a newer pending job cancels the older pending one |
+| A1 PROD seam stand-ins | S4.14's PROD fixtures replace `_target_coordinates`, `_target` and `capture_backend` with checking stand-ins: PROD account, role, bucket and provider (and `target_environment == "prod"` for `_target`); a mismatch raises the observer's own `ValueError("Backend observation precondition failed")`, a match calls the patched `aws_read` boundary, so every fault keeps its meaning. | `epics-stories.md:1914-1933,2023-2029` | `tests/unit/test_service_execution_host.py:233-322`; `scripts/poc_backend_observer.py:76-79,181-210` |
+| A3 `prod_destructive_diff` `if` | Pinned exactly, with the `\|\|` parenthesized; an unparenthesized form fails (N4). | `epics-stories.md:1876-1884,2023-2029` | `tests/pulumi/test_ci_guardrails.py:246-255,281-284` |
+| A4 gate line, binding, wording | (1) Checked, not changed: `def _gate` of `scripts/poc_scheduled_registry_drift.py` is at line 136 in the tree (`cat -n`; line 134 is blank, `_recheck` is 132-133), so the plan keeps "line 136 on". (2) The S4.17 gate uses S4.14's stack-aware binding and never the TEST-only registry `_binding`; N3 lists `registry._binding`. (3) "as round 6 decided" now reads "as revision 6 ordered". | `epics-stories.md:2624-2654,2770-2776`; `architecture.md:1441-1452`; this file (round-7 residual) | `scripts/poc_scheduled_registry_drift.py:132-138`; `scripts/poc_registry_runner.py:266-283` |
+
+**Ordered list (re-verified in revision 8).** 53 rows (0-52): XP-15 and
+XP-16 are new at row 49 (gate-2a prerequisites), S5.24 moves to row 50,
+S4.17 to row 51 and S4.7 to row 52. No story depends on a higher-numbered
+row. The checks added in revision 8: S4.14 (row 39) pins the XP-15 and
+XP-16 names as an assumption the owners confirm in the S4.14 PR itself
+(row 49 is the live parameter and path, not the confirmation) and uses
+stubs or checking
+stand-ins for every XP-14 row, including the absent PROD mail domain, so it
+reads nothing from rows 48-49; S4.10 (row 28) derives the stack's URN
+prefix, root, provider and service URNs without XP-14 and stubs the PROD
+registry set; S5.24 (row 50) grants on the XP-15
+parameter (row 49) and holds its own inventory from existing modules and
+BI code; S4.17 (row 51) follows S1.1 (row 2, the new receipt fields),
+S4.11 (row 29), S4.14 (row 39, the stack-aware binding), S4.15 (row 40,
+the `registry-phase` status and the two-item gate-2b rule), XP-14, XP-15,
+XP-16 and S5.24; S4.7 (row 52) follows S4.17 in C-runner. See
+`epics-stories.md:3036-3073`.
+
+**Residuals recorded in revision 8 (not new risk acceptances).**
+
+- **TEST campaign window (R8-n2).** Now recorded in S4.6: from the gate-1
+  flip until S4.17 merges, the TEST workload stack gets drift checks only
+  from `test_workload_drift` after each post-acceptance apply.
+- **PROD stack with only failed or export receipts (R8-n4).** A
+  `phase: workload` stack whose lineage has no workload success receipt
+  (for example after a failed first PROD apply) gets no scheduled drift
+  check: S4.17 writes a `before-acceptance` record with a `null` receipt
+  and exits 0 with the warning, and the baseline no longer covers the
+  stack. The recovery path (S4.3 `export`, then `resume`) is the control,
+  and the warning is visible every night.
+- **Queued scheduled job cancelled by the concurrency group (R8-n4).**
+  The S4.17 jobs share `pulumi-state-…-<env>-<env>` with the PR jobs of
+  the stack. GitHub Actions keeps at most one pending job per group, so a
+  queued scheduled job is cancelled if a newer job for the same group
+  queues behind a running one. That night then has no scheduled check for
+  the stack; the run shows as cancelled, not green, and the next night
+  runs again.
+- **Code changes after the last apply (R8-m4).** Any merge that changes
+  a program tree makes the next scheduled run of each workload stack fail
+  with `workload-drift-installed-program-changed` until a release
+  re-applies that stack. This is visible, never silent; for PROD after
+  gate 2b it is an operating rule (re-apply after code changes), recorded
+  here.
+- **Preview-role deny (found while checking R8-m3; not changed).** The
+  same `DenySecretLeakingReads` applies to the service Preview role. The
+  PR `plan` path's certificate-parameter and ECR-token reads under that
+  role depend on XP-11 (the #219 grants, "the exact SSM read grant"),
+  which this plan treats as an external prerequisite. The next reviewer
+  or the coordinator should confirm that XP-11 narrows the Preview-role
+  deny as S5.24 does for the Drift role.
+
+## Pre-commit audit of revision 8
+
+A read-only `claude-router:audit` subagent, with fresh context, audited
+the uncommitted revision-8 diff against `72873f9` before the commit. It
+could not edit files and ran no make, pulumi or aws command.
+
+- **Result: REFUTED.** It spot-checked more than 60 newly cited source
+  lines (including the bootstrap-infrastructure citations) and found them
+  accurate. It reproduced both grep counts (87 and 38) with every hit in
+  the table, and confirmed A4's point 1: `def _gate` is at line 136. It
+  rated R8-M1, R8-m1, R8-m3, R8-m4, R8-m5, R8-m7, n1-n4, A1 and A3
+  addressed, found no invented user decision, and found the row numbers
+  consistent.
+- **Findings and what revision 8 did:**
+  1. (minor, close to major) The inventory was not complete by
+     construction: neither grep matched `registry.REGISTRIES`,
+     `graph._graph`, `*_URN`, `DEFAULT_TAGS`, `from poc_registry_plan
+     import`, `urn:pulumi:test::`, `/test.json` or `vilnacrmtest`, and
+     S4.10's PROD graph silently depended on XP-14's registry names.
+     Fixed: a third grep (41 hits) with every hit owned or excluded; new
+     rows (`inspect_registry`, the images registry set, observer 42 and
+     345); the S4.10 registry-set note (service and provider URNs derived
+     from the stack's prefix, the PROD registry set stubbed, no PROD
+     registry name assumed); the inventory test keys on file and matched
+     text.
+  2. (minor) Forward dependency: S4.14 (row 39) waited on a confirmation
+     placed at row 49. Fixed: the owners confirm the names in the S4.14 PR
+     (a naming statement in row 39); row 49 is the parameter and path
+     existing live.
+  3. (minor) The result schema required a captured checkpoint for
+     `registry-phase`, which captures none. Fixed: `null` for
+     `registry-phase`, with S4.15 B2 cases.
+  4. (nit) Location and Source lines off by about 3, and
+     `TRUSTED_PATHS` at line 37. Fixed: every round-8 Location range was
+     recomputed from the final text.
+  5. (nit) "the repository's retention for every upload" overstated.
+     Fixed: "every upload in `self-deploy.yml`".
+  6. (nit) The FR-31 boundary cell omitted XP-15 and XP-16. Fixed.
+  7. (nit) The inventory test keyed on line numbers. Fixed with item 1.
+- No invented user decision was found.
+- **Not yet confirmed:** a recheck of these fixes by the same auditor was
+  requested but had not returned when this revision was committed. The
+  fixes are therefore unconfirmed by the auditor, and the next
+  independent reviewer should check them.
 
 ## Round-7 finding → resolution map
 
@@ -106,8 +239,8 @@ S4.11 writer (row 29); S5.24 (row 49) holds its own inventory. See
 
 **Residual, recorded (not a new risk acceptance).** The TEST workload stack
 leaves the baseline scheduled drift at the gate-1 flip, and S4.17 (row 50)
-merges after the TEST campaign (row 43), as round 6 decided (S4.17 is a
-gate-2b precondition). During the campaign, workload drift is checked by
+merges after the TEST campaign (row 43), as revision 6 ordered (S4.17 is a
+gate-2b precondition; wording corrected in revision 8, R8-A4). During the campaign, workload drift is checked by
 `test_workload_drift` after every post-acceptance apply (S4.6 step 14), not
 nightly. The registry resources of a stack are outside the baseline program
 either way (the registry owner's recorded case, S4.13).
@@ -244,16 +377,29 @@ These are recorded gates, not planning defects.
   at lines 199-201), the TEST registry constants of
   `scripts/poc_registry_plan.py`, and the committed
   `specs/poc/poc-prod.json`, which must validate against the S4.14 PROD
-  schema (R6-m5, R6-m11, R7-m3, R7-m4).
-- **PROD counterparts of XP-10 and XP-11 (R7-m3).** The PROD gateway
-  certificate parameter and the PROD permissions-boundary path are recorded
-  with their owners and pinned in S4.14; gate 2a refuses PROD without
-  them.
+  schema (R6-m5, R6-m11, R7-m3, R7-m4). Revision 8 adds, from the grep
+  inventory (R8-m2): the observer's `_caller`, `_key` and `LOCKS`,
+  `_REGISTRIES`, the PROD registry completion, the PROD SES domain, zone
+  and identity (including the `prod` entry of the `_mail_semantics`
+  domain map, absent until then so PROD fails closed) and the PROD
+  counterpart of the TEST image publisher environment.
+- **XP-15 and XP-16 (R7-m3, R8-m6).** The PROD gateway certificate
+  parameter (gateway owner) and the PROD permissions-boundary path
+  (bootstrap owner), numbered in PRD §7 and ordered as row 49, a gate-2a
+  prerequisite. S4.14 pins the TEST-analogous names as an assumption the
+  owners confirm in the S4.14 PR (a naming statement recorded there, not
+  the row-49 deliverable, which is the parameter and path existing live);
+  S4.7 verifies them live.
 
 ## Remaining user decisions
 
-None are open for planning. Some decisions arise only if a live check or
-measurement fails:
+None are open for planning. Revision 8 records three confirmations that
+are owner or review items, not user decisions: the XP-15 and XP-16 names
+(the owners confirm the TEST-analogous names in the S4.14 PR), the
+PROD mail domain (XP-14), and the exact form of the Drift-role deny
+narrowing in S5.24 (the BI owner's security review, approved by
+Kravalg). Some decisions arise only if a live check or measurement
+fails:
 
 | ID | Trigger | State |
 | --- | --- | --- |
@@ -278,8 +424,11 @@ measurement fails:
 - drift-management (FR-32 on the executed workload path: S1.11, S4.10,
   S4.13 `test_workload_drift`, routed by the authenticated receipt lineage;
   the per-stack scheduled-drift exclusion; S4.17 scheduled workload drift
-  in the isolated worker container before gate 2b, with a `checked` result
-  record)
+  in the isolated worker container before gate 2b, data-driven per stack,
+  with an uploaded result record (`checked`, `before-acceptance` or
+  `registry-phase`), a projection bound only to the receipt, and a
+  distinct failure when the installed program differs from the applied
+  base)
 - python-pulumi
 - infrastructure-quality
 - evidence-and-coverage

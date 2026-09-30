@@ -11,7 +11,7 @@ This file is the execution ledger. It is not a planning input.
 | Worktree | wt-usi-hardening |
 | Branch | feat/workload-wa-hardening |
 | Source baseline | 66776772979956de9c5abdbee7c45641a1b533fa (PR #56 head) |
-| Bundle revision | 4 (answers readiness round 4; parent commit 1ebbd09, which recorded D-1…D-7) |
+| Bundle revision | 5 (answers readiness round 5; parent commit 57f38aa, revision 4) |
 | Specs directory | `specs/workload-wa-hardening/` (slug chosen by the caller) |
 | Target | pulumi (Python Pulumi), stacks test and prod |
 | Environment | none selected; planning is offline |
@@ -44,6 +44,24 @@ This file is the execution ledger. It is not a planning input.
 
 - `specs/poc/README.md` sha256: 8ad9ccf4ae28083c36e30909a21d8ebec4fc0d40a9b716c9bb8b78b6276ed5b7
 - `decisions.md` (the user decisions, a planning input; hash below)
+- Repository source read for revision 5 at `57f38aa`, without executing it:
+  `Makefile`, `scripts/run_pulumi_command.py`,
+  `scripts/_pulumi_command_support.py`, `scripts/run_pulumi_drift_check.py`,
+  `.github/workflows/scheduled-drift.yml`, `.github/workflows/self-deploy.yml`,
+  `pulumi/__main__.py`, `pulumi/app/workload_phase.py`,
+  `pulumi/app/environment.py`, `pulumi/app/data.py`,
+  `scripts/poc_workload_reconciliation.py`, `scripts/poc_registry_plan.py`,
+  `scripts/poc_workload_secret_result.py`, `scripts/poc_gateway_backend.py`,
+  `scripts/poc_workload_topology.py`, `scripts/poc_workload_runner.py`,
+  `scripts/service_execution_worker.py`, `scripts/service_execution_host.py`,
+  `scripts/poc_scheduled_registry_drift.py`,
+  `scripts/configure_github_repository_controls.py`,
+  `scripts/_github_repository_controls.py`,
+  `scripts/_github_environment_controls.py`,
+  `scripts/_github_evidence_environment.py`,
+  `specs/poc-workload-runner.md`, `docs/poc-workload-reconciliation.md`, the
+  test tree listing; bootstrap-infrastructure @debd88b
+  `scripts/configure_github_repository_controls.py` (read-only)
 - Repository source read for revision 4 at `1ebbd09`, without executing it:
   `scripts/poc_workload_runner.py`, `scripts/poc_workload_topology.py`,
   `scripts/poc_workload_secret_result.py`, `scripts/pulumi_ci_guardrails.py`,
@@ -63,18 +81,19 @@ This file is the execution ledger. It is not a planning input.
 - User decisions given in chat on 2026-09-30 and relayed by the coordinator: D-1…D-7 (`decisions.md`). The D-4 and D-5 clarifications came in a second message the same day, and D-8…D-13 (derived details) were confirmed in a third.
 - Read-only cross-repository reconnaissance: bootstrap-infrastructure @debd88b, api-gateway-infrastructure, and user-service @main via `gh api`
 
-## Artifacts (sha256, revision 4)
+## Artifacts (sha256, revision 5)
 
-`run-summary.md` is not hashed here, because it contains the hashes. `decisions.md` is a planning input and is hashed.
+`run-summary.md` is not hashed here, because it contains the hashes. `decisions.md` is a planning input and is hashed (unchanged in revision 5).
+Check with `sha256sum -c` over the block below, from `specs/workload-wa-hardening/`.
 
 ```
 beca16ba9ab95d76cd28ed47ac8e806549b94805ddca9a2d138a790ee0f0ca59  research.md
-46c1ba7c79a6f07361df9a2736f7a3454f68c5048a9f946a1d53ac6ce9879036  brief.md
-f1649a39e043a1b7239f37f9c7696f8f6c39234907a96b38a71d02249037117f  prd.md
-f4293b734759be829901280b75440bdde79a0b45b55dd98c14b38b3a767b701e  architecture.md
-73ee4d9f20d5e243230244a13af3486910eca8ea824564291a86fbfc84ba4086  epics-stories.md
+bc15290586a30ad04e127dad20bd9e95246d3b7a8633c7a3136a08a78415931b  brief.md
+90251f2d5f4e76f1c62ac94cffeb4507e64271b0e7e85d4a16b7d8f855d9c7c4  prd.md
+8bbcf15c2459a01894076dd380637c6cb01311271aad024980bc4ebf06d6b975  architecture.md
+b7b5bf5a7c156aa0f43960455d5ab816ca591b69d7b15a7a89db9367b7fd3bc0  epics-stories.md
 beaf6b72a82aa0a61936de4edcf9d9b4eb1c3876962a683d62c827de67051048  decisions.md
-1856172f5fa2f090d07e92b6597f5ea7c042eb728c6eb1e238442797717b8f5c  readiness.md
+dfb9f07749d870fc19c5b4b23b2826630e72a88b7b33c7ad56b9fa6c1e39bbc6  readiness.md
 ```
 
 ## Gates
@@ -87,52 +106,68 @@ beaf6b72a82aa0a61936de4edcf9d9b4eb1c3876962a683d62c827de67051048  decisions.md
 | 2 | Result not stored in this bundle |
 | 3 | FAIL (B-1, B-2, M-1…M-13, m-1…m-12); fixed in revision 3 |
 | 4 | FAIL (R4-B1…B3, R4-M1…M10, m1…m12); fixed in revision 4 |
-| 5 | Requested; not run (last allowed round) |
+| 5 | FAIL (R5-M1…M5, m1…m18; every round-4 finding confirmed resolved); fixed in revision 5 |
 
-Stage status: **BLOCKED** until the independent round-5 review reports PASS.
+Stage status: **BLOCKED** until an independent review of revision 5 reports
+PASS. Round 5 was recorded as the last allowed round; whether another
+independent round runs is for the coordinator and the user to decide.
 `readiness.md` is written by the author and says PENDING; it is not a PASS.
 
-**Attempt ledger:** canonical `attempts.json` was NOT initialized. The atomic reservation needs verified host write isolation for the copied ledger_reference package, and a same-user host cannot provide it. The ledger is therefore BLOCKED. Attempt count by caller record: 1 procedure run, with 4 of 5 review rounds used and round 5 (the last) pending. This count is not canonical.
+**Attempt ledger:** canonical `attempts.json` was NOT initialized. The atomic reservation needs verified host write isolation for the copied ledger_reference package, and a same-user host cannot provide it. The ledger is therefore BLOCKED. Attempt count by caller record: 1 procedure run, with all 5 recorded review rounds used (round 5: FAIL, answered by revision 5). This count is not canonical.
 
-## Acceptance checklist for the round-5 reviewer
+## Acceptance checklist for the next independent reviewer
 
 A reviewer ticks each item from the bundle text and the cited source, not
 from this list.
 
-- [ ] Every round-4 finding in `readiness.md` maps to text that resolves it
+- [ ] Every round-5 finding in `readiness.md` maps to text that resolves it
       at the cited file and line, and the cited source lines say what the
       plan claims.
-- [ ] D-1…D-7 are dated 2026-09-30 resolutions in `decisions.md`, PRD §6,
-      the brief and the epics; no "pending", "default" or "only if D-7"
-      wording remains; S5.15 is dropped.
+- [ ] D-1…D-7 and D-8…D-13 are dated 2026-09-30 in `decisions.md`; the RPO,
+      RTO and cost-threshold values are labelled planning targets, not user
+      decisions.
 - [ ] The PRD §1 counts equal the tables: 35 FRs, 11 NFRs, 46 total; 41
       offline-testable; 5 evidence-only NFRs; 34 FRs with live evidence (all
       but FR-29).
-- [ ] FR-35 and the C-runner chain (S4.4 → S4.5 → S4.11 → S4.12 → S4.13 →
-      S4.14) precede S4.6; the README line-127 and test line-175/185
-      amendment is in S4.13.
-- [ ] The `secretsmanager` endpoint policy has no XP-8 value.
-- [ ] S4.10 is the only writer of the topology, secret-history checker and
-      native integration test; the transition rule is stated.
-- [ ] Abandon compares every `delete` of every type 1:1, allows only
-      `delete`/`same`, retains the log buckets, names the recovery identity
-      and grants, needs Kravalg specifically, and runs at steps 18–20.
+- [ ] The FR-32 check is on the executed workload drift path
+      (`test_post_apply_drift` → worker → runner → `workload-drift` →
+      `poc_workload_reconciliation.validate_drift`), the preview role
+      produces the gate-2 clean-drift evidence, `scheduled-drift.yml`
+      excludes workload-phase stacks with a recorded reason, and nothing is
+      planned in `scripts/run_pulumi_drift_check.py`.
+- [ ] Every recovery subcommand that writes the checkpoint writes a receipt;
+      `clear-pending` → `resume` is admitted offline.
+- [ ] `scaling` has one `at` per action; earlier entries are immutable once
+      in state; the window applies only to the new entry.
+- [ ] S1.11 follows S2.1 and S1.8 (C-contract S1.1 → S1.7 → S1.9 → S1.8 →
+      S1.11 → S4.10).
+- [ ] S4.10 owns the narrow `ignoreChanges`/`retainOnDelete` allowance in
+      `poc_workload_reconciliation.py` and `poc_workload_topology.py`.
+- [ ] FR-35 and the C-runner chain (S4.1 → S4.4 → S4.5 → S4.11 → S4.12 →
+      S4.13 → S4.14) precede S4.6; the failure-path receipt is published by
+      `test_apply_receipt`.
 - [ ] Step 2 starts tasks with a create-only one-time action (V-23);
-      `rollback-zero` is create-only; TEST schedules are in the step-2 set.
+      `rollback-zero` has three phases: `stop` (create-only), `hold` (TEST
+      only, one `suspendedState` update per target) and `start` (flag clear
+      plus a create-only start action); V-23(e) is the provider-source first
+      case of S2.1 and S4.9; TEST schedules are in the step-2 set.
+- [ ] The health observation runs in its own job; the apply's FR-24 bounds
+      are unchanged.
+- [ ] USI's own repository controls apply the five Kravalg-only
+      environments (S5.21) and the pinned `abandon-manifest-approval` check
+      (S5.22).
 - [ ] The V-3 fallback is an update-only `policy-update`, never a delete.
 - [ ] S5.18a precedes step 1 and S5.18b follows XP-8.
-- [ ] AD-15a lists principal, actions and conditions per key.
-- [ ] V-21 and V-22 cover the managed-password and restore grants.
-- [ ] XP-9…XP-13 are gate-1 checks.
 - [ ] The ordered list has no forward dependency.
 - [ ] `readiness.md` does not claim PASS and names its author.
-- [ ] The artifact hashes above match the committed files.
+- [ ] The artifact hashes above match the committed files
+      (`sha256sum -c`).
 
-## Scope limits of revision 4
+## Scope limits of revisions 4 and 5
 
 - No aws or pulumi command ran against any account; no repository test, lint
   or preview ran; no secret value was read; nothing was pushed or commented.
 - The only local commands were file reads and greps of this repository and
   the read-only bootstrap-infrastructure clone, AWS documentation lookups
-  (aws-knowledge MCP), a Python table and count check over the bundle, and
-  `sha256sum`.
+  (aws-knowledge MCP, revision 4 only), Python text edits and table checks
+  over the bundle, `sha256sum`, and a local `git commit` of the bundle.

@@ -4,7 +4,7 @@ workflow: _bmad/bmm/workflows/3-solutioning/bmad-create-epics-and-stories (Creat
 task: workload-wa-hardening
 source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa
 date: 2026-09-30
-revision: 4 (readiness round-4 findings addressed; decisions D-1…D-7 of 2026-09-30 applied)
+revision: 5 (readiness round-5 findings R5-M1…M5 and m1…m18 addressed; decisions D-1…D-13 of 2026-09-30 applied)
 inputDocuments: [prd.md, architecture.md, decisions.md]
 ---
 
@@ -63,8 +63,8 @@ All of these are defined in `prd.md` and `architecture.md`.
 | FR-18 | S3.4, S1.3, S1.4 |
 | FR-19 | S3.5-B (TEST), S5.20 + S3.5-A (PROD), S4.7 P-1 |
 | FR-20 | S4.1 |
-| FR-21 | S4.2, S4.3, S5.7, S5.21 |
-| FR-22 | S4.3, S5.7, S5.19, S5.21 |
+| FR-21 | S4.2, S4.3, S5.7, S5.21 (USI controls) |
+| FR-22 | S4.3, S5.7, S5.19, S5.21 (USI controls) |
 | FR-23 | S4.4 |
 | FR-24 | S4.5, S5.6, S4.6 |
 | FR-25 | S5.8, S4.6 |
@@ -72,12 +72,12 @@ All of these are defined in `prd.md` and `architecture.md`.
 | FR-27 | S5.1, S5.2, S5.3, S5.4, S5.7, S5.17, S5.18a, S5.18b, S5.19, S5.23, S4.16 |
 | FR-28 | S5.16, S4.6 step 17 |
 | FR-29 | S1.10 |
-| FR-30 | S4.8, S5.18a, S5.18b, S4.9 (`rollback-zero`) |
+| FR-30 | S4.8 (with the AD-19 RPO/RTO targets), S5.18a, S5.18b, S4.9 (`rollback-zero`) |
 | FR-31 | S4.15, S4.6, S4.7 |
-| FR-32 | S1.11, S4.6 step 14 |
+| FR-32 | S1.11 (list and program check), S4.10 (checkpoint-field allowance), S4.13 (drift reducer on the executed path), S4.6 step 14 |
 | FR-33 | S5.17, S5.4 (KMS read), S4.6 step 3 |
 | FR-34 | S4.9, S4.10, S1.3, S4.6 steps 4–7 |
-| FR-35 | S4.11, S4.12, S4.13, S4.14, S4.3 (export and abandon receipts), S4.6 steps 4, 7, 7b, 13, 14, 20 |
+| FR-35 | S4.11, S4.12, S4.13, S4.14, S4.3 (export, clear-pending, import and abandon receipts), S4.6 steps 4, 7, 7b, 13, 14, 20 |
 
 | NFR | Stories |
 | --- | --- |
@@ -89,7 +89,7 @@ All of these are defined in `prd.md` and `architecture.md`.
 | NFR-06 | S5.1–S5.7, S5.17, S5.18a, S5.18b, S5.19, S5.21, S4.6 step 3 |
 | NFR-07 | S1.1, S4.2, S4.4, S4.9, S4.10, S4.11–S4.14, S4.6 |
 | NFR-08 | S2.4, S4.6 step 11 |
-| NFR-09 | S4.3, S4.6 steps 13, 19 and 20 |
+| NFR-09 | S4.3 (receipt after every checkpoint-writing subcommand), S4.2, S4.6 steps 13, 19 and 20 |
 | NFR-10 | S1.7, S4.3, S4.10, S4.13, S4.6 |
 | NFR-11 | S2.6 |
 
@@ -125,19 +125,29 @@ Every hard-stop precondition has an FR:
 
 ### S1.1 (USI): Move secret generation out of Pulumi state and amend the contract
 
-- **Chains:** C-contract and C-runtime head.
+- **Chains:** C-contract, C-runtime and C-composition head.
 - **Scope:**
-  - `runtime_secrets.py`: remove the Random and TLS generators and every
+  - `runtime_secrets.py`, **hardened branch only** (a projection with
+    `workload_step`): it renders no Random or TLS generator and no
     `SecretVersion`; declared purposes `app_secret`, `oauth_encryption_key`
-    (plus the interim `non_rotatable` KMS purposes until S1.8);
+    (plus the interim `non_rotatable` KMS purposes until S1.8). The
+    pre-hardening branch keeps its generators unchanged until S4.10 deletes
+    that branch (m9; see the transition rule below);
+  - `pulumi/app/workload_phase.py`: the `workload_step` branch that selects
+    the hardened or the pre-hardening composition (C-composition head, m6);
   - the schema (AD-04), including `admission`, `workload_step`,
-    `documentdb_secret_policy`, `start_at` and the `central` XP-8 fields;
+    `workload_operation`, `documentdb_secret_policy`, `scaling`
+    (`starts: [{seq, at}]`, `stops: [{seq, at}]`, `consumed`; R5-M3) and the
+    `central` XP-8 fields;
   - the workload `central` fields of architecture AD-04 (every role, function,
     key and XP-8 field that S1.5, S2.5, S3.3 and admission read), the
     top-level `workload_operation` and `scaling` fields;
   - the receipt **schemas** (`schemas/poc-workload-{step,export,import,abandon,accepted}-receipt-v1.schema.json`),
     so S4.10's rebuild variant and S4.11's library read schemas that already
-    exist;
+    exist. Every receipt carries its `workload_operation`; the export
+    receipt has `cause` ∈ {`export`, `clear-pending`} and, for
+    `clear-pending`, a required `predecessor` (receipt ID and checkpoint
+    sha256) (R5-M2);
   - `poc_contract.py`;
   - `poc_secret_observation.py`;
   - the **transition rule** (architecture AD-25): the hardened shape renders
@@ -154,7 +164,8 @@ Every hard-stop precondition has an FR:
 **Acceptance criteria:**
 
 - **P:** with a `workload_step` projection, the graph has no `random:*`,
-  `tls:*` or `SecretVersion` types.
+  `tls:*` or `SecretVersion` types; without one, the pre-hardening graph is
+  unchanged (the generators stay there until S4.10).
 - **P:** the registry contract digest is unchanged.
 - **P:** `test_actual_workload_program_native_first_plan` passes unchanged
   (the pre-hardening projection still renders the installed graph).
@@ -162,7 +173,8 @@ Every hard-stop precondition has an FR:
 - **N:** a missing central function ARN or CMK gives BLOCKED admission.
 - **N:** a Redis secret purpose is rejected by the schema (D-1 = IAM).
 - **B:** seed input with any key other than `secret_arn` and `purpose` is
-  rejected.
+  rejected; a `scaling` entry without `at`, or a `clear-pending` export
+  receipt without `predecessor`, fails the schema.
 
 **Risk:** ST (guarded by AD-09), CON.
 
@@ -199,7 +211,9 @@ Every hard-stop precondition has an FR:
 
 ### S1.3 (USI): DocumentDB IAM wiring, bootstrap-job SG, step-1 shape, DSN tests
 
-- **Chains:** C-data, C-network head, C-compute head.
+- **Chains:** C-data, C-network head, C-compute head; C-composition after
+  S1.1 (the step-1/step-2 structure and the XP-8 exports in
+  `workload_phase.py`).
 - **Scope:**
   - plain-env `MONGODB_URL`;
   - engine `5.0.0`, instance-based; anything else raises (V-17, docs);
@@ -222,7 +236,8 @@ Every hard-stop precondition has an FR:
 
 ### S1.4 (USI): Redis IAM authentication (D-1, decided)
 
-- **Chains:** C-data, C-network, C-compute.
+- **Chains:** C-data, C-network, C-compute; C-composition after S1.3 (the
+  ElastiCache user and user-group types in `TAGGABLE_TYPES`).
 - **Scope:**
   - `transit_encryption_enabled=True`, `transit_encryption_mode="required"`,
     no `auth_token`;
@@ -270,33 +285,52 @@ Every hard-stop precondition has an FR:
   (`compute.py`) get the runtime CMK in S1.8 (C-compute); the SNS topic in
   S2.3; the flow-log bucket in S3.1.
 
-**Acceptance criteria:** the PRD FR-10 rows. **N:** a log group without
-`kms_key_id` fails; a DocumentDB `master_user_secret_kms_key_id` fails.
+**Acceptance criteria:** the PRD FR-10 rows. **N (fixtures only, m10):** on a
+`workload_step` fixture, a DocumentDB audit or profiler log group without
+`kms_key_id` fails, and a DocumentDB `master_user_secret_kms_key_id` fails.
+The check over every log group of the real program (ECS, Container
+Insights, flow logs) is not made here, because S1.8 adds those keys later;
+it is S4.10 N3.
 **Live (TEST):** S4.6 step 7 (`DescribeSecret` `KmsKeyId`,
 `DescribeLogGroups` `kmsKeyId`).
 
 ### S1.11 (USI): Drift allow-list contract (FR-32)
 
-- **Chains:** C-contract after S1.9.
+- **Chains:** C-contract after S1.8 (R5-M4). S1.8 follows S2.1 in C-compute,
+  so the program's `ignore_changes` (ECS `desiredCount`, target
+  `minCapacity`/`maxCapacity`) exist when this story checks them. Ordered
+  row 20, after S2.1 (row 16) and S1.8 (row 19).
 - **Scope:**
   - `drift.out_of_band_fields` in the schema and contract, exactly the AD-23
-    table;
-  - `test_drift_allow_list.py`: every `ignore_changes` in the program is on
-    the list;
-  - `scripts/run_pulumi_drift_check.py`: after a refresh, any state change on
-    an unlisted field fails the check, with the field named in the sanitized
-    summary.
-- **V-13** (docs + provider source) is the first case.
+    table, in two parts (audit): `ignore_fields` (ECS `desiredCount`; target
+    `minCapacity`, `maxCapacity`) and `refresh_only_fields` (DocumentDB
+    `masterUserSecrets[*].secretStatus`, an output). This story is the only
+    writer of the list; S2.1 adds the program's `ignore_changes` and does
+    not edit the list;
+  - `test_drift_allow_list.py`: the program's `ignore_changes` (a
+    `workload_step` projection of the real program, after S2.1) equal
+    `ignore_fields` both ways; every `refresh_only_fields` entry names an
+    output of a type in the program and has no `ignore_changes`;
+  - a doc marker for the list in `docs/poc-workload-admission.md` (NFR-10).
+- The FR-32 drift **reducer** is not here: it runs on the executed workload
+  drift path (`scripts/poc_workload_reconciliation.py::validate_drift`,
+  called by the runner's `workload-drift` dispatch) and is S4.13. Nothing
+  goes into `scripts/run_pulumi_drift_check.py`, which no workflow or make
+  target runs (architecture §1 and AD-23).
+- **V-13** (docs) is cited for the list semantics; its first case, with the
+  engine source, is in S4.13.
 
 **Acceptance criteria:**
 
-- **P:** program `ignore_changes` equals the list.
+- **P:** program `ignore_changes` equals `ignore_fields`.
 - **N1:** an extra `ignore_changes` field fails.
-- **N2:** a refresh fixture changing `aws:elasticache/user:User.accessString`
-  fails the drift check.
-- **N3:** a list entry for a type not in the program fails (closed list).
-- **B:** a refresh fixture changing only ECS `desiredCount` passes.
-- **Live (TEST):** S4.6 step 14.
+- **N2:** a list entry for a type not in the program fails (closed list).
+- **N3:** a `refresh_only_fields` entry that names an input, or that the
+  program also ignores, fails.
+- **B:** an `ignore_fields` entry that the program does not ignore fails
+  (equal both ways); the DocumentDB `refresh_only_fields` entry passes with
+  no `ignore_changes` on the cluster.
+- **Live (TEST):** S4.6 step 14 (with S4.13).
 
 ### S1.6 (USI): Rotation wiring and idempotent synchronous seed
 
@@ -378,34 +412,53 @@ Every hard-stop precondition has an FR:
 
 ### S2.1 (USI): Web autoscaling
 
-- **Chains:** new `autoscaling.py`, plus `compute.py` (`ignore_changes`) in
-  C-compute after S1.10. The autoscaling targets belong to the step-2 set.
+- **Chains:** new `autoscaling.py` (C-autoscaling head), `compute.py`
+  (`ignore_changes`) in C-compute after S1.10, and the autoscaling-plane
+  wiring and taggable types in `pulumi/app/workload_phase.py`
+  (C-composition, m6). The autoscaling targets belong to the step-2 set.
 - **Scope:** targets with `min = max(contract min, 1)` and
-  `ignore_changes=["minCapacity","maxCapacity"]`; target-tracking policies;
-  the one-time start action `<svc>-start-<seq>` (`at(<start_at>)`,
-  `depends_on` the target and policies) and the `rollback-zero` stop action
-  `<svc>-stop-<seq>` (`min = max = 0`) with the target's
-  `suspendedState.scheduledScalingSuspended` set while stopped. Both are
-  rendered from the contract `scaling` lists, so each start or stop is a new
-  URN, and a name in `scaling.consumed` is not rendered (architecture
-  AD-10). The target-tracking values are contract values. The TEST
-  scale-out is exercised by setting the policy's high alarm (`SetAlarmState`),
-  so this story has no front-door dependency.
-- **V-23** (docs, A-26) is the first case.
+  `ignore_changes=["minCapacity","maxCapacity"]`; ECS services with
+  `ignore_changes=["desiredCount"]`; target-tracking policies; one one-time
+  start action `<svc>-start-<seq>` per `scaling.starts` entry and one stop
+  action `<svc>-stop-<seq>` (`min = max = 0`) per `scaling.stops` entry, each
+  with `schedule = at(<that entry's at>)` (per-action times, R5-M3), the
+  start actions `depends_on` the target and policies, and the target's
+  `suspendedState.scheduledScalingSuspended` set while stopped. A name in
+  `scaling.consumed` is not rendered (architecture AD-10). The
+  target-tracking values are contract values. The TEST scale-out is
+  exercised by setting the policy's high alarm (`SetAlarmState`), so this
+  story has no front-door dependency. This story does not edit
+  `drift.out_of_band_fields` (S1.11 owns it, R5-M4). Every resource and
+  every `ignore_changes` of this story renders only for a `workload_step`
+  projection (AD-25 transition rule, audit), so
+  `test_actual_workload_program_native_first_plan` stays green until
+  S4.10.
+- **First cases:** **V-23(e)** (provider source, m1): the pinned
+  `pulumi-aws` provider's update path for `aws:appautoscaling/target:Target`,
+  recording whether `RegisterScalableTarget` re-sends `MinCapacity` and
+  `MaxCapacity` and which values it sends under `ignore_changes` with
+  `up --refresh`; then **V-23** (docs, A-26). V-23(d) stays a live STOP at
+  step 15.
 
 **Acceptance criteria:**
 
 - The PRD FR-11 rows.
 - **N:** a start action with `min < 1`, or a stop action in a plan that also
   changes the target, fails.
-- **B:** adding `start` sequence 2 after `stop` sequence 1 renders exactly
-  one new URN.
+- **B1:** appending the stop entry `seq: 1` after the start entry `seq: 1`, then the start entry `seq: 2`, renders
+  exactly one new URN each time, and every earlier action's rendered inputs
+  (`schedule`, `scalable_target_action`) are byte-equal to the previous
+  rendering (FR-11: no change to an earlier action).
+- **B2:** a fixture that changes an earlier entry's `at` changes that URN's
+  `schedule` input, which S4.9 admission refuses (the entry is immutable
+  once in state); moving an entry to `scaling.consumed` removes it from the
+  rendering and changes no other URN.
 - **Live (TEST):** S4.6 step 7 (start observed, V-23), step 12 (scale-out
   by the alarm exercise), step 15 (stop, hold and restart; V-23 d).
 
 ### S2.2 (USI): Worker backlog autoscaling
 
-- **Scope:** `autoscaling.py`, after S2.1.
+- **Scope:** `autoscaling.py` (C-autoscaling), after S2.1.
 
 **Acceptance criteria:**
 
@@ -414,7 +467,11 @@ Every hard-stop precondition has an FR:
 
 ### S2.3 (USI): Owned SNS topic
 
-- **Scope:** new `observability.py`.
+- **Scope:** new `observability.py` (C-observability head), and its wiring
+  into `WorkloadPhaseStack` (`pulumi/app/workload_phase.py`, C-composition,
+  m6: the import next to lines 13-29, the plane in the step-1 set, and every
+  taggable type that S2.3, S2.4 and S2.5 add in `TAGGABLE_TYPES`: topic,
+  alarm, EventBridge rule). S2.4 and S2.5 edit only `observability.py`.
 - The KMS key is the runtime CMK from S5.4 (D-4; CloudWatch alarms cannot
   publish to an `alias/aws/sns` topic). The subscription endpoint is XP-6.
 
@@ -423,19 +480,27 @@ the runtime CMK fails.
 
 ### S2.4 (USI): Alarm catalogue and runbooks
 
-- **Scope:** `observability.py`; the runbook section per alarm in
-  `docs/sre-operations.md`.
+- **Scope:** `observability.py` (C-observability, after S2.3); the runbook
+  section per alarm in `docs/sre-operations.md`. **Incident response
+  (m18):** each runbook entry names the severity, the first responder (the
+  service owner on call), the escalation (Kravalg for any §3.2a secret,
+  IAM or KMS event), the containment action (for example the
+  `rollback-zero` stop plan, a `policy-update` plan, or a BI key or role
+  change by a reviewed PR) and the evidence to keep; a PROD stop records the
+  incident reason (AD-10).
 - **V-11** and **V-25** (docs) are the first cases.
 
 **Acceptance criteria:**
 
 - The PRD §3.1 and FR-13 rows.
+- **N:** a runbook entry without severity, escalation or containment fails
+  the doc test.
 - **B:** desired=0 does not alarm.
 - **Live (TEST):** S4.6 step 11 (delivery within 5 min, NFR-08).
 
 ### S2.5 (USI): Security and rotation EventBridge rules
 
-- **Scope:** `observability.py`, implementing the PRD §3.2 matching and
+- **Scope:** `observability.py` (C-observability, after S2.4), implementing the PRD §3.2 matching and
   the per-event-type allow-lists of PRD §3.2a, reading the role ARNs from
   the S1.1 `central` fields.
 - **Depends on:** S1.5.
@@ -473,7 +538,7 @@ matching):**
 
 ### S2.6 (USI + US): Cost and sustainability
 
-- **Chains:** C-compute after S3.7.
+- **Chains:** C-compute after S3.7; C-autoscaling after S2.2.
 - **Depends on:** S5.14 and S3.3.
 - **Scope:**
   - TEST night and weekend scheduled actions, created in **step 2** (they
@@ -482,21 +547,30 @@ matching):**
     **admission** check that refuses ARM64 without an arm64 manifest lives in
     S4.9 (C-contract);
   - `docs/poc-cost-review.md`, which includes the endpoint, NAT and
-    CloudTrail read-event costs.
+    CloudTrail read-event costs. Every figure carries a data-source label
+    (AWS Pricing Calculator export or AWS Price List API query for
+    `eu-central-1` with its retrieval date, or Cost Explorer actuals with
+    the billing period), and the NFR-11 forecast threshold applies (m17).
 
-**Acceptance criteria:** the PRD FR-14 rows; NFR-11.
+**Acceptance criteria:** the PRD FR-14 rows; NFR-11. **N:** a figure without
+a source label, an after-estimate more than 20% above its before-estimate
+without a justification line, or any PROD increase without a justification
+line (audit), fails the doc test. **B:** a TEST increase of exactly 20% needs
+no justification.
 
 ## Epic 3: Network and TLS
 
 ### S3.2 (USI): Managed default SG
 
-- **Chains:** C-network after S1.4.
+- **Chains:** C-network after S1.4; C-composition after S2.3 (its taggable
+  type).
 
 **Acceptance criteria:** the PRD FR-16 rows. **Live (TEST):** S4.6 step 12.
 
 ### S3.1 (USI): VPC flow logs to S3
 
-- **Chains:** C-network.
+- **Chains:** C-network; C-composition after S3.2 (the flow-log plane
+  wiring and the bucket-family taggable types in `workload_phase.py`).
 - **Scope:** new `flow_logs.py`; the bucket and its policy per FR-15, with
   SSE-KMS on the runtime CMK (D-4, decided 2026-09-30), a bucket key and
   `force_destroy=false`; the bucket family joins the N-06 import list and
@@ -513,7 +587,8 @@ matching):**
 
 ### S3.3 (USI): VPC endpoints with pinned policies
 
-- **Chains:** C-network; C-guard after S1.6.
+- **Chains:** C-network; C-guard after S1.6; C-composition after S3.1 (the
+  endpoint and endpoint-SG taggable types).
 - **Scope:**
   - the endpoint set of FR-17; the SES API endpoint only if V-12 (docs)
     confirms the service;
@@ -595,11 +670,18 @@ matching):**
   merges: only PROD renders the HTTPS target group, and only gate 2 admits
   PROD.
 - **Scope:** HTTPS target group and health check on 8443 for PROD; admission
-  refuses a PROD stack with an HTTP target group; TEST keeps HTTP (D-2).
+  refuses a PROD stack with an HTTP target group; TEST keeps HTTP (D-2);
+  `pulumi/app/workload_phase.py::_validate_target` (lines 125-160, today
+  pinned to `test` and the TEST registries) parameterized by stack, so the
+  program can render `prod` (C-composition tail, m6), which S4.10's PROD
+  native plan needs.
 
-**Acceptance criteria:** the PRD FR-19 PROD rows. **Live (TEST):** a
-PROD-shaped preview in TEST, run after this story merges as S4.7
-precondition P-1 (m1); it is not an S4.6 step.
+**Acceptance criteria:** the PRD FR-19 PROD rows. **P:** a `prod` fixture
+renders the HTTPS target group; **N:** a `prod` fixture with TEST registry
+names raises. **Live:** none in TEST (TEST keeps HTTP, so no TEST run can
+show the PROD shape). The PROD evidence is **P-1**: the PROD `plan` under
+gate 2a (`admission.prod: "preview"`), run by the S4.14 `prod_preview` job
+in the PROD account as an S4.7 precondition (m8). It is not an S4.6 step.
 
 ### S3.6: dropped
 
@@ -615,20 +697,22 @@ built.
 
 ## Epic 4: Recovery, guard and admission
 
-Stories appear in chain order: S4.1; C-runner head S4.4 → S4.5; then the
-C-contract tail S4.10 → S4.11 → S4.2 → S4.9 → S4.3 → S4.12 → S4.13 → S4.14 →
-S4.15; S4.16; then the live stories S4.6 → S4.8 → S4.7.
+Stories appear in chain order: the C-runner head S4.1 → S4.4 → S4.5 (m5);
+then the C-contract tail S4.10 → S4.11 → S4.2 → S4.9 → S4.3 → S4.12 → S4.13
+→ S4.14 → S4.15; S4.16; then the live stories S4.6 → S4.8 → S4.7.
 
 ### S4.1 (USI): Sanitized operator diagnostics
 
-- Independent.
+- **Chains:** C-runner head (m5). Its code is the worker diagnostics and its
+  FR-20 test is `tests/unit/test_service_execution_worker.py`, both C-runner
+  files, so it is not independent.
 
 **Acceptance criteria:** the PRD FR-20 and NFR-01 rows. **Live (TEST):** S4.6
 step 13 (induced failure).
 
 ### S4.4 (USI): Runtime admission guard (#57)
 
-- **Chains:** C-runner head (it edits `scripts/poc_workload_runner.py`).
+- **Chains:** C-runner after S4.1 (it edits `scripts/poc_workload_runner.py`).
 - The runner reads `admission.<env>` from the installed `main` contract.
 
 **Acceptance criteria:** the PRD FR-23 rows. **Live (TEST):** S4.6 step 2
@@ -648,10 +732,10 @@ step 13 (induced failure).
 
 ### S4.10 (USI): Hardened first-workload topology, native gates and secret history (R4-M1)
 
-- **Chains:** C-contract after S1.8; the only C-topology story (architecture
+- **Chains:** C-contract after S1.11; the only C-topology story (architecture
   AD-25).
 - **Depends on (merged):** S1.1, S1.2, S1.3, S1.4, S1.5, S1.6, S1.7, S1.8,
-  S1.9, S1.10, S2.1, S2.2, S2.3, S2.4, S2.5, S2.6, S3.1, S3.2, S3.3, S3.4,
+  S1.9, S1.10, S1.11, S2.1, S2.2, S2.3, S2.4, S2.5, S2.6, S3.1, S3.2, S3.3, S3.4,
   S3.5-A, S3.7.
 - **Scope (the only story that edits these files):**
   - `scripts/poc_workload_topology.py`: `expected_graph` split into the
@@ -659,8 +743,8 @@ step 13 (induced failure).
     replacing the hard-coded `-test-` names at lines 61, 859 and 1058), for
     every resource those stories add or remove (AD-25 list), including
     `kms_key_id` on every log group and the pre-created Container Insights
-    group; the PROD HTTPS target group (S3.5-A); the named URN sets that S4.9
-    admits (step-2 set, `rollback-zero` set, `policy-update` set); the
+    group; the PROD HTTPS target group (S3.5-A); the named URN sets that S4.9 admits (step-2 set,
+    whose start action is named by the single unconsumed `scaling.starts` entry's `seq`; `rollback-zero` set; `policy-update` set); the
     native input gates;
   - the native capability gate (`specs/poc-workload-runner.md` lines
     79-82; `CONTAINER_DROPPED_CAPABILITIES`): web and worker drop `ALL`
@@ -688,6 +772,20 @@ step 13 (induced failure).
     example `ecs:UpdateService` before `ecs:DeleteService`,
     `ec2:DeleteRoute`, `sns:SetTopicAttributes`; V-26), with a test that
     every graph type has an entry. S5.7 grants it; S4.3 uses it;
+  - **the checkpoint-field allowance (R5-M5; a recorded, deliberate narrow
+    change, architecture AD-23):** `scripts/poc_workload_reconciliation.py`
+    (`UNSAFE_STATE` lines 31-49 rejects `ignoreChanges` at line 39 and
+    `retainOnDelete` at line 45, checked at line 95; reused by
+    `scripts/poc_workload_secret_result.py` lines 71 and 212 and
+    `scripts/poc_gateway_backend.py` line 40) and
+    `scripts/poc_workload_topology.py` (create goals with `ignoreChanges`
+    rejected at lines 321-326, and a create step's `newState` with any
+    `UNSAFE_STATE` field rejected in `_validate_workload_step`, lines
+    1114-1115). Both accept `ignoreChanges` only when it equals the AD-23
+    `ignore_fields` for the row's type, and `retainOnDelete: true`
+    only on the abandon path for manifest `retain` URNs
+    (`_inventory(…, abandon_retain=…)`); `docs/poc-workload-reconciliation.md`
+    records the change;
   - `specs/poc-workload-runner.md` topology and checker text, with
     doc-marker tests.
 
@@ -695,6 +793,15 @@ step 13 (induced failure).
 
 - **P:** the actual program's native step-1 and step-2 plans are admitted
   by the new graphs, for `test` and for `prod`.
+- **P2 (R5-M5):** a checkpoint whose ECS service row has
+  `ignoreChanges: ["desiredCount"]` and whose target row has
+  `["minCapacity","maxCapacity"]` passes `_inventory`, the secret-result
+  checker and the gateway projection; a create goal and a create step's
+  `newState` with the AD-23 list pass the topology check; an abandon-path row with `retainOnDelete: true`
+  for a manifest `retain` URN passes.
+- **N4 (R5-M5):** `ignoreChanges` on any other type, an extra field on a
+  listed type, `retainOnDelete` outside the abandon path, or on a URN that
+  is not a manifest `retain` entry, is refused.
 - **N1:** a step-1 plan containing any `random:`, `tls:` or `SecretVersion`
   type, or a web container keeping `NET_BIND_SERVICE`, is refused.
 - **N2:** a step-1 result where a declared secret has a version (outside
@@ -717,7 +824,39 @@ step 13 (induced failure).
   - `scripts/poc_workload_runner.py`: a step receipt after every admitted
     `up-plan`, on the success path (after the S4.10 result checks) and on
     the failure path (final checkpoint through the trusted backend,
-    `outcome: failed`); `_capture` (lines 44-47) binds to the mode's anchor;
+    `outcome: failed`), written before `execute` returns the status;
+    `_capture` (lines 44-47) binds to the mode's anchor;
+  - **failure-path publication (m4, audit):** the worker fails the job on a
+    non-zero status (`scripts/service_execution_worker.py` line 127,
+    `require(result == 0, "worker-execution")`), so the worker copies the
+    receipt file to `/public` before that check (today it copies only
+    `plan` artifacts, lines 128-132). The host
+    (`scripts/service_execution_host.py`) runs the container with
+    `check=True` (`_run`, lines 76-83), mounts `/public` from a random
+    `mkdtemp` (lines 166-167) and copies out only for `_preview` jobs (lines
+    213-218); for `test_apply` it now runs the container without raising
+    first, copies `/public/workload-receipt` to
+    `.trusted/.artifacts/workload-receipt` in a `finally` path, and then
+    raises on a non-zero status. `test_apply` uploads that path in an
+    `if: always()` step; the new job **`test_apply_receipt`** in
+    `.github/workflows/self-deploy.yml` (environment `governance-evidence`,
+    `needs: test_apply`, `if: always()` for a workload-phase `up`)
+    publishes and authenticates it on the success and the failure path. A
+    cancelled job leaves no receipt; the recovery `export` covers it;
+  - **workload-aware capture (audit):** `poc_workload_runner._capture` (line
+    41) and `poc_workload_admission.inspect_registry` (line 150) call
+    `poc_registry_runner._capture` (lines 254-258), whose
+    `poc_registry_plan._prior`/`_state` (lines 365-376, 297-324) accept only
+    registry URNs and reject `ignoreChanges`/`retainOnDelete`. For every
+    mode except `first`, this story reads the checkpoint through
+    `backend.capture_backend`, checks the registry rows with the registry
+    rules and the workload rows with the S4.10 `_inventory` allowance, and
+    binds it to the mode's anchor. `poc_registry_plan.py` is not changed;
+  - **stale wording (m4):** the runner module docstring (lines 1-7, "it
+    issues no cross-run receipt") and `specs/poc-workload-runner.md` lines
+    38-40 ("not a success receipt"), 50-52 ("before issuing any workload
+    receipt") and 97-98 ("it still issues no receipt") describe the new
+    receipts; lines 37-38 and 121-122 change in S4.13;
   - `scripts/poc_workload_admission.py`: `inspect_registry` (lines 150-166)
     and `observe_workload` (lines 464-475) apply the mode → anchor table of
     AD-24 instead of the registry-only count and equality, for every mode
@@ -728,7 +867,12 @@ step 13 (induced failure).
 
 - **P:** a successful step-1 fixture yields a schema-valid receipt bound to
   the new checkpoint; a failed apply fixture yields an `outcome: failed`
-  receipt.
+  receipt, which the worker copies before it raises `worker-execution` and
+  the `test_apply_receipt` job publishes (workflow and host contract test:
+  the worker exits 1 and the receipt still reaches the upload path).
+- **P2 (audit):** a checkpoint with the step-1 workload rows (ECS services
+  with `ignoreChanges: ["desiredCount"]`) is captured and bound for
+  `step2`; `first` still refuses it (`workload-completed-registry-required`).
 - **N1:** a receipt with a changed checkpoint sha256, run ID or contract
   digest is refused.
 - **N2:** an unauthenticated receipt (no matching deployment status) is
@@ -738,7 +882,7 @@ step 13 (induced failure).
   `workload-registry-checkpoint-changed`, `workload-stack`,
   `workload-first-command`).
 - **B:** a receipt for an older checkpoint of the same stack (stale) is
-  refused.
+  refused; the old "issues no receipt" sentences fail the doc test.
 - **Live (TEST):** S4.6 step 4.
 
 ### S4.2 (USI): Resume and abandon admission; fail-closed prior-checkpoint check
@@ -747,13 +891,26 @@ step 13 (induced failure).
 - **Decision:** D-7, decided 2026-09-30. The abandon scope is unconditional
   and TEST-only.
 - **Scope:**
-  - `poc_workload_admission.py`: `resume` (create or update of unfinished
-    resources of the current step only), anchored on the latest failed or
-    export receipt (S4.11); `rebuild-first` (after an abandon: anchored on the
+  - `poc_workload_admission.py`: `resume`, anchored on the latest failed or
+    export receipt (S4.11; an export receipt from `export` or from
+    `clear-pending`, whose `predecessor` must be a failed or export receipt
+    of the same lineage, R5-M2). **Resume condition (m11), also after step
+    2:** the operation to finish is the anchor's `workload_operation`; the
+    checkpoint holds the URNs of the last success receipt before the anchor
+    (the registry resources for an interrupted step 1) plus a subset of the
+    URNs that operation creates or updates; the plan may only `create` or
+    `update` URNs of that operation under that operation's own admission
+    rule (S4.9 for `step2`, `rollback-zero`, `policy-update`), plus `same`;
+    a new action's `at()` must be inside the AD-10 window, and an action URN
+    not yet in state may be replaced by a new `scaling` entry;
+    `rebuild-first` (after an abandon: anchored on the
     import receipt that follows the abandon receipt; the checkpoint holds
     exactly the registry plus the abandon receipt's `retain` set; only
     `create` of the remaining step-1 URNs and `same`);
-  - the AD-09 forbidden-URN check;
+  - the AD-09 forbidden-URN check, as a function in
+    `scripts/poc_workload_admission.py` called by `observe_workload` for
+    every mode (m15). It does not touch `scripts/poc_workload_topology.py`,
+    whose only writer is S4.10;
   - `abandon` admission (architecture AD-16):
     - the unprotect-plan check (only `update` and `same`; the only
       non-state change is DocumentDB `deletion_protection`);
@@ -784,11 +941,17 @@ step 13 (induced failure).
   or `update` is refused.
 - **N5:** a manifest with `delete` on the flow-log bucket, the ALB
   access-log bucket or any of their sub-resources is refused.
-- **N6:** `resume` without a failed or export receipt is refused;
+- **N6:** `resume` without a failed or export receipt is refused; a
+  `resume` after step 2 whose plan touches a URN outside the anchor's
+  operation, or a `clear-pending` export receipt whose `predecessor` is a
+  success receipt, is refused;
   `rebuild-first` without an import receipt that follows an abandon receipt
   is refused, and so is a `rebuild-first` checkpoint holding a URN outside
   the `retain` set.
-- **B:** `recovery_window_days` 7 and 30 accepted; 6 and 31 refused.
+- **B:** `recovery_window_days` 7 and 30 accepted; 6 and 31 refused; a
+  `resume` of an interrupted `rollback-zero` start plan (step 13 shape)
+  whose checkpoint holds the step-2 URNs plus nothing of the start action
+  is admitted.
 
 ### S4.9 (USI): Step-2, rollback-zero and policy-update admission; multi-arch admission (FR-34)
 
@@ -798,24 +961,41 @@ step 13 (induced failure).
   - admission mode `step2`: saved-plan steps only `create` or `same`;
     created URNs equal the S4.10 step-2 set (seed Invocations, rotations,
     secret policies including the managed-secret policy, targets, policies,
-    TEST `ScheduledAction`s, `<svc>-start-1`), or, in the rebuild variant,
+    TEST `ScheduledAction`s, the start action of the single unconsumed
+    `scaling.starts` entry (`<svc>-start-1` on an on-time first build; the
+    set names the entry by its `seq`)), or, in the
+    rebuild variant,
     that set minus the URNs imported from the abandon receipt's `retain`
     set; no `update`, `replace` or `delete` of any step-1 URN;
   - step-2 preconditions: the latest receipt is a step-1 success (S4.11);
     the S5.5 receipt; the XP-8 metadata in the installed `main` contract
     (S4.6 step 5b);
   - admission mode `rollback-zero` in three phases (architecture AD-10):
-    `stop` (only `create` of the next `<svc>-stop-<seq>`, plus `same`);
+    `stop` (only `create` of the `<svc>-stop-<seq>` of the new
+    `scaling.stops` entry, plus `same`; every earlier action `same`);
     `hold` (TEST only; exactly one `update` per target whose only changed
     input is `suspendedState.scheduledScalingSuspended` → true, plus
     `same`); `start` (that flag → false, where set, plus `create` of the
-    next `<svc>-start-<seq>`, plus `same`);
+    `<svc>-start-<seq>` of the new `scaling.starts` entry, plus `same`);
+  - **first case (m1, V-23 e, provider source):** before the hold rule is
+    implemented, the pinned provider's `Target` update path is read and the
+    values it sends for the ignored `minCapacity`/`maxCapacity` under
+    `up --refresh` are recorded; if an update can send values other than
+    the live ones (0 and 0 after a stop), this story does not merge until
+    the hold design changes in a reviewed PR. V-23(d) stays the live STOP
+    at step 15;
+  - **per-action immutability (R5-M3):** in every mode, an action URN that
+    is already in the checkpoint must be `same`; an `update` or `replace`
+    of an earlier action (for example a changed `at`) is refused;
   - admission mode `policy-update`: exactly one `update` step, whose URN is
     in the closed set {managed-secret `SecretPolicy`, each `VpcEndpoint`}
     and whose only changed input is `policy`;
-  - the `start_at` window: a new start or stop action's `at()` time between
-    the replay admission time (the `_gate` check immediately before
-    `up --plan`) + 10 min and + 24 h;
+  - the `start_at` window (m13), checked only for the new entry's `at()`
+    against the replay admission time (the `_gate` check immediately before
+    `up --plan`): at least + 10 min for `rollback-zero` and + 60 min for
+    `step2` (above the 3300 s apply process timeout), at most + 120 min, so
+    the separate observation job (S4.13) stays within its timeout and the
+    apply job's FR-24 bounds are unchanged;
   - the step-2 health-observation evidence schema (AD-18 item 4);
   - the multi-arch admission check (moved from S2.6).
 
@@ -831,9 +1011,13 @@ step 13 (induced failure).
   suspension is refused.
 - **N5:** a `policy-update` plan with a `delete`, a second step, or a
   changed input other than `policy` is refused.
-- **N6:** an `at()` time 9 minutes after the replay admission time, or 25
-  hours after it, is refused.
-- **B:** an all-`same` step-2 plan is admitted and changes nothing.
+- **N6:** a `rollback-zero` entry 9 min after the replay admission time, a
+  `step2` entry 59 min after it, or any entry 121 min after it, is refused.
+- **N7 (R5-M3):** a plan that updates an earlier start or stop action (a
+  changed `at` in the contract) is refused.
+- **B:** an all-`same` step-2 plan is admitted and changes nothing; entries
+  at exactly + 10 min (`rollback-zero`), + 60 min (`step2`) and + 120 min
+  are admitted.
 
 ### S4.3 (USI + BI): Reviewed CI recovery command
 
@@ -846,9 +1030,14 @@ step 13 (induced failure).
     (S5.7, S5.19);
   - `scripts/poc_workload_recovery.py` (`export`, `release-lock`,
     `clear-pending`, `import`, `abandon`), with every mutation as a saved
-    plan through the classifier (AD-16); `export` writes the export receipt,
-    `abandon` the abandon receipt and `import` the import receipt (S4.11
-    library);
+    plan through the classifier (AD-16). **Every subcommand that writes the
+    checkpoint writes a receipt for the new checkpoint (R5-M2):** `export`
+    an export receipt (`cause: export`); `clear-pending` an export receipt
+    with `cause: clear-pending` and `predecessor` = the prior failed or
+    export receipt's ID and checkpoint sha256; `abandon` the abandon receipt;
+    `import` the import receipt (S4.11 library). `release-lock` writes no
+    checkpoint: it refuses and writes nothing if the checkpoint sha256
+    before and after differs;
   - `scripts/poc_registry_plan.py`: accepts the registry baseline after a
     verified abandon receipt;
   - the rebuild variant of `import` (registry graph plus the abandon
@@ -864,8 +1053,9 @@ step 13 (induced failure).
   - the status check `abandon-manifest-approval` (needs an `APPROVED` review
     by Kravalg's user ID on the PR head for any change to
     `recovery/abandon-manifest.json`; it reports success on every PR that
-    does not change that file, because BI required checks are branch-wide);
-    S5.22 makes it required and pins its issuer;
+    does not change that file, because the USI ruleset's required checks
+    are branch-wide); S5.22 (USI repository controls) makes it required and
+    pins its issuer;
   - `import-list.json` covering every fixed-name resource and every
     `retain` family (the log buckets, retained secrets), including the new
     E1–E3 ones;
@@ -888,6 +1078,15 @@ step 13 (induced failure).
   `abandon-manifest-approval`.
 - **N5:** a removal plan with a type missing from `recovery/delete-actions.json`
   is refused.
+- **P2 (R5-M2, offline):** failed receipt → `release-lock` → `clear-pending`
+  (writes the linked export receipt) → `resume` admitted by the S4.2
+  admission; without the clear-pending receipt the same `resume` is refused
+  as stale; `release-lock` on a fixture whose checkpoint changes is
+  refused.
+- **P3 (audit, offline):** a cancelled run with no receipt → `export`
+  (export receipt carrying the installed `workload_operation`) →
+  `release-lock` → `clear-pending` (predecessor = that export receipt) →
+  `resume` admitted.
 - **Live (TEST):** S4.6 step 13 (resume rehearsal) and steps 18–20 (abandon
   and rebuild, NFR-09).
 
@@ -911,27 +1110,91 @@ step 13 (induced failure).
 - **N3:** `first` against a checkpoint that already contains workload URNs
   is refused (`resume` is the only path).
 - **B:** `resume` after an interrupted step 2 binds to that apply's failed
-  receipt.
+  receipt; `resume` after `clear-pending` binds to the clear-pending export
+  receipt and finishes the operation it names.
 - **Live (TEST):** S4.6 steps 7, 13 and 15.
 
-### S4.13 (USI): Accepted-workload receipt; drift and releases open (FR-35 part 3)
+### S4.13 (USI): Accepted-workload receipt; drift and releases open (FR-35 part 3; FR-32 drift check)
 
-- **Chains:** C-runner after S4.12; C-contract after S4.12.
+- **Chains:** C-runner after S4.12; C-contract after S4.12 (it also edits
+  `scripts/poc_workload_reconciliation.py` after S4.10).
+- **V-13** (docs + engine source) is the first case: `preview --refresh
+  --expect-no-changes --json --save-plan` exits 0 when only AD-23 fields
+  changed and emits the refreshed per-step states the reducer reads.
 - **Scope:**
-  - `schemas/poc-workload-accepted-receipt-v1.schema.json`; the runner runs
-    the AD-18 health observation after every admitted apply that leaves
-    `desiredCount ≥ 1`, and the first passing observation after step 2
-    writes and authenticates the accepted receipt;
-  - `scripts/poc_workload_runner.py` line 154 and
-    `scripts/service_execution_worker.py` line 99: `drift` admitted only
-    with an authenticated accepted receipt in the stack's lineage and a
-    latest success receipt; release and release rollback also need a
+  - `schemas/poc-workload-accepted-receipt-v1.schema.json` (from S1.1);
+  - **health observation in its own job (m13):** new
+    `scripts/poc_workload_observation.py` and the `self-deploy.yml` job
+    `test_workload_observation` (environment `test-preview`,
+    `needs: test_apply_receipt`, for a workload-phase apply that creates a
+    start action; its own concurrency group
+    `workload-observation-${{ github.repository }}-test`, because it reads
+    no Pulumi state and must not hold `pulumi-state-…-test-test` while it
+    waits). It waits until the new entry's `at()` time, only then requests
+    preview-role credentials, and runs the AD-18 item-4 observation, which
+    must pass within 30 min after the later of the `at()` time and the job's
+    start (`test-preview` needs Kravalg's approval, so a late approval only
+    delays the observation). Its `timeout-minutes` covers the 120-min window
+    bound plus the observation, under GitHub's 360-min job limit. The apply job's 3300 s
+    process timeout, 70-min budget and the FR-24 bounds
+    (`tests/unit/test_apply_timeout_budget.py`) are unchanged. The first
+    passing observation after step 2 is published as the accepted receipt
+    by a `governance-evidence` job `test_workload_acceptance`
+    (`needs: [test_apply_receipt, test_workload_observation]`), which first
+    checks that the live checkpoint still equals the latest success
+    receipt;
+  - **FR-32 drift check on the executed path (R5-M1):**
+    `scripts/_pulumi_command_support.py` (lines 66-70) gains the
+    `workload-drift` invocation (`preview --refresh --expect-no-changes
+    --json --save-plan <private path>`), registered in
+    `scripts/run_pulumi_command.py` (command tables at lines 54-70); the
+    runner (`scripts/poc_workload_runner.py` line 154 today refuses `drift`;
+    dispatch at line 202) admits `drift` only with an authenticated
+    accepted receipt in the stack's lineage and a latest success receipt,
+    dispatches `workload-drift`, and passes the preview, the saved plan and
+    the checkpoint of the latest success receipt to the new
+    `scripts/poc_workload_reconciliation.py::validate_drift` (next to
+    `validate_no_change`, lines 224-245), which accepts a refreshed state
+    change only on the AD-23 fields of the row's type and a refresh-time
+    removal of exactly the `scaling.consumed` actions, and names any other
+    field in the sanitized summary. `docs/poc-workload-reconciliation.md`
+    (which today says the reducer is "not wired into the worker") describes
+    the wiring. Nothing goes into `scripts/run_pulumi_drift_check.py`;
+  - **gate-2 clean-drift evidence and role:** `self-deploy.yml`
+    `test_post_apply_drift` (lines 478-568) runs under the **preview** role
+    (line 546). Its `if` (lines 480-483, today `phase == 'registry'` only)
+    also admits a workload-phase `up` whose installed operation runs after
+    acceptance (`rollback-zero`, `policy-update`, or a `resume` of either),
+    through a `poc_prepare_source` output; so no drift job runs after step
+    1 or step 2, before an accepted receipt exists. Its workload branch also
+    `needs: test_apply_receipt` (today `needs` is preflight,
+    poc_prepare_source and test_apply, lines 486-489), so the latest success
+    receipt is published before drift binds to it (audit);
+  - **scheduled drift (R5-M1):** `.github/workflows/scheduled-drift.yml`
+    (TEST job lines 23-84, PROD job lines 86-147) runs `make test-drift` → `scripts/run_pulumi_command.py
+    drift` under the drift role against the baseline program
+    `pulumi/__main__.py` (lines 18-30), which renders no workload and checks
+    no receipt. For a stack whose installed `main` contract has
+    `phase: workload`, the `drift` branch of `run_pulumi_command.py` (not
+    `_configured_stack_names`, line 84, which `preview`, `plan` and
+    `up-plan` share) excludes it and prints the recorded reason
+    `workload-drift-routed-to-runner`. When every stack is excluded, the
+    command exits 0 with the notice (today an empty list returns 1, lines
+    846-852). The exclusion and its reason are recorded in
+    `specs/poc-workload-runner.md`. Scheduled workload drift through the
+    worker is future work (a schedule has no reviewed request source for
+    the runner). The same baseline-program limit already applies to a
+    `phase: registry` TEST stack; that is recorded for the registry owner
+    and not changed here;
+  - `scripts/service_execution_worker.py` line 99: `drift` admitted only
+    with the accepted receipt; releases and release rollback also need a
     clean-drift result bound to the latest receipt, and use
     `inspect_retained_secret_history` with the receipt observation;
   - the worker docstring (line 5) and
     `tests/unit/test_service_execution_worker.py` (line 166: drift refused
-    without the receipt, routed with it); the `self-deploy.yml`
-    `test_post_apply_drift` job passes the receipt reference;
+    without the receipt, routed with it);
+  - `specs/poc-workload-runner.md` lines 121-122 (the release checker's
+    caller now authenticates the accepted receipt);
   - the **reviewed amendment** (Kravalg-approved governance PR): the README
     sentence (`specs/poc/README.md` line 127), the runner spec (lines
     37-40) and `docs/poc-workload-log-health.md` line 57 become "Workload
@@ -942,30 +1205,48 @@ step 13 (induced failure).
 
 **Acceptance criteria:**
 
-- **P:** `drift` with a valid accepted receipt is routed to the drift role.
+- **P:** `drift` with a valid accepted receipt is routed to the runner's
+  `workload-drift` dispatch under the `test_post_apply_drift` preview-role
+  credentials, and a refresh fixture that changes only ECS `desiredCount`
+  and target `minCapacity`/`maxCapacity` passes `validate_drift`.
 - **N1:** `drift` without it is refused with
   `workload-accepted-state-receipt-required` (runner) and
   `workload-drift-not-enabled` (worker).
 - **N2:** a release with an accepted receipt but no clean-drift result is
   refused.
 - **N3:** the old README sentence without the new one fails the doc test.
+- **N4 (FR-32):** a refresh fixture changing
+  `aws:elasticache/user:User.accessString`, or any field not on the AD-23
+  list, fails `validate_drift` with that field named.
+- **N5:** the scheduled drift on a `phase: workload` stack runs no baseline
+  preview for it, prints `workload-drift-routed-to-runner` and exits 0 when
+  no stack is left; `preview`, `plan` and `up-plan` stack selection is
+  unchanged.
+- **N6 (m13, audit):** a workflow fixture whose observation job requests
+  credentials before the wait, whose `timeout-minutes` is below the window
+  bound plus 30 min, or whose drift, observation or acceptance job lacks
+  `needs: test_apply_receipt`, fails the workflow contract test.
 - **B:** an accepted receipt from before an abandon is refused after the
-  abandon (lineage broken).
+  abandon (lineage broken); a refresh-time removal of exactly the
+  `scaling.consumed` actions passes, and of any other action fails.
 - **Live (TEST):** S4.6 steps 7b and 14 (and again in step 20).
 
 ### S4.14 (USI): PROD path (FR-35 part 4)
 
 - **Chains:** C-runner after S4.13; C-contract after S4.13.
 - **Scope:** `scripts/service_execution_worker.py` `JOBS`/`ACCOUNTS` (lines
-  25-30) gain `prod_preview`, `prod_apply`, `prod_post_apply_drift` and
-  account `933245420672`, and the source binding (lines 90-94) accepts
+  25-30) and `scripts/service_execution_host.py` `JOBS` (lines 27-31, with
+  the `prod_apply` receipt copy-out of S4.11) gain `prod_preview`,
+  `prod_apply`, `prod_post_apply_drift` and account `933245420672`, and the source binding (lines 90-94) accepts
   `prod` only per `admission.prod` (`"preview"` → `plan` only; `true` →
   apply); `.github/workflows/self-deploy.yml` gains the matching PROD jobs in
   the `prod-preview` and `prod` environments; the runner accepts `prod` with
   the PROD certificate parameter (the PROD counterpart of XP-10, SSM name
   recorded with the gateway owner and pinned), the PROD topology (S4.10),
   the PROD registry anchor (XP-14) and `prod-recovery`; `abandon` is never
-  admitted for PROD.
+  admitted for PROD. `prod_post_apply_drift` runs the S4.13 drift path under
+  the PROD preview role, and the PROD observation and acceptance jobs mirror
+  `test_workload_observation` and `test_workload_acceptance`.
 
 **Acceptance criteria:**
 
@@ -984,10 +1265,17 @@ step 13 (induced failure).
   §3.3), `scripts/poc_acceptance_receipt.py` with two validation levels
   (`campaign`: every S4.6 item, where step 17 (front door) is required only
   when the contract records `public_exposure: true`; `complete`: plus the
-  S4.8 restore and the S4.7 P-1 items), `tests/unit/test_poc_acceptance_receipt.py`, and the
+  S4.8 restore item with its measured RPO and RTO, and the S4.7 P-1 item), `tests/unit/test_poc_acceptance_receipt.py`, and the
   offline two-gate rewrite of `tests/unit/test_workload_phase_hard_stop.py`
   (gate 1, 2a, 2b; AD-21). The README text and the phase flip stay in the
   S4.6 step-1 PR.
+- **Governance (m14):** the hard-stop test pins the README hard stop, so its
+  rewrite is a governance change. The S4.15 PR needs an `APPROVED` review by
+  `@Kravalg` specifically (a `@dmytrocraft` CODEOWNERS approval alone does
+  not count), recorded with the PR number in the acceptance receipt, and
+  the rewritten test must still pass with the installed `phase: registry`
+  contract (the registry branch is unchanged). Without that approval, the
+  rewrite moves into the Kravalg-approved S4.6 step-1 PR instead.
 
 **Acceptance criteria:**
 
@@ -997,7 +1285,8 @@ step 13 (induced failure).
 - **N2:** a `complete` validation without the restore or P-1 item is
   refused.
 - **B:** a `campaign`-valid receipt is accepted at gate 2a only with the
-  restore item.
+  restore item; the rewritten hard-stop test passes on the installed
+  `phase: registry` contract.
 
 ### S4.16 (USI): TEST exercise workflow
 
@@ -1036,8 +1325,8 @@ step 13 (induced failure).
     S3.5-A (PROD shape only; TEST keeps HTTP), S3.7, S4.1, S4.4, S4.5,
     S4.10, S4.11, S4.2, S4.9, S4.3, S4.12, S4.13, S4.14, S4.15, S4.16;
   - US merged and published: S5.8, S5.9, S5.10, S5.11, S5.12, S5.13, S5.14;
-  - BI applied: S5.1, S5.2, S5.17, S5.4, S5.3, S5.21, S5.23, S5.7, S5.22,
-    S5.18a;
+  - BI applied: S5.1, S5.2, S5.17, S5.4, S5.3, S5.23, S5.7, S5.18a;
+  - USI repository controls applied (admin): S5.21, S5.22;
   - decisions resolved (explicit, dated 2026-09-30, `decisions.md` and PRD
     §6): D-1, D-2 (TEST), D-4, D-5, D-6, D-7 — all resolved;
   - XP-6 (subscription endpoint) and XP-7 (profile) present;
@@ -1056,12 +1345,14 @@ step 13 (induced failure).
   1. **Gate-1 PR:** `phase: workload`, `admission: {test: true, prod: false}`,
      and the README hard stop rewritten into two gates (AD-21, PRD §6.1;
      the test is S4.15). Needs `@Kravalg` approval (D-6 governance).
-     Read-only environment check (m11): `test`, `prod`, `test-recovery` and
-     `test-exercise` each list reviewers = [Kravalg] only,
-     `prevent_self_review` true, no admin bypass (S5.21); `governance-evidence`
-     equals the BI evidence payload (reviewer-less, main-only;
-     `scripts/_github_evidence_environment.py` @debd88b). STOP: not approved,
-     or any environment differs.
+     Read-only environment check (m11): `test`, `prod`, `test-recovery`,
+     `test-exercise` and `prod-recovery` each list reviewers = [Kravalg]
+     only, `prevent_self_review` true, no admin bypass (S5.21, verified by
+     USI `configure_github_repository_controls.py` verify mode);
+     `governance-evidence` equals the evidence payload (reviewer-less,
+     main-only; USI `scripts/_github_evidence_environment.py`); the ruleset
+     requires `abandon-manifest-approval` with its pinned issuer (S5.22).
+     STOP: not approved, or any environment or the ruleset differs.
   2. **R-02 re-observation** (read-only), runtime-guard refusal for `prod`
      observed (FR-23), and the S4.14 PROD path refused (FR-35). STOP: any
      workload URN present → AD-09; PROD not refused → fix before step 3.
@@ -1094,16 +1385,23 @@ step 13 (induced failure).
      apply now. Fallback for V-19: exact ARN only. STOP: the BI apply fails
      or the attachment shows no ENI in the USI subnets.
      - **5b. USI contract PR:** the XP-8 values in the installed `main`
-       central metadata, `workload_step: 2`, `scaling.start_at`,
+       central metadata, `workload_step: 2`,
        `workload_operation: {mode: step2}`; Kravalg-approved. STOP: not
        approved.
   6. **S5.5 bootstrap job** run; it reads the managed secret through the
      `secretsmanager` endpoint's `rds!cluster-*` statement (FR-17). STOP:
      user not created → escalate.
+     - **6b. Start-entry PR (audit):** a small Kravalg-approved contract PR
+       appends the single `scaling.starts` entry `{seq: 1, at}`, with `at`
+       planned for + 60 to + 120 min after the step-7 replay admission,
+       right before the step-7 request. If the window is missed, a new PR
+       moves the uncreated entry to `scaling.consumed` and appends the next
+       `seq` (AD-10). STOP: not approved.
   7. **Step-2 saved-plan apply** (mode `step2`, anchored on the step-1
      success receipt; S4.9 create-only admission). The start actions fire at
-     `start_at` (V-23 a and b). Then the step-2 health observation (AD-18
-     item 4): V-1 (MONGODB-AWS), V-2 (Redis IAM client), V-14 and V-20
+     the `at` time of the `seq: 1` start entry (V-23 a and b). Then the step-2 health
+     observation in the separate `test_workload_observation` job (AD-18
+     item 4, m13): V-1 (MONGODB-AWS), V-2 (Redis IAM client), V-14 and V-20
      (image pull through endpoints), V-25 (logs delivered to the
      CMK-encrypted groups), FR-08 and FR-10 metadata, FR-06
      login/JWT/2FA, timing (FR-24). STOP: health fails → `rollback-zero`
@@ -1115,8 +1413,9 @@ step 13 (induced failure).
      - **7b. Accepted-workload receipt** written and authenticated by the
        first passing health observation (FR-35, S4.13); V-23 (c) recorded
        (fired actions listed or not). STOP: no passing observation → stays
-       at 7; AWS removed a fired action → `scaling.consumed` contract PR and
-       the AD-23 entry before step 14.
+       at 7; AWS removed a fired action → STOP **before the next apply of
+       any mode** (m12), until the `scaling.consumed` contract PR and the
+       AD-23 entry land.
   8. **V-3 check:** forced rotation (`rotate` exercise) of the
      DocumentDB-managed secret with its `deny-other-readers` policy in place;
      the app stays healthy. Fallback (non-destructive): reviewed contract PR
@@ -1152,14 +1451,26 @@ step 13 (induced failure).
       the informational alarm.
   13. **Resume rehearsal** (S4.3, FR-21 resume, NFR-09) with an induced
       failure (FR-20): the run of an admitted `rollback-zero` start plan
-      (`<svc>-start-2`, no capacity change) is cancelled after the apply
-      starts; then `release-lock`, `clear-pending` and `resume` from the
-      failed (or export) receipt. STOP: resume refused or failed → escalate;
-      no further step until the stack is clean.
-  14. **Clean drift** under the drift role (FR-32, V-13), admitted by the
-      accepted receipt and the latest success receipt (FR-35), after step 12
-      moved `desiredCount` and the schedules moved min/max. STOP: unlisted
-      drift → investigate, no list widening.
+      (the `<svc>-start-2` entry, no capacity change) is cancelled after the
+      apply starts. A cancellation kills the host too, so no failed receipt
+      is expected (audit). Then `export` (the export receipt, carrying the
+      installed `workload_operation`) unless a failed receipt was published,
+      `release-lock` (checkpoint unchanged), `clear-pending` (writes the
+      export receipt with `cause: clear-pending` linked to the failed or
+      export receipt, R5-M2) and `resume` from that receipt, finishing the
+      start-plan operation (m11).
+      If the new start action's `at()` is outside the window by then, a
+      contract PR moves the uncreated `start-2` entry to `scaling.consumed`
+      and appends `start-3` (AD-10). STOP: resume refused or failed →
+      escalate; no further step until the stack is clean.
+  14. **Clean drift** (FR-32, V-13): the `test_post_apply_drift` job of the
+      step-13 `resume` run, which follows step 12's scaling (moved
+      `desiredCount`) and the schedules (moved min/max). It runs the S4.13
+      path (worker → runner → `workload-drift` → `validate_drift`) under the
+      **preview** role (`self-deploy.yml` line 546), admitted by the
+      accepted receipt and the latest success receipt (FR-35). This is the
+      gate-2 clean-drift evidence; each later admitted post-acceptance apply
+      repeats it. STOP: unlisted drift → investigate, no list widening.
   15. **Rollback (first deployment, AD-19):** `rollback-zero` stop plan →
       services at 0 → hold plan (scheduled scaling suspended) → the next
       morning action does not restart them (V-23 d) → start plan → healthy
@@ -1194,9 +1505,14 @@ step 13 (induced failure).
   20. **Rebuild:** recovery `import` of the retained resources (rebuild
       variant; `RestoreSecret` where needed; import receipt) →
       `rebuild-first` (S4.2) creates the rest of step 1 → step-1 receipt → XP-8 refresh (the new managed-secret ARN; BI re-attaches
-      both Lambdas and re-grants the exact ARNs) and the 5b contract PR →
-      S5.5 re-run → step 2 (`step2`, rebuild variant) → health observation →
-      accepted receipt → clean drift. STOP rules as in steps 4–7 and 14.
+      both Lambdas and re-grants the exact ARNs) and the 5b contract PR
+      (every earlier `scaling` entry moved to `scaling.consumed`, because
+      the abandon deleted those actions; AD-10 D-12) →
+      S5.5 re-run → the 6b start-entry PR (one new `starts` entry) → step 2 (`step2`, rebuild variant) → health observation →
+      accepted receipt → clean drift (the post-apply drift of the next
+      post-acceptance apply, a `rollback-zero` start plan with a new entry and
+      no capacity change, as in step 13).
+      STOP rules as in steps 4–7 and 14.
   21. **Receipt:** assemble the PRD §3.3 receipt from steps 1–20 (including
       every PRD §3.2a allow-listed event with its run ID) and validate it at
       the `campaign` level (S4.15). STOP: invalid → fix the evidence, never
@@ -1223,11 +1539,21 @@ step 13 (induced failure).
     S5.18a operator role, with `ModifyDBCluster` to a managed password (V-22).
     The S5.18b reader (VPC-attached after XP-8) records the document-count
     sample. Then the temporary cluster is deleted;
-  - the restore item is appended to the acceptance receipt.
+  - **recovery targets (m16, architecture AD-19):** RPO ≤ 5 min (the
+    read-only `DescribeDBClusters` `LatestRestorableTime` lag of the TEST
+    cluster at the rehearsal, ≤ 300 s; the snapshot age of the rehearsal
+    source is recorded too) and RTO ≤ 4 h (restore request to the reader's
+    document-count sample, measured);
+  - the restore item, with the measured RPO and RTO, is appended to the
+    acceptance receipt.
 - **Depends on:** S4.6, S5.18a and S5.18b.
 
-**Acceptance criteria:** the PRD FR-30 rows. **STOP:** V-22 denial → BI
-grant fix; the temporary cluster is deleted before a re-run.
+**Acceptance criteria:** the PRD FR-30 rows. **N:** a restore item without
+the measured RPO and RTO is refused by the S4.15 validator. **B:** RTO of
+exactly 4 h and a lag of exactly 300 s pass. **STOP:** V-22 denial → BI
+grant fix; the temporary cluster is deleted before a re-run. A measured RPO
+or RTO above its target → STOP at gate 2a for a user decision (accept or
+change the design).
 
 ### S4.7 (USI): Gate 2 (PROD admission) and the PROD plan
 
@@ -1263,15 +1589,15 @@ grant fix; the temporary cluster is deleted before a re-run.
 | S5.17 | BI | **Preview and drift read capability (FR-33, B-2):** read-only grants for `GitHubCiPreview-…-{env}` and `GitHubCiDrift-…-{env}` on every workload resource type (ec2, ecs, docdb/rds describe, elasticache, logs, cloudwatch, application-autoscaling including scheduled actions, elbv2, wafv2, apigateway, events, sns, s3 configuration, secretsmanager metadata). **No KMS statement here** (m7): the KMS read lands in S5.4 on the exact key ARNs. **Simulation grant (m6):** the preview role gets `iam:SimulatePrincipalPolicy` and `iam:GetContextKeysForPrincipalPolicy` on the exact ARNs of the S4.6 step-3 role list only, and `iam:SimulateCustomPolicy` (read-only, no resource scope) for the step-11 resource-policy proof. Simulator-matrix regression for both roles. | Every workload read allowed / `GetSecretValue`, `GetFunction`, `kms:Decrypt`, every write, and `SimulatePrincipalPolicy` on a role outside the list denied / the existing registry-phase matrix is unchanged |
 | S5.4 | BI | CMKs per D-4 (decided 2026-09-30): the runtime CMK (secrets, every workload log group, flow-log bucket, SNS topic), the JWT signing CMK (RSA_4096) and the 2FA CMK. Key policies follow the **per-key table architecture AD-15a** (principal, action, condition): no `root` `kms:*` statement; `logs.<region>.amazonaws.com` with `kms:EncryptionContext:aws:logs:arn`; `delivery.logs.amazonaws.com` with `aws:SourceAccount`/`aws:SourceArn`; cloudwatch and events for SNS; the ECS execution role `kms:Decrypt` with `kms:ViaService=secretsmanager.<region>.amazonaws.com`; the app-rotation role; the task role on the JWT and 2FA keys; the preview and drift roles' read (m7); the apply role's `DescribeKey` via logs, secretsmanager, sns and s3. Every named role already exists (S5.1, or the pre-existing preview, drift and apply roles). Then, in the same story and after the keys exist, the matching identity statements. CloudTrail read management events. | Grants only the AD-15a rows / no broad `kms:*`; a key policy naming a role absent from the role inventory fails the offline check; an execution-role `Decrypt` without `kms:ViaService` fails / JWT key-change procedure |
 | S5.3 | BI | Functions using the S5.1 roles: app rotation + idempotent seed (no VPC), redeploy (no VPC, deterministic service ARNs), bootstrap-job function package (VPC attachment deferred to S5.5), their log groups created explicitly with `kms_key_id` = the runtime CMK (D-4), Lambda permissions (`aws:SourceAccount`), `RotationSucceeded` rule, allow-listed secret patterns (NFR-06). V-4 (docs). | Step unit tests / `testSecret` failure means no stage move; a function log group without the runtime CMK fails / seed on a secret with AWSCURRENT returns `noop`; seed output has no material |
-| S5.7 | BI | **TEST recovery (D-7, decided 2026-09-30; unconditional):** the role `GitHubCiRecovery-user-service-infrastructure-test`, trusted only for OIDC `sub` `repo:VilnaCRM-Org/user-service-infrastructure:environment:test-recovery` on `main` (the `test-recovery` environment itself is configured by S5.21: Kravalg sole reviewer). Grants per architecture AD-16: state read and write, `s3:DeleteObject` on the state lock prefix (`.pulumi/locks/*`) only, state secrets-provider key use; `rds:ModifyDBCluster` on `cluster:user-service-infrastructure-test-docdb`; the per-type delete-action map `recovery/delete-actions.json` from S4.10 (pinned provider delete paths, drain and detach calls included; V-26), scoped to the TEST name patterns or `aws:ResourceTag/Project=user-service-infrastructure` + `Environment=test`; no S3 bucket delete, no object delete outside the lock prefix, no KMS key management; `secretsmanager:DeleteSecret` (`secretsmanager:RecoveryWindowInDays` ≥ 7, `secretsmanager:ForceDeleteWithoutRecovery` = false — **V-15**), `RestoreSecret`, `DescribeSecret`, `CancelRotateSecret`, `DeleteResourcePolicy` on the workload patterns and `rds!cluster-*`; the import read set (S5.17). TEST only. | Exactly the recovery set; each graph type's delete allowed on the TEST pattern / PR-head assumption denied; force delete denied; `s3:DeleteBucket` and a log-bucket `s3:DeleteObject` denied; the PROD account denied / recovery window 7 allowed, 6 denied |
+| S5.7 | BI | **TEST recovery (D-7, decided 2026-09-30; unconditional):** the role `GitHubCiRecovery-user-service-infrastructure-test`, trusted only for OIDC `sub` `repo:VilnaCRM-Org/user-service-infrastructure:environment:test-recovery` on `main` (the `test-recovery` environment itself is configured by the USI repository controls, S5.21: Kravalg sole reviewer). Grants per architecture AD-16: state read and write, `s3:DeleteObject` on the state lock prefix (`.pulumi/locks/*`) only, state secrets-provider key use; `rds:ModifyDBCluster` on `cluster:user-service-infrastructure-test-docdb`; the per-type delete-action map `recovery/delete-actions.json` from S4.10 (pinned provider delete paths, drain and detach calls included; V-26), scoped to the TEST name patterns or `aws:ResourceTag/Project=user-service-infrastructure` + `Environment=test`; no S3 bucket delete, no object delete outside the lock prefix, no KMS key management; `secretsmanager:DeleteSecret` (`secretsmanager:RecoveryWindowInDays` ≥ 7, `secretsmanager:ForceDeleteWithoutRecovery` = false — **V-15**), `RestoreSecret`, `DescribeSecret`, `CancelRotateSecret`, `DeleteResourcePolicy` on the workload patterns and `rds!cluster-*`; the import read set (S5.17). TEST only. | Exactly the recovery set; each graph type's delete allowed on the TEST pattern / PR-head assumption denied; force delete denied; `s3:DeleteBucket` and a log-bucket `s3:DeleteObject` denied; the PROD account denied / recovery window 7 allowed, 6 denied |
 | S5.18a | BI | **Restore-rehearsal grants (FR-30, M-9), before step 1:** on the S5.1 operator role, the architecture §2.1 grants (`RestoreDBClusterFromSnapshot` with the snapshot, subnet-group and parameter-group resources; `CreateDBInstance`; `ModifyDBCluster` with `rds:ManageMasterUserPassword`; `secretsmanager:CreateSecret`/`TagResource` on `rds!cluster-*`; `kms:DescribeKey` on `alias/aws/secretsmanager`; `kms:CreateGrant`/`Decrypt`/`DescribeKey` on the DocumentDB storage key via `rds.<region>.amazonaws.com`; describe and delete on `<stack>-docdb-restore-rehearsal` only; V-22 docs); on the S5.1 reader role, `GetSecretValue` on the temporary cluster's managed secret by tag condition (V-19) or a reviewed ephemeral exact-ARN grant; the reader package **without** VPC attachment. | Restore and read allowed for the rehearsal name / restore to any other name, delete of the real cluster, and the reader on the real cluster's secret denied / `ManageMasterUserPassword` false denied |
 | S5.18b | BI (live) | **Restore-reader VPC attachment (R4-M7), after XP-8 (S4.6 step 5):** attach the S5.18a reader to the USI app subnets and bootstrap-job SG from the XP-8 metadata; detach before an abandon (S4.6 step 18), re-attach in the rebuild (step 20). | Reader reaches the temporary cluster port and the `secretsmanager` endpoint / attach refused without XP-8 metadata / detach leaves no ENI |
 | S5.5 | BI (live) | XP-8 metadata PR; exact-ARN `GetSecretValue` grant for the bootstrap-job role (plus tag condition if V-19); exact-ARN `secretsmanager:PutResourcePolicy` and `GetResourcePolicy` for the USI apply role (step-2 managed-secret policy and `policy-update`); bootstrap-job VPC attachment; `$external` bootstrap job run, idempotent, with evidence. The `secretsmanager` endpoint needs no XP-8 change (`rds!cluster-*` statement, S3.3). Runs as S4.6 steps 5–6 and again in step 20. | User exists with `readWrite` on the app database only / unapproved run refused / re-run makes no change |
-| S5.21 | BI | **Kravalg-only environment approvals (m11, R4-M4):** the USI environments `test`, `prod`, `test-recovery` and `test-exercise` are configured through BI `scripts/_github_repository_controls.py::protected_reviewer_environment_payload` (debd88b lines 308-319): reviewers = [Kravalg's user ID] only, `prevent_self_review: true`, `can_admins_bypass: false`, main-only branch policy. `prod-recovery` is created later by S5.19 with the same payload. `governance-evidence` is not changed: BI keeps it reviewer-less and main-only by design (`scripts/_github_evidence_environment.py` lines 12-25), so receipt publication stays unattended. Offline tests reuse `environment_prevents_self_review` and `environment_is_main_only` (`scripts/_github_environment_controls.py`). | Each payload equals the expected one / a second reviewer, `prevent_self_review` false or admin bypass fails / a non-main branch policy fails |
-| S5.22 | BI | **Required manifest approval check (R4-M4), after S4.3:** the USI ruleset (`ruleset_payload` in `scripts/_github_repository_controls.py`) requires the status check `abandon-manifest-approval` (created by S4.3). BI required checks are branch-wide (`scripts/_github_repository_controls.py` lines 78-98 and 257), so the check succeeds on PRs that do not change `recovery/abandon-manifest.json` and enforces Kravalg's approval on PRs that do; its issuer is pinned like the other checks (`_harden_status_check`). | Required check present / a ruleset without it fails the BI test / other paths unaffected |
+| S5.21 | USI (repository controls; admin apply by Kravalg) | **Kravalg-only environment approvals (m11, R4-M4, m3):** USI applies its own environments with its own scripts, not BI's: `scripts/configure_github_repository_controls.py` (lines 79-85 `ADDITIONAL_PROTECTED_ENVIRONMENTS` and `SERVICE_PROTECTED_ENVIRONMENTS`; apply loop lines 527-538) and `scripts/_github_repository_controls.py::protected_reviewer_environment_payload` (line 185; the same payload as BI debd88b lines 308-319): reviewers = [Kravalg's user ID] only, `prevent_self_review: true`, `can_admins_bypass: false`, main-only branch policy. `test-recovery`, `test-exercise` and `prod-recovery` join `ADDITIONAL_PROTECTED_ENVIRONMENTS` (so the apply, the main-branch policy loop and `_verify_applied_controls`, lines 256-311, cover them) and `SERVICE_PROTECTED_ENVIRONMENTS` (so the drift-only preservation check covers them); `test` and `prod` keep their current payloads. `governance-evidence` is not changed: it stays reviewer-less and main-only by design (USI `scripts/_github_evidence_environment.py`), so receipt publication stays unattended. Offline tests (`tests/unit/test_configure_repository_controls.py`) reuse `environment_prevents_self_review` and `environment_is_main_only` (`scripts/_github_environment_controls.py` lines 22 and 36). | Each payload equals the expected one, and the verification set lists all five / a second reviewer, `prevent_self_review` false, admin bypass, or one of the three new environments missing from the verification set fails / a non-main branch policy fails |
+| S5.22 | USI (repository controls; admin apply by Kravalg) | **Required manifest approval check (R4-M4, m2, m3), after S4.3:** USI's own ruleset requires the status check `abandon-manifest-approval` (created by S4.3): it joins `REQUIRED_STATUS_CHECKS` (USI `scripts/_github_repository_controls.py` line 13). The ruleset's checks are branch-wide (only a `ref_name` condition), so the check succeeds on PRs that do not change `recovery/abandon-manifest.json` and enforces Kravalg's approval on PRs that do. **Own issuer-pinning code (m2):** today `required_status_checks_rule` (lines 46-60) and `_harden_status_check` (lines 64-78) pin only `Governance Promotion`; this story adds a pinned-context map so `abandon-manifest-approval` is emitted with `integration_id` = the GitHub Actions App ID, `_harden_status_check` sets it and refuses an existing entry with another issuer, and `ruleset_verification_blockers` (line 385) reports a missing or different issuer. | Required check present with the pinned issuer / a ruleset without it, or an entry without `integration_id` or with another App's ID (spoofing test), fails verification / other contexts and paths unaffected; the `Governance Promotion` pin is unchanged |
 | S5.23 | BI | **TEST exercise role (R4 audit, live-action identities):** grants on the S5.1 role `GitHubCiExercise-user-service-infrastructure-test`, trusted only for OIDC `sub` `repo:VilnaCRM-Org/user-service-infrastructure:environment:test-exercise` on `main`: `secretsmanager:RotateSecret` on the declared patterns and `rds!cluster-*` (TEST), with `lambda:InvokeFunction` on the BI rotation function ARNs (V-6); `sqs:SendMessage` on the three DLQs only; `cloudwatch:SetAlarmState` on the workload alarms and the Application Auto Scaling policy alarms of the two services; `s3:GetObject`/`ListBucket` on the flow-log bucket plus the AD-15a runtime-key row (`kms:Decrypt` via S3); `cloudtrail:LookupEvents`; `logs:StartQuery`/`GetQueryResults` on the workload log groups. No `GetSecretValue`, `PutSecretValue` or write outside this list, so `denied-read` is refused. TEST account only. | Matrix allows exactly the list / `GetSecretValue`, `PutSecretValue` and PROD denied / PR-head assumption denied |
 | S5.6 | BI (conditional) | `MaxSessionDuration` plus `role-duration-seconds` | Covers the measured time plus the 300 s margin / below-margin value refused / exactly at the margin accepted |
-| S5.19 | BI | **PROD recovery (M-9):** the role `GitHubCiRecovery-user-service-infrastructure-prod` and the `prod-recovery` environment (Kravalg sole reviewer, `protected_reviewer_environment_payload`), with grants mirroring S5.7 **without** any delete, abandon or `DeleteSecret` grant. | Exactly the recovery set / delete actions denied / PR-head assumption denied |
+| S5.19 | BI | **PROD recovery (M-9):** the role `GitHubCiRecovery-user-service-infrastructure-prod`, trusted only for the USI `prod-recovery` environment on `main` (the environment itself is USI S5.21), with grants mirroring S5.7 **without** any delete, abandon or `DeleteSecret` grant. | Exactly the recovery set / delete actions denied / PR-head assumption denied |
 | S5.9 | US | Non-root images (UID ≥1000, :8080, supervisor socket under `/srv/app/var/run`) | Non-root `User` / bind to :80 fails / healthchecks pass |
 | S5.20 | US | **In-container TLS for PROD (D-2):** Caddy internal certificate on :8443, HTTPS health endpoint | HTTPS responds on 8443 / plain HTTP on 8443 refused / certificate renewal before expiry |
 | S5.10 | US | MONGODB-AWS check (V-1 source) | TEST connect / wrong role fails / survives credential refresh |
@@ -1286,68 +1612,70 @@ grant fix; the temporary cluster is deleted before a re-run.
 
 ## Independent vs shared changes
 
-- **Shared or serialized:** the chains C-BI, C-contract, C-topology,
-  C-runner, C-runtime, C-data, C-network, C-compute, C-stack and C-guard in
+- **Shared or serialized:** the chains C-BI, C-controls, C-contract,
+  C-topology, C-runner, C-composition, C-autoscaling, C-observability,
+  C-runtime, C-data, C-network, C-compute, C-stack and C-guard in
   `architecture.md` §4. There is one writer per chain. S4.10 is the only
   writer of `scripts/poc_workload_topology.py`,
   `scripts/poc_workload_secret_result.py` and the native topology
-  integration test.
+  integration test. `scripts/poc_workload_reconciliation.py` is C-contract
+  (S4.10, then S4.13). `pulumi/app/workload_phase.py` is C-composition
+  (S1.1 → S1.3 → S1.4 → S2.1 → S2.3 → S3.2 → S3.1 → S3.3 → S3.5-A).
 - **Independent:** these can run in parallel with at most three agents, after
   their chain heads:
-  - S2.2;
-  - S2.3 → S2.4 → S2.5;
-  - S4.1;
   - S4.16 (after S5.23);
   - S3.5-B;
   - S5.8–S5.14 and S5.20 (US);
   - S5.16 (AGI).
 
-  S4.4 and S4.5 edit the runner, so they are not independent: they head
-  C-runner.
+  S4.1, S4.4 and S4.5 edit C-runner files (the worker diagnostics and
+  `tests/unit/test_service_execution_worker.py`, the runner), so they head
+  C-runner (m5). S2.2 and S2.4–S2.5 are serialized in C-autoscaling and
+  C-observability, because S2.1 and S2.3 also wire `workload_phase.py`.
 
 ## Ordered story list
 
 | # | Story | Repo | Kind |
 | --- | --- | --- | --- |
-| 0 | D-1 … D-7 recorded as explicit user decisions dated 2026-09-30 (`decisions.md`; D-4, D-5 clarified the same day) | user | done; `@Kravalg` approval of the README PR is still S4.6 step 1 |
+| 0 | D-1 … D-7 recorded as explicit user decisions dated 2026-09-30 (`decisions.md`; D-4, D-5 clarified the same day), and the derived details D-8 … D-13 confirmed the same day | user | done; `@Kravalg` approval of the README PR is still S4.6 step 1 |
 | 1 | S5.8 #501 | US | independent |
-| 2 | S1.1 generation out of state + contract + central fields (+ transition rule) | USI | C-contract, C-runtime |
+| 2 | S1.1 generation out of state (hardened branch) + contract (per-action `scaling`, receipt schemas) + central fields (+ transition rule) | USI | C-contract, C-runtime, C-composition head |
 | 3 | S1.7 AWSCURRENT refs | USI | C-contract, C-runtime |
 | 4 | S1.2 DocumentDB-managed password | USI | C-data |
-| 5 | S1.3 DocumentDB IAM + bootstrap-job SG + step-1 shape + DSN tests | USI | C-data, C-network, C-compute |
-| 6 | S1.4 Redis IAM auth (D-1) | USI | C-data, C-network, C-compute |
+| 5 | S1.3 DocumentDB IAM + bootstrap-job SG + step-1 shape + DSN tests | USI | C-data, C-network, C-compute, C-composition |
+| 6 | S1.4 Redis IAM auth (D-1) | USI | C-data, C-network, C-compute, C-composition |
 | 7 | S1.10 legacy path fail-closed | USI | C-data, C-compute, C-stack |
 | 8 | S5.1 every central role, incl. restore and exercise roles (no KMS statements) | BI | C-BI |
 | 9 | S5.2 apply-role capability (N-11, managed-password grants, no deletes) | BI | C-BI |
 | 10 | S5.17 preview and drift read (no KMS) + simulation grant | BI | C-BI |
 | 11 | S5.4 CMKs per AD-15a, then identity statements (incl. preview/drift KMS read); CloudTrail read events | BI | C-BI |
 | 12 | S1.9 CMK binding (secrets, DocumentDB log groups) | USI | C-contract, C-data |
-| 13 | S1.11 drift allow-list contract | USI | C-contract |
-| 14 | S5.3 rotation, seed, redeploy and bootstrap-job functions; KMS log groups | BI | C-BI |
-| 15 | S1.6 rotation wiring + idempotent seed + critical patterns (Invocation, docdb, bucketV2) | USI | C-runtime, C-guard |
-| 16 | S1.5 secret policies (three managed-secret states) | USI | C-runtime |
-| 17 | S2.1 → S2.2 autoscaling, start/stop actions | USI | C-compute, then independent |
-| 18 | S2.3 → S2.4 → S2.5 topic, alarms, security rules and allow-lists | USI | independent |
-| 19 | S5.10, S5.13, S5.11, S5.12 | US | independent (may start any time) |
-| 20 | S1.8 KMS keys; drop PEM and passphrase purposes; ECS and Container Insights log-group CMK | USI | C-contract, C-runtime, C-compute |
-| 21 | S3.2 → S3.1 → S3.3 → S3.4 network (egress inventory first in S3.4) | USI | C-network, C-guard |
+| 13 | S5.3 rotation, seed, redeploy and bootstrap-job functions; KMS log groups | BI | C-BI |
+| 14 | S1.6 rotation wiring + idempotent seed + critical patterns (Invocation, docdb, bucketV2) | USI | C-runtime, C-guard |
+| 15 | S1.5 secret policies (three managed-secret states) | USI | C-runtime |
+| 16 | S2.1 → S2.2 autoscaling, per-action start/stop times (S2.1 adds `ignore_changes`, not the list) | USI | C-compute, C-autoscaling, C-composition |
+| 17 | S2.3 → S2.4 → S2.5 topic (plane wiring), alarms and runbooks, security rules and allow-lists | USI | C-observability, C-composition |
+| 18 | S5.10, S5.13, S5.11, S5.12 | US | independent (may start any time) |
+| 19 | S1.8 KMS keys; drop PEM and passphrase purposes; ECS and Container Insights log-group CMK | USI | C-contract, C-runtime, C-compute |
+| 20 | S1.11 drift allow-list contract (after S2.1 and S1.8, R5-M4) | USI | C-contract |
+| 21 | S3.2 → S3.1 → S3.3 → S3.4 network (egress inventory first in S3.4) | USI | C-network, C-guard, C-composition |
 | 22 | S3.5-B TEST TLS risk acceptance | USI | independent |
 | 23 | S5.9 non-root → S3.7 | US → USI | C-compute |
-| 24 | S5.14 multi-arch → S2.6 cost/Graviton + TEST schedules | US → USI | C-compute |
-| 25 | S3.5-A PROD HTTPS target group (PROD shape) | USI | C-compute tail |
+| 24 | S5.14 multi-arch → S2.6 cost/Graviton + TEST schedules (cost figures with source labels) | US → USI | C-compute, C-autoscaling |
+| 25 | S3.5-A PROD HTTPS target group (PROD shape); `_validate_target` by stack | USI | C-compute tail, C-composition tail |
 | 26 | S5.16 front door | AGI | independent |
-| 27 | S4.1 diagnostics; S4.4 → S4.5 guard and timing | USI | independent; C-runner head |
-| 28 | S4.10 hardened topology (both stacks), native gates, secret history; pins removed | USI | C-contract, C-topology |
-| 29 | S4.11 receipts after every apply; anchor rebinding | USI | C-runner, C-contract |
-| 30 | S4.2 resume + abandon admission + fail-closed prior check | USI | C-contract |
-| 31 | S4.9 step-2, rollback-zero, policy-update + multi-arch admission | USI | C-contract |
-| 32 | S5.21 Kravalg-only environments (`test`, `prod`, `test-recovery`, `test-exercise`; `governance-evidence` unchanged) | BI | C-BI |
+| 27 | S4.1 → S4.4 → S4.5 diagnostics, guard and timing | USI | C-runner head (m5) |
+| 28 | S4.10 hardened topology (both stacks), native gates, secret history, checkpoint-field allowance; pins removed | USI | C-contract, C-topology |
+| 29 | S4.11 receipts after every apply (failure-path publication job); anchor rebinding | USI | C-runner, C-contract |
+| 30 | S4.2 resume (any operation) + abandon admission + fail-closed prior check | USI | C-contract |
+| 31 | S4.9 step-2, rollback-zero, policy-update + multi-arch admission; per-action window | USI | C-contract |
+| 32 | S5.21 Kravalg-only environments (`test`, `prod`, `test-recovery`, `test-exercise`, `prod-recovery`; `governance-evidence` unchanged) | USI (repository controls) | C-controls |
 | 33 | S5.23 TEST exercise role grants | BI | C-BI |
 | 34 | S5.7 test-recovery role and grants (delete map from the S4.10 graph) | BI | C-BI |
-| 35 | S4.3 recovery command (import, abandon, receipts, approvals check, delete-action map) | USI | C-contract, C-guard |
-| 36 | S5.22 ruleset: `abandon-manifest-approval` required | BI | C-BI |
+| 35 | S4.3 recovery command (import, abandon, a receipt from every checkpoint-writing subcommand, approvals check, delete-action map) | USI | C-contract, C-guard |
+| 36 | S5.22 ruleset: `abandon-manifest-approval` required with a pinned issuer | USI (repository controls) | C-controls |
 | 37 | S4.12 runner mode routing | USI | C-runner, C-contract |
-| 38 | S4.13 accepted-workload receipt; drift and releases (reviewed README/spec/log-health/test amendment) | USI | C-runner, C-contract |
+| 38 | S4.13 accepted-workload receipt (observation job); FR-32 drift reducer on the executed path; scheduled-drift exclusion; releases (reviewed README/spec/log-health/test amendment) | USI | C-runner, C-contract |
 | 39 | S4.14 PROD path (worker, workflow, gate 2a/2b) | USI | C-runner, C-contract |
 | 40 | S4.15 acceptance-receipt validator + two-gate hard-stop test | USI | C-contract |
 | 41 | S4.16 TEST exercise workflow | USI | independent |
@@ -1356,11 +1684,15 @@ grant fix; the temporary cluster is deleted before a re-run.
 | 44 | S5.6 if the timing is over the bound | BI | conditional |
 | 45 | S4.8 restore rehearsal | USI (+BI live) | live TEST |
 | 46 | S5.20 in-container TLS merged and published | US | before gate 2 |
-| 47 | S5.19 prod-recovery role and environment | BI | C-BI |
+| 47 | S5.19 prod-recovery role and grants (environment from S5.21) | BI | C-BI |
 | 48 | XP-14 PROD registry proof (registry-phase work outside this plan) | USI registry | prerequisite |
 | 49 | S4.7 gate 2a (P-1 PROD preview), then gate 2b + PROD plan | USI | PROD gate |
 
 **No forward dependencies.** Every story depends only on lower-numbered rows.
+S1.11 (row 20) checks the program's `ignore_changes`, which S2.1 (row 16)
+adds; S1.8 (row 19) is its C-contract predecessor (R5-M4). The C-composition
+writers (rows 2, 5, 6, 16, 17, 21, 25) run in row order, and S3.5-A (row 25)
+makes the program render `prod` before S4.10 (row 28) needs it.
 BI inputs to USI are deterministic names, ARNs or patterns (the
 `secretsmanager` endpoint policy included: `rds!cluster-*` plus the
 deterministic S5.1 role ARNs). The only apply-derived values (subnet IDs,

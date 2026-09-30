@@ -4,7 +4,7 @@ workflow: _bmad/bmm/workflows/3-solutioning/bmad-create-architecture (Create mod
 task: workload-wa-hardening
 source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa
 date: 2026-09-30
-revision: 4 (readiness round-4 findings addressed; decisions D-1…D-7 of 2026-09-30 applied, including the D-4 and D-5 clarifications)
+revision: 5 (readiness round-5 findings R5-M1…M5 and m1…m18 addressed; decisions D-1…D-13 of 2026-09-30 applied)
 inputDocuments: [research.md, brief.md, prd.md, decisions.md, specs/poc-workload-runner.md, specs/poc/README.md]
 ---
 
@@ -20,7 +20,7 @@ inputDocuments: [research.md, brief.md, prd.md, decisions.md, specs/poc-workload
 | Accounts | TEST `891377212104`, PROD `933245420672`, `eu-central-1` |
 | Apply path | Saved plan only through the protected service-execution worker (`/pulumi test up`). PROD is gated on TEST. |
 | Destructive-diff classifier | `scripts/pulumi_ci_guardrails.py` (`CRITICAL_TYPE_PATTERNS`, `find_destructive_steps`), used by `scripts/run_pulumi_command.py::_validate_safe_preview` |
-| Drift check | `scripts/run_pulumi_drift_check.py` runs `pulumi preview --refresh --expect-no-changes` under the drift role |
+| Drift check | Two executed paths (R5-M1). **Baseline:** `make test-drift` (`Makefile` lines 229-230) → `scripts/run_pulumi_command.py drift` → `PULUMI_INVOCATIONS["drift"]` (`preview --refresh --expect-no-changes`, `scripts/_pulumi_command_support.py` lines 66-70), run by `.github/workflows/scheduled-drift.yml` (TEST job lines 23-84, PROD job lines 86-147) under the drift role against the baseline program `pulumi/__main__.py` (lines 18-30), with no workload materialization and no receipt check. **Workload:** `self-deploy.yml` `test_post_apply_drift` (lines 478-568; today only `phase == 'registry'`, lines 480-483) → `service_execution_host.py` → `service_execution_worker.py` → `poc_workload_runner.execute` → `run_pulumi_command._dispatch_command("drift", …)`, under the **preview** role (`self-deploy.yml` line 546). `scripts/run_pulumi_drift_check.py` is not executed by any workflow or make target (only `tests/pulumi/test_ci_guardrails.py` line 18 and `tests/unit/test_script_entrypoints.py` lines 500-504 reference it), so this plan puts nothing in it. The FR-32 check lives on the workload path (AD-23, S4.13). |
 | Profile | `.claude/devops-sdlc.json` is absent. `validate-profile` returned BLOCKED ("Required repository path is missing"). XP-7: run `do-sdlc-setup` before implementation. |
 
 The following argv would be reviewed later. It was not executed in this task:
@@ -41,11 +41,6 @@ bootstrap-infrastructure (governance, CODEOWNERS @Kravalg)
   │        S5.18a; exercise grants S5.23);
   │        recovery role + grants (test-recovery S5.7, prod-recovery S5.19);
   │        apply-role workload capability; preview + drift read capability
-  ├─ GitHub environments with Kravalg as sole reviewer: test, prod,
-  │        test-recovery, test-exercise (S5.21), prod-recovery (S5.19);
-  │        governance-evidence stays reviewer-less and main-only (BI
-  │        _github_evidence_environment.py); ruleset check
-  │        abandon-manifest-approval (S5.22)
   ├─ KMS (D-4, decided 2026-09-30): runtime CMK (secrets, every workload log
   │        group, flow-log bucket, SNS topic), JWT signing CMK (RSA), 2FA CMK;
   │        key policies name existing roles (roles are created first; AD-15a)
@@ -56,6 +51,14 @@ bootstrap-infrastructure (governance, CODEOWNERS @Kravalg)
   └─ CloudTrail: read management events (for the unauthorized-read alarm)
 
 user-service-infrastructure (this repo; no IAM, no Lambda functions, no SecretVersion)
+  ├─ GitHub repository controls (m3; USI's own
+  │        scripts/configure_github_repository_controls.py and
+  │        scripts/_github_repository_controls.py, admin apply by Kravalg):
+  │        environments with Kravalg as sole reviewer: test, prod,
+  │        test-recovery, test-exercise, prod-recovery (S5.21);
+  │        governance-evidence stays reviewer-less and main-only
+  │        (scripts/_github_evidence_environment.py); ruleset check
+  │        abandon-manifest-approval with a pinned issuer (S5.22)
   ├─ secrets metadata, SecretPolicy, SecretRotation, seed aws.lambda.Invocation
   ├─ DocumentDB (managed primary password), ElastiCache IAM user + default user + group
   ├─ ECS, autoscaling, alarms, SNS, EventBridge alarm rules
@@ -160,8 +163,9 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   - The top level gains `admission: {test: bool, prod: false | "preview" | true}`
     (AD-21), `workload_step: 1 | 2` (AD-18), `workload_operation: {mode,
     sequence}` (AD-24), `documentdb_secret_policy` (AD-08), `scaling:
-    {start_at, starts: [seq…], stops: [seq…], consumed: [name…]}` (AD-10) and
-    `drift.out_of_band_fields` (AD-23).
+    {starts: [{seq, at}…], stops: [{seq, at}…], consumed: [name…]}` (AD-10;
+    one `at` time per action, R5-M3) and `drift.out_of_band_fields` (AD-23,
+    added by S1.11).
   - The workload `central` object (`schemas/poc-test-v1.schema.json`, today
     `additionalProperties: false` with only `execution_role_arn` and
     `task_role_arn` beyond the publisher fields) gains:
@@ -203,9 +207,10 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     `SecretRotation(rotate_immediately=False)` (`depends_on` the seed, because
     rotation configuration runs `testSecret`, which needs AWSCURRENT) →
     `SecretPolicy` → autoscaling targets and policies (`depends_on` both) →
-    the TEST night and weekend `ScheduledAction`s → the one-time
-    `<svc>-start-1` `ScheduledAction` (`depends_on` the target and every
-    policy). The ECS task definitions and services exist from step 1 at 0
+    the TEST night and weekend `ScheduledAction`s → the one-time start
+    `ScheduledAction` of the single unconsumed `scaling.starts` entry
+    (`<svc>-start-1` on an on-time first build; `depends_on` the target and
+    every policy). The ECS task definitions and services exist from step 1 at 0
     tasks and are **not** changed in step 2. Tasks start only when the
     one-time start action fires (AD-10, V-23), after the seed and rotation
     exist.
@@ -273,8 +278,11 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     after step 1 and reaches BI through XP-8, and BI grants it by exact ARN
     (plus a tag condition if V-19 confirms the tag).
 - **AD-09 State-migration guard, fail-closed and offline (FR-09, NFR-07).**
-  - Workload admission (`poc_workload_admission`/`poc_workload_topology`)
-    rejects any prior checkpoint containing these URN types:
+  - Workload admission rejects any prior checkpoint containing these URN
+    types. The check is a function in `scripts/poc_workload_admission.py`
+    (S4.2, C-contract), called by `observe_workload` for every mode; it is
+    not added to `scripts/poc_workload_topology.py`, whose only writer stays
+    S4.10 (m15):
     - `random:*`;
     - `tls:*`;
     - `aws:secretsmanager/secretVersion:SecretVersion`;
@@ -288,60 +296,112 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     forbidden URNs, keeping the protected `Secret`s) is reviewed by the
     `state-migration-reviewer` and executed only through the FR-22 recovery
     command.
-- **AD-10 Autoscaling and create-only start/stop (R4-M5, m4).**
+- **AD-10 Autoscaling and create-only start/stop (R4-M5, m4, R5-M3).**
   - `appautoscaling.Target` per service, created in **step 2** (AD-18), with
     `min = max(contract min, 1)` and `max = contract max`.
   - Web: target tracking on `ALBRequestCountPerTarget` (resource label) and
     CPU.
   - Worker: metric math (A-17) with a zero-task guard.
   - The ECS services use `ignore_changes=["desiredCount"]` (AD-23).
+  - **Per-action times (R5-M3).** The contract lists every one-time action
+    with its own time: `scaling.starts: [{seq, at}]` and
+    `scaling.stops: [{seq, at}]`. The program renders `<svc>-start-<seq>` and
+    `<svc>-stop-<seq>` with `schedule = at(<that entry's at>)`. An entry is
+    **immutable once its URN is in the checkpoint**: a contract PR may only
+    append a new entry (the next `seq`) or move an entry to
+    `scaling.consumed` (below). So a new operation never changes the
+    rendered inputs of an earlier action, and admission sees `same` for
+    every earlier action (FR-11: no change to an earlier action). The
+    `start_at` window below applies only to the new entry. An entry whose URN
+    is **not** in the checkpoint (for example an action whose apply failed
+    before it was created) may be moved to `scaling.consumed` and replaced by
+    a new entry; that renders nothing to delete (m11).
   - **Start (step 2):** the service stays at `desiredCount=0` from step 1, and
     target tracking cannot scale from 0 tasks (no CPU or request data), so
-    step 2 creates one one-time `ScheduledAction` per service:
-    `<svc>-start-<seq>`, `schedule = at(<contract start_at>)`,
+    step 2 creates one one-time `ScheduledAction` per service for the
+    **single unconsumed `scaling.starts` entry** (audit): `<svc>-start-<seq>`,
+    `schedule = at(<entry at>)`,
     `scalable_target_action = {min_capacity: min, max_capacity: max}`. AWS
     documents that it scales out to `MinCapacity` when current capacity is
-    below it (A-26). `start_at` is a contract value set in the step-2 PR, no
-    earlier than the expected apply end, and the health observation waits
-    for it. The action is `create`, so step 2 stays create-only.
+    below it (A-26). The step-2 set (FR-34, S4.9, S4.10) names that entry by
+    its `seq`, not by a fixed `start-1`. The entry is set in its own small
+    contract PR after the S5.5 job (S4.6 step 6b), right before the step-7
+    request, so the window has the least slack to lose. If the window is
+    missed, a new PR moves the uncreated entry to `scaling.consumed` and
+    appends the next `seq`; the step-2 set follows it. The health
+    observation (AD-18 item 4) waits for it in its own job. The action is
+    `create`, so step 2 stays create-only.
   - **Stop (`rollback-zero`, first deployment), two plans.** Suspending
     scheduled scaling also blocks one-time actions, so the stop and the
     suspension cannot share a plan.
     1. **Stop plan** (`workload_operation.mode: rollback-zero`,
-       `phase: stop`): create-only; it creates `<svc>-stop-<seq>` with
-       `min = max = 0` (A-26: scale in to `MaxCapacity`). The runner waits
-       for the observed scale-in to 0 tasks.
+       `phase: stop`): create-only; it creates `<svc>-stop-<seq>` for the new
+       `scaling.stops` entry with `min = max = 0` (A-26: scale in to
+       `MaxCapacity`). The runner waits for the observed scale-in to 0 tasks.
     2. **Hold plan** (`phase: hold`, TEST only, because only TEST has
        recurring actions): exactly one `update` per target, changing only
        `suspendedState.scheduledScalingSuspended` to true, so the TEST
        morning action cannot restart a stopped service. With `max = 0`,
-       dynamic scaling cannot scale out either.
+       dynamic scaling cannot scale out either. **Provider-source first case
+       (m1, V-23 e):** S2.1 and S4.9 first read the pinned `pulumi-aws`
+       provider's update path for `aws:appautoscaling/target:Target` and
+       record whether `RegisterScalableTarget` re-sends `MinCapacity` and
+       `MaxCapacity` on an update, and, under
+       `ignore_changes=["minCapacity","maxCapacity"]` with `up --refresh`,
+       whether it sends the refreshed live values (0 and 0 after the stop)
+       or older program values. If it can send values other than the live
+       ones, the hold plan could restart a stopped service, and S4.9 does
+       not merge until the hold design is changed in a reviewed PR. V-23(d)
+       stays the live STOP at step 15.
 
     A **restart plan** (`phase: start`) updates the flag back to false (TEST)
-    and creates `<svc>-start-<seq>` in the same plan. That works because the
-    un-suspension is applied at apply time and the start action fires at
-    least 10 min later. The mode admits nothing else: no other `update`, no
-    `delete`, no change to the service or to an earlier action. V-23(d)
-    checks live that a suspension blocks one-time actions and that the
-    restart plan fires after the un-suspension. In PROD a stop needs gate
-    2b, the `prod` environment approval and a recorded incident reason.
-  - **`start_at` window.** Replay admission (the `_gate` check that runs
-    immediately before `up --plan`) refuses a plan whose new start or stop
-    action has an `at()` time earlier than the admission time + 10 min or
-    later than the admission time + 24 h. After an approval delay, a new
-    `start_at` means a new reviewed contract PR and a new saved plan.
-  - **V-23 (live, S4.6 step 7)** checks three things: (a) whether registering
-    the target with `min` above the current `desiredCount` of 0 already
-    scales out (if so, the start action is redundant but harmless); (b)
-    whether the one-time start action scales out from 0 at its time; (c)
-    whether a fired one-time action stays listed. If (c) shows that AWS
-    removes fired one-time actions, a refresh drops them from state, and a
-    program that still renders them would propose `create`. STOP before step
-    14. The reviewed fix has two parts: (1) a contract PR lists the fired
-    actions in `scaling.consumed`, and the program stops rendering them; (2)
-    the AD-23 entry lets the drift check accept a refresh-time removal of
-    exactly those names. After both, the preview is `same`. No delete step
-    is ever needed.
+    and creates `<svc>-start-<seq>` for a new `scaling.starts` entry in the
+    same plan. That works because the un-suspension is applied at apply time
+    and the start action fires at least 10 min later. The mode admits
+    nothing else: no other `update`, no `delete`, no change to the service
+    or to an earlier action. V-23(d) checks live that a suspension blocks
+    one-time actions and that the restart plan fires after the
+    un-suspension. In PROD a stop needs gate 2b, the `prod` environment
+    approval and a recorded incident reason.
+  - **`start_at` window (m13).** Replay admission (the `_gate` check that
+    runs immediately before `up --plan`) checks only the new entry's `at()`
+    time:
+    - lower bound: admission time + 10 min for a `rollback-zero` plan (it
+      creates only the action, plus the hold-flag update), and admission
+      time + 60 min for a `step2` plan (seeds, rotations and policies come
+      first; 60 min is above the 3300 s apply process timeout, so the action
+      exists before it fires, or the apply has failed);
+    - upper bound: admission time + 120 min for every mode.
+
+    The window never lengthens the apply: the apply job keeps its 3300 s
+    process timeout and 70-min job budget (`self-deploy.yml` `test_apply`,
+    `tests/unit/test_apply_timeout_budget.py`; FR-24). The health
+    observation that waits for the action runs in a separate job whose
+    credentials are requested only after the wait (AD-18 item 4). After an
+    approval delay, a new time means a new reviewed contract PR (a new
+    entry) and a new saved plan.
+  - **V-23 (live, S4.6 step 7)** checks: (a) whether registering the target
+    with `min` above the current `desiredCount` of 0 already scales out (if
+    so, the start action is redundant but harmless); (b) whether the
+    one-time start action scales out from 0 at its time; (c) whether a fired
+    one-time action stays listed. With per-action times, a fired action that
+    stays listed renders the same `at()` it was created with, so its
+    preview is `same`. If (c) shows that AWS removes fired one-time actions,
+    the next apply's refresh (`up-plan` runs with `--refresh`) drops them
+    from state, and a program that still renders them would propose
+    `create`. **STOP before the next apply of any mode** (m12), not only
+    before step 14. The reviewed fix has two parts: (1) a contract PR moves
+    the fired actions to `scaling.consumed`, and the program stops rendering
+    them; (2) the AD-23 entry lets the drift check accept a refresh-time
+    removal of exactly those names. After both, the preview is `same`. No
+    delete step is ever needed.
+  - **Abandon and rebuild (D-12).** The abandon removal plan deletes every
+    start and stop action with the rest of the workload. In the rebuild
+    (S4.6 step 20), the 5b contract PR moves every earlier entry to
+    `scaling.consumed` (none of their URNs is in the new checkpoint, so
+    nothing is deleted), and the 6b PR appends one new `scaling.starts`
+    entry, which the rebuild's step 2 creates as its single unconsumed
+    entry.
   - TEST only: recurring `ScheduledAction`s at night and on weekends,
     created in step 2. They change the target's min and max, so those two
     fields are on the allow-list (AD-23). The start and stop actions change
@@ -563,13 +623,14 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     source) with the AD-25 graph and with the S5.7 simulator matrix. A graph
     type without a mapped action set fails.
   - **Approval: @Kravalg specifically (R4-M4, m11).**
-    - The `test-recovery` and `prod-recovery` environments use BI
+    - The `test-recovery` and `prod-recovery` environments use USI's own
       `scripts/_github_repository_controls.py::protected_reviewer_environment_payload`
-      (bootstrap-infrastructure @debd88b, lines 308-319): reviewers =
+      (line 185; the same payload as BI @debd88b lines 308-319): reviewers =
       [Kravalg's user ID] only, `prevent_self_review: true`,
-      `can_admins_bypass: false`, main-only branch policy (`test-recovery`
-      by S5.21, `prod-recovery` by S5.19). This matches the AGENTS.md contract "sole environment reviewer
-      Kravalg" (AGENTS.md lines 157-159).
+      `can_admins_bypass: false`, main-only branch policy. USI's
+      `scripts/configure_github_repository_controls.py` applies them (both
+      by S5.21, m3). This matches the AGENTS.md contract "sole environment
+      reviewer Kravalg" (AGENTS.md lines 157-159).
     - In the run, `scripts/poc_workload_recovery.py abandon` refuses unless
       `GET /repos/{owner}/{repo}/actions/runs/{run_id}/approvals` shows an
       `approved` state for environment `test-recovery` by Kravalg's user ID,
@@ -577,13 +638,22 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     - The manifest PR must be approved by Kravalg: the status check
       `abandon-manifest-approval` (created in S4.3) reads the PR reviews on
       the head SHA and needs an `APPROVED` review by Kravalg's user ID.
-      S5.22 (after S4.3) makes it a required check in the ruleset. BI
-      required checks are branch-wide (no path condition;
-      `scripts/_github_repository_controls.py` lines 78-98 and 257 @debd88b),
-      so the check reports success without further review on a PR that does
-      not change `recovery/abandon-manifest.json`, and it is pinned to its
-      issuing GitHub Actions integration like the other required checks
-      (`_harden_status_check`).
+      S5.22 (after S4.3) makes it a required check in USI's own ruleset
+      (m3). The ruleset's required checks are branch-wide (the `main`
+      ruleset has only a `ref_name` condition; USI
+      `scripts/_github_repository_controls.py` lines 46-60 and the ruleset
+      payload), so the check reports success without further review on a PR
+      that does not change `recovery/abandon-manifest.json`. **Issuer pin
+      (m2):** today `_harden_status_check` (USI lines 64-78) and
+      `required_status_checks_rule` (lines 46-60) pin only the `Governance
+      Promotion` context to an App; every other context, including a new
+      one, is issuer-less, so any integration could post it. S5.22 adds its
+      own pinning code: the `abandon-manifest-approval` context is emitted
+      with `integration_id` = the GitHub Actions App ID, `_harden_status_check`
+      sets it and refuses an existing entry with another issuer, and
+      `ruleset_verification_blockers` (lines 385-409) reports a missing or
+      different issuer. A spoofing test (an entry without `integration_id`,
+      or with another App's ID) fails the verification.
       CODEOWNERS (`* @Kravalg @dmytrocraft`, USI `.github/CODEOWNERS`) is not
       enough on its own, because either owner can approve.
   - **Rule changes (D-7, decided 2026-09-30; unconditional):**
@@ -628,15 +698,25 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     `workflow_dispatch`, environment `test-recovery`; `prod-recovery` for
     PROD without `abandon`) runs `scripts/poc_workload_recovery.py`, which has
     these subcommands:
-    - `export`;
-    - `release-lock`;
-    - `clear-pending`;
-    - `import` (from `import-list.json`);
-    - `abandon` (TEST only; refused in `prod-recovery`).
+    - `export` (writes an export receipt, `cause: export`);
+    - `release-lock` (deletes only the lock object; the checkpoint sha256
+      before and after must be equal, else it refuses and writes nothing);
+    - `clear-pending` (rewrites the checkpoint without its pending
+      operations, then writes an **export receipt** for the new checkpoint
+      with `cause: clear-pending` and `predecessor` = the prior failed or
+      export receipt's ID and checkpoint sha256; R5-M2);
+    - `import` (from `import-list.json`; writes an import receipt);
+    - `abandon` (TEST only; refused in `prod-recovery`; writes the abandon
+      receipt).
 
-    Every subcommand produces evidence JSON.
+    Every subcommand produces evidence JSON. **Every subcommand that writes
+    the checkpoint also writes a receipt bound to the new checkpoint**
+    (AD-24), so the resume anchor never goes stale after a recovery step: a
+    `clear-pending` without its receipt leaves the live checkpoint unequal to
+    every receipt, and `resume` is refused.
   - CODEOWNERS entries for these USI files are added in USI (S4.3). BI
-    provides the role grants and the environments (S5.7, S5.19, S5.21).
+    provides the role grants (S5.7, S5.19); USI's repository controls provide
+    the environments (S5.21).
   - **Runtime guard:** the runner resolves `admission.<env>` from the
     installed `main` contract at the trusted controller checkout.
     Mismatch, missing or unreadable means refuse.
@@ -664,12 +744,28 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
      or `delete` of any step-1 URN. Admission refuses step 2 without the
      step-1 receipt (its checkpoint is the anchor), the S5.5 receipt and the
      XP-8 metadata in the installed `main` central metadata.
-  4. **Step-2 health observation:** the trusted observer records, within a
-     bounded wait after `start_at`, every service `steadyState` with
+  4. **Step-2 health observation (m13):** a separate read-only job, not the
+     apply job. `self-deploy.yml` gains `test_workload_observation`
+     (environment `test-preview`, `needs: test_apply_receipt`, so the
+     success receipt it binds to is published first; S4.13). It waits until
+     the new start action's `at()` time, only then requests preview-role
+     credentials, and records every service `steadyState` with
      running = desired ≥ 1, all targets `healthy`, and the app health
-     endpoint green for DocumentDB (MONGODB-AWS) and Redis (IAM). A failure
-     is STOP (S4.6 step 7). On success the runner issues the
-     **accepted-workload receipt** (AD-24).
+     endpoint green for DocumentDB (MONGODB-AWS) and Redis (IAM). The
+     conditions must hold within 30 min after the later of the `at()` time
+     and the job's start. `test-preview` is a Kravalg-reviewed environment,
+     so a late approval only delays the observation; the health states are
+     current states, not events. Its `timeout-minutes` covers the 120-min
+     upper bound of the `start_at` window plus the 30-min observation, below
+     GitHub's 360-min job limit. It reads no Pulumi state, so it uses its own
+     concurrency group `workload-observation-${{ github.repository }}-test`
+     and does not hold `pulumi-state-…-test-test` while it waits. The apply
+     job's 3300 s process timeout and 70-min budget and the FR-24 bounds are
+     unchanged. A failure is STOP (S4.6 step 7). On success, a
+     `governance-evidence` job `test_workload_acceptance`
+     (`needs: [test_apply_receipt, test_workload_observation]`) checks that
+     the live checkpoint still equals the latest success receipt and issues
+     the **accepted-workload receipt** (AD-24).
 - **AD-19 Rollback (FR-30, m4).**
   - **First deployment** (no accepted-workload receipt yet, or the first
     accepted release is the only one): there is no prior release to return
@@ -689,6 +785,22 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     `<stack>-docdb-restore-rehearsal` under the S5.18a operator role,
     switched to a managed primary password (`ModifyDBCluster`), read by the
     S5.18b reader, then deleted; a gate for PROD.
+  - **Recovery targets (m16; planning targets, not user decisions).**
+    DocumentDB, the only stateful store that needs a restore:
+    - **RPO ≤ 5 min** inside the backup retention window
+      (`documentDbBackupRetentionDays`, default 7 days,
+      `pulumi/app/environment.py` lines 677-681): point-in-time restore to
+      the cluster's latest restorable time. Evidence: the read-only
+      `DescribeDBClusters` `LatestRestorableTime` lag at the S4.8 rehearsal
+      (≤ 300 s). A snapshot restore (the rehearsal source) has an RPO equal
+      to the snapshot age, which the evidence records.
+    - **RTO ≤ 4 h**: from the restore request to the reader's document-count
+      sample on the restored cluster (S4.8 R-1 measures it).
+    - Redis holds cache and lockout state only; it is rebuilt, not
+      restored, so no RPO applies. Its snapshots stay as configured.
+    - A measured value above a target is a STOP at gate 2a: the user
+      decides to accept it or to change the design; a default never
+      accepts it.
 - **AD-20 SQS and SES (FR-03).** Keep the credential-free DSNs (R-19). Add a
   regression test that rejects userinfo and keys. The BI task-role grants
   scope the seven queues and the SES identity.
@@ -724,22 +836,114 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   unreachable for shared stacks. Dev and preview placeholders are unchanged.
 - **AD-23 Drift allow-list (FR-32, M-1).** A closed list in the contract
   (`drift.out_of_band_fields`), keyed by Pulumi resource type. Nothing else may
-  change outside Pulumi.
+  change outside Pulumi. The list has two parts (audit):
+  - `ignore_fields`: the input fields the program ignores. S1.11 compares
+    this part both ways with the program's `ignore_changes` (ECS
+    `desiredCount`; target `minCapacity`, `maxCapacity`).
+  - `refresh_only_fields`: output fields that refresh may change with no
+    program diff (DocumentDB `masterUserSecrets[*].secretStatus`). Only the
+    drift reducer reads this part, together with the `scaling.consumed`
+    removal rule for one-time actions. The program has no `ignore_changes`
+    for it.
 
   | Resource type | Fields allowed to change outside Pulumi | Why | Program handling |
   | --- | --- | --- | --- |
   | `aws:ecs/service:Service` | `desiredCount` | Application Auto Scaling owns it (FR-11, FR-12). | `ignore_changes=["desiredCount"]` |
   | `aws:appautoscaling/target:Target` | `minCapacity`, `maxCapacity` | The TEST night and weekend actions (FR-14c) and the one-time start and stop actions (AD-10, both environments) change them. `suspendedState` is managed by Pulumi (`rollback-zero`). | `ignore_changes=["minCapacity","maxCapacity"]` |
   | `aws:appautoscaling/scheduledAction:ScheduledAction` named `*-start-*` or `*-stop-*` | none by default. If V-23(c) shows that AWS removes a fired one-time action, a reviewed contract PR lists it in `scaling.consumed`, the program stops rendering it, and the drift check accepts a refresh-time removal of exactly the listed names (AD-10). | V-23 | not rendered once consumed |
-  | `aws:docdb/cluster:Cluster` | `masterUserSecrets[*].secretStatus` | Managed rotation changes the status. These are outputs, not inputs, so refresh may change state without a diff. | none (output) |
+  | `aws:docdb/cluster:Cluster` | `masterUserSecrets[*].secretStatus` (`refresh_only_fields`) | Managed rotation changes the status. These are outputs, not inputs, so refresh may change state without a diff. | none (output) |
   | `aws:elasticache/user:User`, `aws:elasticache/userGroup:UserGroup` | none | IAM auth removed the rotation Lambda that used to change passwords and access strings. | none |
   | `aws:secretsmanager/secret:Secret`, `SecretRotation`, `SecretPolicy` | none (version stages are not Pulumi state) | Rotation changes versions, not these resources. | none |
   | `aws:cloudwatch/logGroup:LogGroup` | none | `kms_key_id` is managed by Pulumi (D-4). | none |
 
+  **Where the FR-32 check runs (R5-M1).** On the executed workload drift
+  path only, never in the unexecuted `scripts/run_pulumi_drift_check.py`:
+  - **Invocation.** Today the runner's drift call would reach
+    `run_pulumi_command._dispatch_command("drift", …)` (runner line 202).
+    S4.13 adds a `workload-drift` entry to `PULUMI_INVOCATIONS`
+    (`scripts/_pulumi_command_support.py` lines 66-70):
+    `preview --refresh --expect-no-changes --json --save-plan <private path>`,
+    registers it in `scripts/run_pulumi_command.py` (the command tables at
+    lines 54-70), and makes the runner dispatch `workload-drift` for a
+    workload `drift` request. The baseline `drift` entry is unchanged.
+  - **Reducer.** `scripts/poc_workload_reconciliation.py` (the existing
+    no-change reducer, lines 224-245 `validate_no_change`) gains
+    `validate_drift(preview, *, saved_plan, prior_resources, allowed)`: the
+    same checks, except that a step's refreshed `oldState`/`newState` may
+    differ from the authenticated prior checkpoint row (the checkpoint of the
+    latest success receipt, AD-24) **only** at the AD-23 field paths of that
+    row's type (inputs and outputs), plus a refresh-time removal of exactly
+    the `scaling.consumed` action URNs. Any other difference fails with the
+    field named in the sanitized summary (FR-20 allow-list).
+  - **Role.** The **preview** role produces the gate-2 clean-drift
+    evidence: `self-deploy.yml` `test_post_apply_drift` assumes
+    `aws-preview-role-arn` (line 546; `GitHubCiPreview-user-service-infrastructure-test`,
+    read set S5.17 plus the S5.4 key read), and S4.14's
+    `prod_post_apply_drift` assumes the PROD preview role. The drift role
+    stays on the baseline scheduled path.
+  - **Scheduled drift (S4.13).** `scheduled-drift.yml` runs the baseline
+    program, which renders no workload, so for a workload checkpoint it
+    would propose deleting every workload resource and has no receipt to
+    check. S4.13 therefore excludes a stack whose installed `main` contract
+    has `phase: workload` from `make test-drift`. The exclusion sits in the
+    `drift` branch of `run_pulumi_command.py` only (not in
+    `_configured_stack_names`, line 84, which `preview`, `plan` and `up-plan`
+    share). It prints the recorded reason `workload-drift-routed-to-runner`
+    as a notice. When every configured stack is excluded, the command
+    exits 0 with that notice; today an empty stack list returns 1 (lines
+    846-852), which would fail the nightly job. `specs/poc-workload-runner.md`
+    records the exclusion. Workload drift runs only through the worker with
+    an accepted receipt (AD-24). **Observation, not changed here:** the
+    baseline program also renders none of the eleven registry resources, so
+    the same reasoning applies to a `phase: registry` TEST stack. The
+    registry owner decides that case, and this plan records it.
+  - **Owner.** `scripts/poc_workload_reconciliation.py` is a C-contract file
+    (§4): S4.10 makes the M5 allowances below, then S4.13 adds
+    `validate_drift`.
+
+  **Checkpoint fields that Pulumi stores (R5-M5).** Pulumi records
+  `ignoreChanges` on checkpoint rows and plan goals, and, after an unprotect
+  plan, `retainOnDelete` on checkpoint rows (`scripts/poc_registry_plan.py`
+  lists `ignoreChanges` in `GOAL_FIELDS`, lines 74-78, and both fields in
+  `STATE_FIELDS`, lines 79-86). Today
+  `scripts/poc_workload_reconciliation.py` rejects any state row with either
+  field (`UNSAFE_STATE`, lines 39 and 45, checked at line 95), which
+  `scripts/poc_workload_secret_result.py` (lines 71 and 212) and
+  `scripts/poc_gateway_backend.py` (line 40) reuse through `_inventory`, and
+  `scripts/poc_workload_topology.py` rejects `ignoreChanges` on a create goal
+  (lines 321-326) and any `UNSAFE_STATE` field on a create step's
+  `newState` (`_validate_workload_step`, lines 1114-1115). S4.10 changes both
+  files, as a recorded, deliberate narrow change: a row or goal may carry `ignoreChanges` only
+  when it equals the AD-23 list for its type (`["desiredCount"]` on
+  `aws:ecs/service:Service`, `["minCapacity","maxCapacity"]` on
+  `aws:appautoscaling/target:Target`); `retainOnDelete: true` is accepted
+  only on the abandon path (`_inventory(…, abandon_retain=<manifest retain
+  URNs>)`, called by S4.2/S4.3) and only for manifest `retain` URNs. Every
+  other occurrence still fails.
+
+  **Workload-aware capture (audit).** A third rejection site sits on every
+  capture: `scripts/poc_registry_plan.py::_state` (lines 297-324) rejects both
+  fields, and `_prior` (lines 365-376) requires every URN to be a registry
+  URN. It runs through `poc_registry_runner._capture` (lines 254-258), which
+  `poc_workload_runner._capture` (line 41) and
+  `poc_workload_admission.inspect_registry` (line 150) call. So any
+  checkpoint that holds workload resources fails before the mode → anchor
+  table is consulted. S4.11 (C-runner and C-contract; it already edits both
+  callers) adds a workload-aware capture: it reads the checkpoint through
+  `backend.capture_backend`, checks the registry rows with the registry
+  `_state` rules and the workload rows with the S4.10 `_inventory`
+  allowance, and binds the result to the mode's anchor. `first` keeps
+  today's registry-only capture. `poc_registry_plan.py` itself is not
+  changed, because the registry phase still needs its closed rules.
+
   Tests: every `ignore_changes` in the program is on the list (N: an extra
-  field fails); the drift check fails when a refresh changes an unlisted
-  field. V-13 confirms that `--refresh --expect-no-changes` exits 0 when only
-  listed fields changed.
+  field fails; S1.11); the drift reducer fails when a refresh changes an
+  unlisted field and passes when only listed fields changed (S4.13); the
+  reconciliation and topology checks accept exactly the AD-23
+  `ignoreChanges` and the abandon-path `retainOnDelete`, and refuse any
+  other value (S4.10). V-13 confirms that `--refresh --expect-no-changes`
+  exits 0 when only listed fields changed and that the `--json --save-plan`
+  output carries the refreshed per-step states the reducer reads.
 
 - **AD-24 Runner lifecycle (FR-35, R4-B2).** The installed path at `1ebbd09`
   admits only a first TEST apply, in four places:
@@ -780,11 +984,37 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   operation sequence, `outcome` (`success` or `failed`), checkpoint
   `{version, etag, sha256}`, `run_id`, `run_attempt`, `source_sha`,
   contract digest, projection digest, generated-files digest and the
-  secret-metadata observation. If the job dies before it can write a receipt
-  (for example a credential-window timeout), the recovery `export`
-  (S4.3, `test-recovery`) writes `poc-workload-export-receipt-v1` with the
-  same checkpoint fields. Every receipt is published and authenticated like
-  the registry proof: an immutable artifact, the protected
+  secret-metadata observation. **Failure path (m4, audit).** Two processes
+  fail the job on a non-zero status. The worker raises at
+  `scripts/service_execution_worker.py` line 127
+  (`require(result == 0, "worker-execution")`). The host,
+  `scripts/service_execution_host.py`, runs the worker container with
+  `check=True` (`_run`, lines 76-83), mounts `/public` from a random
+  `mkdtemp` under `RUNNER_TEMP` (lines 166-167), and copies out only for
+  `_preview` jobs (lines 213-218). So: the runner writes the receipt file
+  before it returns the status; the worker copies it to `/public` before
+  line 127 (today it copies only `plan` artifacts, lines 128-132); the host
+  runs the `test_apply` container without raising first, copies
+  `/public/workload-receipt` to the fixed path
+  `.trusted/.artifacts/workload-receipt` in a `finally` path, and only then
+  raises on a non-zero status; `test_apply` uploads that path in an
+  `if: always()` step; and a new `self-deploy.yml` job
+  **`test_apply_receipt`** (environment `governance-evidence`,
+  `needs: test_apply`, `if: always()` for a workload-phase `up`) publishes
+  and authenticates it on both the success and the failure path. A
+  cancelled job kills the host too, so a cancellation leaves no receipt;
+  the recovery `export` covers that case. If the
+  job dies before it can write a receipt (for example a credential-window
+  timeout), the recovery `export` (S4.3, `test-recovery`) writes
+  `poc-workload-export-receipt-v1` with the same checkpoint fields. **Every
+  recovery subcommand that writes the checkpoint writes a receipt for the
+  new checkpoint** (AD-16, R5-M2): `clear-pending` an export receipt with
+  `cause: clear-pending` and `predecessor` (the prior receipt's ID and
+  checkpoint sha256), `import` an import receipt and `abandon` an abandon
+  receipt; `release-lock` must leave the checkpoint unchanged. Every
+  receipt carries the `workload_operation` it belongs to, so `resume` knows
+  which operation to finish. Every receipt is published and authenticated
+  like the registry proof: an immutable artifact, the protected
   `governance-evidence` environment, and App deployment and status readback
   (README items 2-3; XP-9). The **latest receipt** of a stack is the one
   whose checkpoint equals the live checkpoint; any other receipt is stale and
@@ -797,7 +1027,7 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   | Mode | Anchor that must equal the live checkpoint | Extra condition |
   | --- | --- | --- |
   | `first` | registry receipt checkpoint (today's rule) | the checkpoint holds only registry resources |
-  | `resume` | latest receipt with `outcome: failed`, or an export receipt | the checkpoint holds registry resources plus a subset of the current step's graph |
+  | `resume` | latest receipt with `outcome: failed`, or an export receipt (`cause: export` or `clear-pending`; a `clear-pending` receipt's `predecessor` must be a failed or export receipt of the same lineage) | the operation to finish is the anchor's `workload_operation` (m11). The checkpoint holds the URNs of the last `success` receipt before it (the registry resources for an interrupted step 1) plus a subset of the URNs that operation creates or updates. The resumed plan may only `create` or `update` URNs of that operation, under that operation's own admission rule (for example the `step2` created set, the `rollback-zero` phase rule, or the one `policy-update` step), plus `same`. A new action's `at()` time must be inside the window (AD-10); an action URN not yet in state may be replaced by a new `scaling` entry. |
   | `step2` | latest receipt: `success` of step 1 (`first` or `resume`) | S5.5 receipt; XP-8 values in the installed contract |
   | `rollback-zero`, `policy-update` | latest receipt: `success` of any mode after step 2 | — |
   | `recovery-import` | latest receipt or export receipt (after an abandon: the abandon receipt) | import list = the abandon receipt's `retain` set, or the reviewed import list; writes an **import receipt** |
@@ -808,10 +1038,16 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
 
   The C-runner chain changes this path in four stories, all before S4.6:
   1. **S4.11 step, export and abandon receipts; anchor rebinding.** The
-     receipt schemas and `scripts/poc_workload_receipts.py`; issuance in the
-     runner after every admitted apply (success and failure paths); the
-     table above in `inspect_registry`/`observe_workload` and in `_capture`.
-     S4.3 issues the export and abandon receipts with the same library.
+     receipt library `scripts/poc_workload_receipts.py` over the S1.1
+     schemas; issuance in the runner after every admitted apply (success and
+     failure paths), the worker copy before line 127, the host copy-out in
+     a `finally` path, the `test_apply` upload and the `test_apply_receipt`
+     publication job; the workload-aware capture (AD-25) and the table above
+     in `inspect_registry`/`observe_workload` and in `_capture`. It also removes
+     the stale "issues no receipt" wording: the runner docstring (lines 1-7)
+     and `specs/poc-workload-runner.md` lines 38-40, 50-52 and 97-98 (lines
+     37-38 and 121-122 change in S4.13). S4.3 issues the export,
+     clear-pending, import and abandon receipts with the same library.
   2. **S4.12 mode routing.** `execute` and `_gate` dispatch by
      `workload_operation.mode`: `first` → `admit_first_workload_plan`;
      `step2`, `rollback-zero`, `policy-update` → S4.9; `resume` and
@@ -820,21 +1056,31 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
      `recovery.yml`. An unknown mode, a mode not allowed for the command, or
      a stale or missing anchor is refused.
   3. **S4.13 accepted-workload receipt; drift and releases.** Every admitted
-     apply that leaves `desiredCount ≥ 1` (after `start_at`) runs the AD-18
-     health observation. The first passing observation after step 2 writes
-     `poc-workload-accepted-receipt-v1` (for example after a step-7 STOP,
+     apply that creates a start action runs the AD-18 health observation in
+     the separate `test_workload_observation` job (m13). The first passing
+     observation after step 2 writes `poc-workload-accepted-receipt-v1`
+     through `test_workload_acceptance` (for example after a step-7 STOP,
      the next successful `rollback-zero` start plan). `drift` and releases
-     then follow the table. Scope: runner line 154; worker line 99 (drift
-     routed only with the accepted receipt), worker docstring line 5 and
+     then follow the table. Scope: runner line 154 and the `workload-drift`
+     dispatch with the FR-32 reducer (AD-23); worker line 99 (drift routed
+     only with the accepted receipt), worker docstring line 5 and
      `tests/unit/test_service_execution_worker.py:166`; `self-deploy.yml`
-     `test_post_apply_drift`. A **reviewed amendment** (Kravalg-approved
+     `test_post_apply_drift`, whose `if` (lines 480-483, today
+     `phase == 'registry'` only) also admits a workload-phase `up` whose
+     operation runs after acceptance (`rollback-zero`, `policy-update`, or a
+     `resume` of either), and whose workload branch also `needs:
+     test_apply_receipt` (today `needs` is preflight, poc_prepare_source and
+     test_apply, lines 486-489), so the success receipt it binds to is
+     published first; the scheduled-drift exclusion (AD-23); and
+     `specs/poc-workload-runner.md` lines 121-122. A **reviewed amendment** (Kravalg-approved
      governance PR) changes README line 127, runner spec lines 37-40 and
      `docs/poc-workload-log-health.md` line 57 to "Workload drift is admitted
      only with an authenticated accepted-workload receipt and is rejected
      without one." `test_workload_apply_docs_consistency.py` changes with
      them: line 175 gets the new sentence, and line 185 becomes two
      assertions (drift not routed without the receipt, routed with it).
-  4. **S4.14 PROD path.** Worker `JOBS`/`ACCOUNTS` gain the PROD entries
+  4. **S4.14 PROD path.** Worker `JOBS`/`ACCOUNTS` and host `JOBS`
+     (`scripts/service_execution_host.py` lines 27-31) gain the PROD entries
      (`prod_preview`, `prod_apply`, `prod_post_apply_drift`; account
      `933245420672`), and `self-deploy.yml` gains the matching jobs in the
      `prod-preview` and `prod` environments. The source binding accepts
@@ -846,7 +1092,9 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
      `abandon` is never admitted for PROD.
   - **Regression tests (all four stories):** `step2` without a step-1
     receipt refused, admitted with one; `resume` without a failed or export
-    receipt refused; `drift` without an accepted receipt refused
+    receipt refused; a failed receipt → `clear-pending` (with its export
+    receipt) → `resume` admitted, and the same without the clear-pending
+    receipt refused as stale; `drift` without an accepted receipt refused
     (`workload-accepted-state-receipt-required` and, in the worker,
     `workload-drift-not-enabled`), admitted with one; release refused without
     a clean-drift result; a stale receipt refused. The existing negatives
@@ -905,6 +1153,13 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     listed in the authenticated abandon receipt;
   - `recovery/delete-actions.json`: per graph type, the API set of the pinned
     provider's delete path (V-26), which S5.7 grants and S4.3 checks;
+  - **the checkpoint-field allowance (R5-M5, AD-23):**
+    `scripts/poc_workload_reconciliation.py` (`UNSAFE_STATE` lines 31-49,
+    check at line 95) and `scripts/poc_workload_topology.py` (create-goal
+    check at lines 321-326 and create-step `newState` check at lines
+    1114-1115) accept `ignoreChanges` equal to the AD-23 `ignore_fields`
+    for the row's type and `retainOnDelete` only on the abandon path for
+    manifest `retain` URNs, as a recorded deliberate narrow change;
   - the matching `specs/poc-workload-runner.md` text and doc-marker tests.
 
   **Transition rule (keeps CI green without a second topology writer).**
@@ -931,10 +1186,14 @@ after its predecessor merges.
 
 | Chain | Order |
 | --- | --- |
-| C-BI (IAM/KMS/Lambda/GitHub environments, governance apply) | S5.1 (every central role: execution, task, app-rotation, redeploy, bootstrap-job, restore-operator, restore-reader, exercise; no KMS statements) → S5.2 (apply capability, including the managed-password and log-group KMS describe grants) → S5.17 (preview/drift read without KMS; `iam:SimulatePrincipalPolicy` for the preview role) → S5.4 (CMKs whose key policies name only existing roles, per AD-15a; then the matching identity statements, including the preview/drift KMS read) → S5.3 (functions that use the S5.1 roles; KMS-encrypted function log groups; rules) → S5.21 (Kravalg-only environments `test`, `prod`, `test-recovery`, `test-exercise`; `governance-evidence` checked unchanged) → S5.23 (TEST exercise role) → S5.7 (test-recovery role and grants, derived from the S4.10 graph) → S5.22 (ruleset: `abandon-manifest-approval` required, after S4.3) → S5.18a (grants on the S5.1 restore-operator and restore-reader roles, reader package, no VPC) → [live, after USI step 1] S5.5 (XP-8 metadata, exact-ARN grant, bootstrap-job VPC attach, job run) → S5.18b (restore-reader VPC attach, after XP-8) → S5.6 (conditional) → S5.19 (prod-recovery) |
-| C-contract (`schemas/`, `scripts/poc_contract.py`, secret validators, admission, drift allow-list, receipt schemas, acceptance-receipt validator) | S1.1 → S1.7 → S1.9 → S1.11 → S1.8 → S4.10 → S4.11 → S4.2 → S4.9 → S4.3 → S4.12 → S4.13 → S4.14 → S4.15 → S4.6 → S4.7 |
+| C-BI (IAM/KMS/Lambda, governance apply) | S5.1 (every central role: execution, task, app-rotation, redeploy, bootstrap-job, restore-operator, restore-reader, exercise; no KMS statements) → S5.2 (apply capability, including the managed-password and log-group KMS describe grants) → S5.17 (preview/drift read without KMS; `iam:SimulatePrincipalPolicy` for the preview role) → S5.4 (CMKs whose key policies name only existing roles, per AD-15a; then the matching identity statements, including the preview/drift KMS read) → S5.3 (functions that use the S5.1 roles; KMS-encrypted function log groups; rules) → S5.23 (TEST exercise role) → S5.7 (test-recovery role and grants, derived from the S4.10 graph) → S5.18a (grants on the S5.1 restore-operator and restore-reader roles, reader package, no VPC) → [live, after USI step 1] S5.5 (XP-8 metadata, exact-ARN grant, bootstrap-job VPC attach, job run) → S5.18b (restore-reader VPC attach, after XP-8) → S5.6 (conditional) → S5.19 (prod-recovery role and grants) |
+| C-controls (USI GitHub repository controls, m3: `scripts/configure_github_repository_controls.py`, `scripts/_github_repository_controls.py`, `scripts/_github_environment_controls.py`, `tests/unit/test_configure_repository_controls.py`; admin apply by Kravalg) | S5.21 (Kravalg-only environments `test`, `prod`, `test-recovery`, `test-exercise`, `prod-recovery`; `governance-evidence` checked unchanged) → S5.22 (ruleset: `abandon-manifest-approval` required with a pinned issuer, after S4.3) |
+| C-contract (`schemas/`, `scripts/poc_contract.py`, secret validators, admission, drift allow-list, receipt schemas, `scripts/poc_workload_reconciliation.py` and `docs/poc-workload-reconciliation.md` (R5-M1, R5-M5), acceptance-receipt validator) | S1.1 → S1.7 → S1.9 → S1.8 → S1.11 → S4.10 → S4.11 → S4.2 → S4.9 → S4.3 → S4.12 → S4.13 → S4.14 → S4.15 → S4.6 → S4.7. S1.11 follows S1.8, which follows S2.1 in C-compute, so the program's `ignore_changes` exist when S1.11 checks them (R5-M4). |
 | C-topology (`scripts/poc_workload_topology.py`, `scripts/poc_workload_secret_result.py`, the native integration test, the Random/TLS pins, `recovery/delete-actions.json`, the runner-spec topology text) | S4.10 only (AD-25) |
-| C-runner (`scripts/poc_workload_runner.py`, `scripts/service_execution_worker.py`, `.github/workflows/self-deploy.yml`, the admission observation functions, receipt modules, `specs/poc-workload-runner.md` lifecycle text, the README line-127 sentence, `docs/poc-workload-log-health.md`, `test_workload_apply_docs_consistency.py`, `test_service_execution_worker.py`) | S4.4 → S4.5 → S4.11 → S4.12 → S4.13 → S4.14. S4.11–S4.14 also hold the C-contract slot at their position in that chain, because they edit `poc_workload_admission.py`. |
+| C-runner (`scripts/poc_workload_runner.py`, `scripts/service_execution_worker.py`, `scripts/service_execution_host.py` (receipt copy-out; PROD `JOBS`, lines 27-31), the worker diagnostics, `.github/workflows/self-deploy.yml`, `.github/workflows/scheduled-drift.yml`, `scripts/_pulumi_command_support.py` and `scripts/run_pulumi_command.py` (the `workload-drift` entry and the scheduled exclusion), `scripts/poc_workload_observation.py`, the admission observation functions, receipt modules, `specs/poc-workload-runner.md` lifecycle text, the README line-127 sentence, `docs/poc-workload-log-health.md`, `test_workload_apply_docs_consistency.py`, `tests/unit/test_service_execution_worker.py`) | S4.1 → S4.4 → S4.5 → S4.11 → S4.12 → S4.13 → S4.14. S4.1 heads it because its FR-20 test is `tests/unit/test_service_execution_worker.py` (m5). S4.11–S4.14 also hold the C-contract slot at their position in that chain, because they edit `poc_workload_admission.py`. |
+| C-composition (`pulumi/app/workload_phase.py`: the plane imports and wiring at lines 13-29 and in `WorkloadPhaseStack.__init__`, `TAGGABLE_TYPES`, `_validate_target`) (m6) | S1.1 (`workload_step` branch) → S1.3 (step-1/step-2 structure, XP-8 exports) → S1.4 (ElastiCache user and group types) → S2.1 (autoscaling plane) → S2.3 (observability plane, with every taggable type S2.4 and S2.5 add) → S3.2 (default SG) → S3.1 (flow-log plane and bucket family) → S3.3 (endpoints and endpoint SG) → S3.5-A (`_validate_target` parameterized by stack so the program renders `prod`; today it pins `test` and the TEST registries, lines 125-160; before S4.10, whose PROD native plan needs it) |
+| C-autoscaling (`pulumi/app/autoscaling.py`) | S2.1 → S2.2 → S2.6 (TEST schedules) |
+| C-observability (`pulumi/app/observability.py`) | S2.3 → S2.4 → S2.5 |
 | C-runtime (`runtime_secrets.py`) | S1.1 → S1.7 → S1.6 → S1.5 → S1.8 |
 | C-data (`data.py`) | S1.2 → S1.3 → S1.4 → S1.10 → S1.9 |
 | C-network (`network.py`) | S1.3 → S1.4 → S3.2 → S3.1 → S3.3 → S3.4 |
@@ -945,20 +1204,22 @@ after its predecessor merges.
 **Independent file scopes.** These can run in parallel with at most three
 agents, after the chain heads they read from:
 
-- `observability.py` (S2.3 → S2.4 → S2.5);
-- `autoscaling.py` (S2.2 after S2.1);
-- the worker diagnostics (S4.1);
 - the TLS doc (S3.5-B);
+- the TEST exercise workflow (S4.16, after S5.23);
 - US stories;
 - the AGI story.
 
-The runner guard and timing (S4.4, S4.5) are no longer independent: they
-edit `scripts/poc_workload_runner.py`, so they head C-runner.
+The runner diagnostics, guard and timing (S4.1, S4.4, S4.5) are not
+independent: they edit C-runner files, so they head C-runner (m5).
+`observability.py` and `autoscaling.py` are serialized chains, not
+independent scopes, because their stories also wire `workload_phase.py`
+(C-composition).
 
 **Cross-repo gates are acyclic in time:**
 
-1. BI S5.1 → S5.2 → S5.17 → S5.4 → S5.3 → S5.21 → S5.23 → S5.7 → S5.22 → S5.18a use
-   deterministic ARNs and patterns only. The `secretsmanager` endpoint
+1. BI S5.1 → S5.2 → S5.17 → S5.4 → S5.3 → S5.23 → S5.7 → S5.18a use
+   deterministic ARNs and patterns only; the USI repository controls S5.21
+   and S5.22 use no apply output. The `secretsmanager` endpoint
    policy uses deterministic role ARNs and `rds!cluster-*` (R4-B3), so it is
    acyclic.
 2. USI step 1, then the authenticated step-1 receipt.
@@ -1066,7 +1327,7 @@ edit `scripts/poc_workload_runner.py`, so they head C-runner.
   | V-10 | REST API private integration over VPC link V2 **directly to the ALB** in `eu-central-1` | docs, verified 2026-09-30 (REST API whitepaper: VPC link V2 supports ALB and NLB; What's New 2025-11 lists Europe (Frankfurt)); provider source, verified: `pulumi_aws` 7.23.0 `apigateway.Integration.integration_target` + live | S5.16 | 17 | Fallback: NLB (TCP 443) with an ALB-type target group, recorded and reviewed; never silent. |
   | V-11 | DocumentDB `StsGetCallerIdentityCalls` is published | docs, verified 2026-09-30 (`iam-identity-auth.html`) + live | S2.4 | 12 | Fallback: drop the informational alarm, recorded. |
   | V-12 | SES API interface endpoint (What's New 2025-12) service name and private DNS for the SES v2 host used by async-aws | docs + live read-only `DescribeVpcEndpointServices` | S3.3 | 3, 11 | Fallback: no SES endpoint; service SG keeps 443 to `0.0.0.0/0` via NAT for SES only, recorded (FR-18). |
-  | V-13 | `preview --refresh --expect-no-changes` exits 0 when only AD-23 fields changed | docs + provider source + live | S1.11 | 14 | STOP: investigate; the list is never widened without review. |
+  | V-13 | `preview --refresh --expect-no-changes` exits 0 when only AD-23 fields changed, and with `--json --save-plan` (the `workload-drift` invocation, AD-23) emits the refreshed per-step states that the FR-32 reducer reads | docs + engine/provider source + live | S4.13 (first case; S1.11 cites it for the list semantics) | 14 | STOP: investigate; the list is never widened without review. If the combined flags do not emit the refreshed states, S4.13 does not merge until the reducer input is redesigned in a reviewed PR. |
   | V-14 | ECR layer bucket name `prod-eu-central-1-starport-layer-bucket` | docs + live pull | S3.3 | 7 | STOP: pull fails → tasks never start (health fails) → `rollback-zero`; the pinned policy is fixed in a reviewed PR and applied as a `policy-update` plan. |
   | V-15 | Condition keys `secretsmanager:RotationLambdaARN`, `RecoveryWindowInDays`, `ForceDeleteWithoutRecovery` | docs (service authorization reference) | S5.2, S5.7 | 3, 19 | STOP: key absent → redesign the grant. |
   | V-16 | Flow logs to S3 with SSE-KMS (runtime CMK, D-4) need `delivery.logs.amazonaws.com` in the key policy; creator needs `logs:CreateLogDelivery`/`DeleteLogDelivery` | docs | S3.1 | 12 | STOP: delivery fails → fix the key or bucket policy by a reviewed PR. SSE-S3 is not a fallback, because D-4 decided SSE-KMS; changing it needs a new user decision. |
@@ -1076,7 +1337,7 @@ edit `scripts/poc_workload_runner.py`, so they head C-runner.
   | V-20 | `aws:PrincipalAccount` semantics for `ecr:GetAuthorizationToken`; the reviewed ECR registry account | docs + live pull | S3.3 | 7 | STOP: as V-14 (`rollback-zero`, reviewed pin fix, `policy-update` plan). |
   | V-21 | `CreateDBCluster` with `ManageMasterUserPassword` needs, under the caller (USI apply role), `secretsmanager:CreateSecret` and `TagResource` on `rds!cluster-*` and `kms:DescribeKey` on `alias/aws/secretsmanager` (documented for RDS and Aurora, A-27; not stated for DocumentDB) | docs + live simulate + live apply (CloudTrail `CreateSecret` event for the managed secret, metadata only) | S5.2 | 3, 4 | STOP: step 1 fails with `AccessDenied` → the BI grant is fixed by a reviewed PR, then S4.3 `resume`. An unneeded grant found by the CloudTrail check is removed in a reviewed PR before gate 2. |
   | V-22 | The restore operator needs `secretsmanager:CreateSecret`/`TagResource` and `kms:DescribeKey` for `ModifyDBCluster(ManageMasterUserPassword)`; `kms:CreateGrant`/`Decrypt`/`DescribeKey` on the DocumentDB storage key for the snapshot restore; and the snapshot and subnet-group resource permissions (A-27) | docs + live simulate + live restore | S5.18a | 3 (simulate); S4.8 step R-1 | STOP: restore or modify denied → BI grant fix, rehearsal re-run; the temporary cluster is deleted first. |
-  | V-23 | ECS service autoscaling at 0 tasks: (a) whether `RegisterScalableTarget` with `min` above `desiredCount=0` scales out by itself; (b) whether the one-time `at()` start action scales 0 → `min` (A-26 documents it); (c) whether a fired one-time action stays listed; (d) whether `scheduledScalingSuspended` blocks one-time actions, and whether a restart plan that un-suspends and creates a start action fires it | docs (A-26, verified 2026-09-30) + live | S2.1 | 7, 7b, 15 | STOP: (b) fails → the services stay at 0 tasks, so nothing needs rolling back; the start mechanism is redesigned in a reviewed PR. (c) shows removal → STOP before step 14; the two-part fix of AD-10 (`scaling.consumed` contract PR, so the program stops rendering the fired actions, plus the AD-23 entry). (d) differs from AD-10 → STOP at step 15; the stop and hold sequence is redesigned in a reviewed PR. |
+  | V-23 | ECS service autoscaling at 0 tasks: (a) whether `RegisterScalableTarget` with `min` above `desiredCount=0` scales out by itself; (b) whether the one-time `at()` start action scales 0 → `min` (A-26 documents it); (c) whether a fired one-time action stays listed; (d) whether `scheduledScalingSuspended` blocks one-time actions, and whether a restart plan that un-suspends and creates a start action fires it; (e) (m1) whether the pinned provider's `Target` update re-sends `MinCapacity`/`MaxCapacity`, and which values it sends under `ignore_changes` with `up --refresh` (the hold plan must not change the live 0/0) | docs (A-26, verified 2026-09-30) + provider source (e) + live | S2.1 and S4.9 ((e) is the first case of both) | 7, 7b, 15 | STOP: (b) fails → the services stay at 0 tasks, so nothing needs rolling back; the start mechanism is redesigned in a reviewed PR. (c) shows removal → STOP before the next apply of any mode (m12); the two-part fix of AD-10 (`scaling.consumed` contract PR, so the program stops rendering the fired actions, plus the AD-23 entry). (d) differs from AD-10 → STOP at step 15; the stop and hold sequence is redesigned in a reviewed PR. (e) shows that a hold update can send non-live min/max → S4.9 does not merge until the hold design changes in a reviewed PR. |
   | V-24 | Setting `retain_on_delete` (and `protect=False`, `recovery_window_in_days`, `final_snapshot_identifier`) changes only state in the unprotect plan (`update` steps, no cloud call except `rds:ModifyDBCluster`), and a later `delete` of a retained resource makes no cloud call | engine and provider source + live | S4.2 | 19 | STOP: any cloud delete observed on a retained resource → stop the abandon; recover by S4.3 import. |
   | V-25 | The ECS awslogs driver writes to a log group encrypted with the runtime CMK with no KMS statement for the execution role (A-28) | docs + live | S2.4 | 7 | Fallback: a reviewed AD-15a row for the execution role (`kms:GenerateDataKey` with `kms:ViaService=logs.<r>.amazonaws.com`), then step 7 is re-run. |
   | V-26 | The per-type delete action sets derived from the pinned provider's delete paths are complete (drain and detach calls included) for the recovery role | provider source + live (CloudTrail of the abandon run, no `AccessDenied`) | S4.10, S5.7 | 19 | STOP: an `AccessDenied` stops the removal plan mid-way → S4.3 `export`, reviewed S5.7 grant fix, then `recovery-abandon` again from the export receipt. |

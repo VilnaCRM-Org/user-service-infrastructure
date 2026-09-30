@@ -4,7 +4,7 @@ workflow: _bmad/bmm/workflows/1-analysis/bmad-create-product-brief (Create mode,
 task: workload-wa-hardening
 source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa
 date: 2026-09-30
-revision: 4 (decisions D-1…D-7 of 2026-09-30 applied, including the D-4 and D-5 clarifications)
+revision: 5 (decisions D-1…D-13 of 2026-09-30 applied; round-5 m7 alignment)
 inputDocuments: [specs/poc/README.md, specs/poc/secret-lifecycle.md, docs/poc-workload-recovery.md, research.md]
 ---
 
@@ -78,8 +78,11 @@ safe to deploy. The main problems:
    `MONGODB-AWS`, to Redis/Valkey via ElastiCache IAM auth (D-1), and to SQS
    and SES via the task role, with no credential anywhere in env or secrets.
    A 13 h TEST soak shows zero Redis or DocumentDB auth failures.
-4. **Scaling.** Web scales out under a synthetic load test. The worker scales
-   on backlog.
+4. **Scaling.** In TEST, web and worker scale out when their scaling-policy
+   alarms are set by `SetAlarmState` (PRD FR-11, FR-12; S4.6 step 12), with
+   no front-door dependency. A synthetic load test through the front door is
+   optional and runs only once the AGI route exists (S5.16, step 17). The
+   services start from 0 tasks by a one-time scheduled action (FR-11).
 5. **Alarm routing.** Every alarm in the catalogue routes to the owned SNS topic
    and fires in a controlled TEST exercise.
 6. **Network hardening.** Flow logs are delivered. The default SG has no rules.

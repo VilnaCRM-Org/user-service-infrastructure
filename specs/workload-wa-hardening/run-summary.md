@@ -89,11 +89,11 @@ Check with `sha256sum -c` over the block below, from `specs/workload-wa-hardenin
 ```
 beca16ba9ab95d76cd28ed47ac8e806549b94805ddca9a2d138a790ee0f0ca59  research.md
 bc15290586a30ad04e127dad20bd9e95246d3b7a8633c7a3136a08a78415931b  brief.md
-90251f2d5f4e76f1c62ac94cffeb4507e64271b0e7e85d4a16b7d8f855d9c7c4  prd.md
-8bbcf15c2459a01894076dd380637c6cb01311271aad024980bc4ebf06d6b975  architecture.md
-b7b5bf5a7c156aa0f43960455d5ab816ca591b69d7b15a7a89db9367b7fd3bc0  epics-stories.md
-beaf6b72a82aa0a61936de4edcf9d9b4eb1c3876962a683d62c827de67051048  decisions.md
-dfb9f07749d870fc19c5b4b23b2826630e72a88b7b33c7ad56b9fa6c1e39bbc6  readiness.md
+0c25e3c0da7c8b9522c0b9f5cd6aeb7bedb354be34af4eaeb3fa37e6a2e66dea  prd.md
+221a09f653abb6e058028805f28766ac076af1a080933e46893e1b562c0d8df1  architecture.md
+06f4d6041cc4430a0d34378cab4da0fee04e5fd37aa352deaa1d1287db375dbf  epics-stories.md
+d2b75ec8cfbd8bd07790f43db97409ad782c645ccbea88ae3ffae7d3627bb2c3  decisions.md
+357f82db218efad3188f46a01a239e8928521481678ba386a05db41f6890db72  readiness.md
 ```
 
 ## Gates
@@ -123,8 +123,8 @@ from this list.
 - [ ] Every round-5 finding in `readiness.md` maps to text that resolves it
       at the cited file and line, and the cited source lines say what the
       plan claims.
-- [ ] D-1…D-7 and D-8…D-13 are dated 2026-09-30 in `decisions.md`; the RPO,
-      RTO and cost-threshold values are labelled planning targets, not user
+- [ ] D-1…D-7, D-14, and D-8…D-13 are dated 2026-09-30 in `decisions.md`; the RPO,
+      RTO and cost-threshold values are labelled with D-14 references, not user
       decisions.
 - [ ] The PRD §1 counts equal the tables: 35 FRs, 11 NFRs, 46 total; 41
       offline-testable; 5 evidence-only NFRs; 34 FRs with live evidence (all

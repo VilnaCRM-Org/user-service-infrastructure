@@ -65,7 +65,7 @@ still an open ownership item that blocks gate 2.
 
 Revision 5 adds three **planning targets**, not user decisions. Each is a
 STOP for a user decision if a measurement misses it, and the user may change
-it: the DocumentDB RPO ≤ 5 min and RTO ≤ 4 h (m16), and the 20% cost
+it: the DocumentDB RPO ≤ 1 hour and RTO ≤ 24 hours (m16, D-14), and the 20% cost
 forecast threshold (m17).
 
 ## Round-5 finding → resolution map
@@ -96,7 +96,7 @@ unchanged from the baseline).
 | m13 window vs apply budget | The window runs from + 10 min (`rollback-zero`) or + 60 min (`step2`) to + 120 min. The observation runs in the separate `test_workload_observation` job. It gets credentials only after the wait, has its own concurrency group and `needs: test_apply_receipt`. A late `test-preview` approval only delays it. The 3300 s process timeout, 70-min job budget and FR-24 bounds are unchanged. | `architecture.md:366-382,747-768`; `epics-stories.md:993-999,1125-1145`; `prd.md:116` | `.github/workflows/self-deploy.yml:164,319-345,361,507,598`; `scripts/configure_github_repository_controls.py:79-85`; `tests/unit/test_apply_timeout_budget.py` |
 | m14 hard-stop test rewrite | S4.15 needs Kravalg's approval specifically, or the rewrite moves into the step-1 PR. | `epics-stories.md:1272-1280` | `.github/CODEOWNERS` (`* @Kravalg @dmytrocraft`) |
 | m15 AD-09 file | A function in `scripts/poc_workload_admission.py` (S4.2), not the topology. | `architecture.md:280-285`; `epics-stories.md:910-913` | — |
-| m16 RPO/RTO | RPO ≤ 5 min (point-in-time restore, `LatestRestorableTime` lag) and RTO ≤ 4 h, measured in S4.8 and validated by S4.15. A miss is a STOP at gate 2a. | `architecture.md:788-803`; `prd.md:211`; `epics-stories.md:1532-1557` | `pulumi/app/environment.py:677-681`; `pulumi/app/data.py:204-211` |
+| m16 RPO/RTO | RPO ≤ 1 hour (point-in-time restore, `LatestRestorableTime` lag, D-14) and RTO ≤ 24 hours (D-14), measured in S4.8 and validated by S4.15. A miss is a STOP at gate 2a. | `architecture.md:788-803`; `prd.md:211`; `epics-stories.md:1532-1557` | `pulumi/app/environment.py:677-681`; `pulumi/app/data.py:204-211` |
 | m17 cost threshold and source label | NFR-11 requires a data-source label on every figure and a 20% forecast threshold, and every PROD increase is justified. S2.6 has the doc test. | `prd.md:248,309`; `epics-stories.md:539-560` | — |
 | m18 run-summary checklist; incident-response applicability | The run-summary line now names the three `rollback-zero` phases. The incident-response entry below names its content (the S2.4 runbook fields). | `run-summary.md` checklist; `epics-stories.md:481-500`; this file | — |
 
@@ -137,7 +137,7 @@ measurement fails:
 - state-migration (AD-16, AD-25, the R5-M5 checkpoint-field allowance)
 - observability (§3.2a)
 - cost-optimization (NFR-11 with source labels and threshold)
-- backup-recovery (S4.8 with the AD-19 RPO/RTO targets, S5.18a/b)
+- backup-recovery (S4.8 with the AD-19 RPO/RTO targets per D-14, S5.18a/b)
 - delivery-and-rollback (AD-19, AD-24)
 - drift-management (FR-32 on the executed workload path: S1.11, S4.10,
   S4.13; the scheduled-drift exclusion)

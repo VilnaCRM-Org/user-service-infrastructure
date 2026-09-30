@@ -785,16 +785,16 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     `<stack>-docdb-restore-rehearsal` under the S5.18a operator role,
     switched to a managed primary password (`ModifyDBCluster`), read by the
     S5.18b reader, then deleted; a gate for PROD.
-  - **Recovery targets (m16; planning targets, not user decisions).**
+  - **Recovery targets (m16; planning targets, not user decisions; D-14).**
     DocumentDB, the only stateful store that needs a restore:
-    - **RPO ≤ 5 min** inside the backup retention window
+    - **RPO ≤ 1 hour** inside the backup retention window (D-14)
       (`documentDbBackupRetentionDays`, default 7 days,
       `pulumi/app/environment.py` lines 677-681): point-in-time restore to
       the cluster's latest restorable time. Evidence: the read-only
       `DescribeDBClusters` `LatestRestorableTime` lag at the S4.8 rehearsal
-      (≤ 300 s). A snapshot restore (the rehearsal source) has an RPO equal
+      (≤ 3600 s). A snapshot restore (the rehearsal source) has an RPO equal
       to the snapshot age, which the evidence records.
-    - **RTO ≤ 4 h**: from the restore request to the reader's document-count
+    - **RTO ≤ 24 hours** (D-14): from the restore request to the reader's document-count
       sample on the restored cluster (S4.8 R-1 measures it).
     - Redis holds cache and lockout state only; it is rebuilt, not
       restored, so no RPO applies. Its snapshots stay as configured.

@@ -1539,18 +1539,18 @@ step 13 (induced failure).
     S5.18a operator role, with `ModifyDBCluster` to a managed password (V-22).
     The S5.18b reader (VPC-attached after XP-8) records the document-count
     sample. Then the temporary cluster is deleted;
-  - **recovery targets (m16, architecture AD-19):** RPO ≤ 5 min (the
+  - **recovery targets (m16, architecture AD-19, D-14):** RPO ≤ 1 hour (the
     read-only `DescribeDBClusters` `LatestRestorableTime` lag of the TEST
-    cluster at the rehearsal, ≤ 300 s; the snapshot age of the rehearsal
-    source is recorded too) and RTO ≤ 4 h (restore request to the reader's
-    document-count sample, measured);
+    cluster at the rehearsal, ≤ 3600 s; the snapshot age of the rehearsal
+    source is recorded too, D-14) and RTO ≤ 24 hours (restore request to the reader's
+    document-count sample, measured, D-14);
   - the restore item, with the measured RPO and RTO, is appended to the
     acceptance receipt.
 - **Depends on:** S4.6, S5.18a and S5.18b.
 
 **Acceptance criteria:** the PRD FR-30 rows. **N:** a restore item without
 the measured RPO and RTO is refused by the S4.15 validator. **B:** RTO of
-exactly 4 h and a lag of exactly 300 s pass. **STOP:** V-22 denial → BI
+exactly 24 hours and a lag of exactly 3600 s pass. **STOP:** V-22 denial → BI
 grant fix; the temporary cluster is deleted before a re-run. A measured RPO
 or RTO above its target → STOP at gate 2a for a user decision (accept or
 change the design).

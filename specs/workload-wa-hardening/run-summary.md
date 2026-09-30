@@ -11,6 +11,7 @@ This file is the execution ledger. It is not a planning input.
 | Worktree | wt-usi-hardening |
 | Branch | feat/workload-wa-hardening |
 | Source baseline | 66776772979956de9c5abdbee7c45641a1b533fa (PR #56 head) |
+| Bundle revision | 3 (answers readiness round 3; parent commit 3f0930a) |
 | Specs directory | `specs/workload-wa-hardening/` (slug chosen by the caller) |
 | Target | pulumi (Python Pulumi), stacks test and prod |
 | Environment | none selected; planning is offline |
@@ -42,29 +43,76 @@ This file is the execution ledger. It is not a planning input.
 ## Inputs
 
 - `specs/poc/README.md` sha256: 8ad9ccf4ae28083c36e30909a21d8ebec4fc0d40a9b716c9bb8b78b6276ed5b7
-- AWS documentation, via aws-knowledge MCP (see research §3)
+- AWS documentation, via aws-knowledge MCP (see research §3); revision 3 re-verified A-16 (REST API VPC link V2 → ALB), A-20 (SES API VPC endpoints), A-23 (ElastiCache IAM limits), A-24 (`StsGetCallerIdentityCalls`) and A-25 (managed DocumentDB rotation) on 2026-09-30
+- Local provider source: `pulumi_aws` 7.23.0 `apigateway.Integration.integration_target` (read-only grep of the installed SDK)
+- User decisions given in chat on 2026-09-30 (D-1, D-2, D-3, D-6; D-4/D-5 defaults pending; D-7 open), relayed by the coordinator
 - Read-only cross-repository reconnaissance: bootstrap-infrastructure @debd88b, api-gateway-infrastructure, and user-service @main via `gh api`
 
-## Artifacts (sha256)
+## Artifacts (sha256, revision 3)
+
+`run-summary.md` is not hashed here, because it contains the hashes.
 
 ```
-f698eeeb876d13c7569d5a346139b4de770ca114003754c95e2a79fb6fd53dcb  research.md
-77a8b22349aa17f687aa87b5d6a09e1e3da8699ac102502f03ff99090dbc8d1e  brief.md
-fef9b317bc5200f773c1b3dc9e4e0f86879e8ff3d6ed993656089f44917f46ba  prd.md
-b6a5c3baf6192b8146e730bd9a3b542396b362f6c0f4ff94064dc6f9cb6464b7  architecture.md
-b350f25e4ce69a1fa4a81724341ef5ef2b5b1d706716af2b0fa919aa83c4a331  epics-stories.md
-489a07ff5014aa25d1912853ecde77d490635050055e27d55668686a1409f104  readiness.md
+b96efb367ba2e171cd6d165770f331b0ad1e211c9b0f4503bb67718c0f0ca027  research.md
+4d9d402061cb5d86f93e8f21259ada2b962bccc6eef9b12cdf88ef01fd6cbbb9  brief.md
+0524f671ef34d27d5d16785c5c146f57c1e9b3fe1bf5b366dcde1a7b0c012d70  prd.md
+502a31b063689ed5997ff6a381c44f8be24b21fd911290d4ba5fae52c011fb7a  architecture.md
+ad1261321ca80a6437bc8f2871ddfe59e45bbd9c1e7450283703854095f9fe37  epics-stories.md
+2065cb7bd344a1970f41c5cc67323019ce040ef3eb26d5f95853f614c3238757  readiness.md
 ```
 
 ## Gates
 
 **Independent readiness:**
 
-| Iteration | Result |
+| Round | Result |
 | --- | --- |
 | 1 | FAIL (3 blocking, 10 major); fixed in revision 2 |
-| 2 | Requested; result not received at hand-back |
+| 2 | Result not stored in this bundle |
+| 3 | FAIL (B-1, B-2, M-1…M-13, m-1…m-12); fixed in revision 3 |
+| 4 | Requested; not run |
 
-Stage status: **BLOCKED** until iteration 2 reports PASS. That is the exit condition.
+Stage status: **BLOCKED** until an independent round-4 review reports PASS.
+`readiness.md` is written by the author and says PENDING; it is not a PASS.
 
-**Attempt ledger:** canonical `attempts.json` was NOT initialized. The atomic reservation needs verified host write isolation for the copied ledger_reference package, and a same-user host cannot provide it. The ledger is therefore BLOCKED. Attempt count by caller record: 1 procedure run, with 2 of 5 review iterations. This count is not canonical.
+**Attempt ledger:** canonical `attempts.json` was NOT initialized. The atomic reservation needs verified host write isolation for the copied ledger_reference package, and a same-user host cannot provide it. The ledger is therefore BLOCKED. Attempt count by caller record: 1 procedure run, with 3 of 5 review rounds used and round 4 pending. This count is not canonical.
+
+## Acceptance checklist for the round-4 reviewer
+
+A reviewer ticks each item from the bundle text, not from this list.
+
+- [ ] Every round-3 finding in `readiness.md` maps to text that resolves it at
+      the cited file and line.
+- [ ] The PRD §1 counts equal the tables: 34 FRs, 11 NFRs, 45 total; 40
+      offline-testable; 5 evidence-only NFRs; 33 FRs with live evidence (all
+      but FR-29).
+- [ ] No Redis password, Redis secret, Redis rotation Lambda or rotation SG
+      remains (D-1); the `default` user with access string `off` remains.
+- [ ] Every VPC-attached function has its APIs and network path listed
+      (`architecture.md` §2.1), and each path exists in FR-17/FR-18.
+- [ ] C-BI creates every role before any key (S5.1 → … → S5.4 → S5.3).
+- [ ] Preview and drift read capability (FR-33, S5.17) precedes S4.6.
+- [ ] XP-8 carries subnet IDs, the bootstrap-job SG ID and the
+      DocumentDB-managed secret ARN; no text claims patterns cover that secret.
+- [ ] Every V-item has a method, an offline story and, if live, an S4.6 step
+      with a STOP or fallback.
+- [ ] Recovery import and abandon run as saved plans through the classifier;
+      abandon exists only if D-7 decides so; the manifest carries a
+      `secret_recovery_decision` per secret.
+- [ ] Endpoint policies are pinned documents, including the ECR layer bucket.
+- [ ] The seed is idempotent, its input immutable, and an Invocation replace
+      or delete is critical.
+- [ ] Step 2 is create-only and its admission lives in C-contract (S4.9).
+- [ ] Gate 1 lists stories, BI prerequisites and decisions explicitly; a
+      default is not a resolution; D-7 has no default.
+- [ ] Gate 2 re-checks gate 1 and requires the schema-validated receipt.
+- [ ] Every §5 row has P, N and B cells.
+- [ ] `readiness.md` does not claim PASS and names its author.
+- [ ] The artifact hashes above match the committed files.
+
+## Scope limits of revision 3
+
+- No aws or pulumi command ran against any account; no repository test, lint
+  or preview ran; no secret value was read.
+- The only local commands were file reads, greps of the repository and the
+  installed Pulumi SDK, and `sha256sum`.

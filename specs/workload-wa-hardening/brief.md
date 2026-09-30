@@ -4,6 +4,7 @@ workflow: _bmad/bmm/workflows/1-analysis/bmad-create-product-brief (Create mode,
 task: workload-wa-hardening
 source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa
 date: 2026-09-30
+revision: 3 (success metric 2 corrected; user decisions of 2026-09-30 applied)
 inputDocuments: [specs/poc/README.md, specs/poc/secret-lifecycle.md, docs/poc-workload-recovery.md, research.md]
 ---
 
@@ -36,7 +37,7 @@ safe to deploy. The main problems:
   - Secrets are generated inside Pulumi state and never rotate.
   - ECS pins secret versions.
   - The app logs into DocumentDB as the primary user and into Redis with a
-    static AUTH token.
+    static AUTH token. Both move to IAM identities.
 - **Operations.** There is no autoscaling, no alarm and no notification.
 - **Network.**
   - Egress is open.
@@ -64,14 +65,18 @@ safe to deploy. The main problems:
    of the TEST workload shows no `random:*`, `tls:*` or `SecretVersion`
    resource. USI owns no `SecretVersion` at all.
 2. **Rotation works with no downtime.**
-   - Every remaining app secret has rotation enabled.
+   - Every remaining app secret (`APP_SECRET`, `OAUTH_ENCRYPTION_KEY`) has
+     rotation enabled; the DocumentDB primary password rotates under
+     DocumentDB management.
    - A forced rotation in TEST completes (`RotationSucceeded`) and produces a
      new ECS deployment.
-   - The target group sees 0 HTTP 5xx during that window, beyond the 5xx
-     alarm threshold.
+   - In the rotation window (from `RotationSucceeded` to deployment
+     `COMPLETED` plus 5 min) the ALB 5xx alarm does not fire, and the only
+     user impact is the forced re-login accepted by D-5 (PRD NFR-05).
 3. **Credential-free app connections.** The app connects to DocumentDB via
-   `MONGODB-AWS`, and to SQS and SES via the task role, with no credential
-   anywhere in env or secrets.
+   `MONGODB-AWS`, to Redis/Valkey via ElastiCache IAM auth (D-1), and to SQS
+   and SES via the task role, with no credential anywhere in env or secrets.
+   A 13 h TEST soak shows zero Redis or DocumentDB auth failures.
 4. **Scaling.** Web scales out under a synthetic load test. The worker scales
    on backlog.
 5. **Alarm routing.** Every alarm in the catalogue routes to the owned SNS topic
@@ -82,8 +87,9 @@ safe to deploy. The main problems:
    recovered or abandoned through the reviewed command, with before and after
    evidence.
 8. **Timing.** A measured first create finishes ≤ 3300 s process time and
-   ≤ 3600 s from OIDC issuance to observation, or the bootstrap
-   `MaxSessionDuration` increase has landed.
+   ≤ 3600 s from OIDC issuance to observation with a 300 s margin
+   (≤ 3000 s and ≤ 3300 s, PRD FR-24), or the bootstrap `MaxSessionDuration`
+   increase has landed.
 
 ## Scope
 
@@ -92,8 +98,9 @@ safe to deploy. The main problems:
 - this repository (`user-service-infrastructure`);
 - `bootstrap-infrastructure` (IAM, CMK, rotation functions, CloudTrail,
   recovery grants);
-- `user-service` (non-root image, #501, MONGODB-AWS check, KMS signing and
-  encryption, optional Redis IAM, multi-arch images);
+- `user-service` (non-root image, #501, MONGODB-AWS check, the Redis IAM
+  token provider, KMS signing and encryption, in-container TLS for PROD,
+  multi-arch images);
 - `api-gateway-infrastructure` (the API front door).
 
 **Out of scope:**
@@ -126,9 +133,13 @@ Each assumption is recorded and none changes scope.
 
 - **AS-1.** The workload has never been applied in TEST or PROD (R-02), so
   E1's state changes are source-only.
-- **AS-2.** The engine stays Redis OSS 7.1. A later Valkey move is compatible
-  with both D-1 options.
+- **AS-2.** The engine stays Redis OSS 7.1 with TLS required. A later Valkey
+  (≥7.2) move keeps IAM auth (D-1).
 - **AS-3.** The service stays on the private gateway topology: internal ALB
   behind an API Gateway VPC link.
-- **AS-4.** User-owned decisions D-1…D-7 use the defaults in `prd.md` §6 until
-  the user decides. A default never authorizes a live action.
+- **AS-4.** User decisions are recorded in `prd.md` §6. On 2026-09-30 the user
+  resolved D-1 (IAM auth), D-2 (TEST risk acceptance; in-container TLS in
+  PROD before gate 2) and D-3 (REST API + WAF), and approved D-6 (two gates,
+  pending `@Kravalg` approval of the README PR). D-4 and D-5 are defaults
+  pending explicit confirmation; D-7 is open with no default. A default is not
+  a resolution and never authorizes a live action.

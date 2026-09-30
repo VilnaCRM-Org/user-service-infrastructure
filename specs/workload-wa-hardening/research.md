@@ -7,6 +7,7 @@ branch: feat/workload-wa-hardening
 source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa (PR #56 head)
 date: 2026-09-30
 status: planning-only
+revision: 3 (A-16 and A-20 re-verified 2026-09-30; A-23..A-25 added; D-1, D-2, D-3 decided by the user)
 ---
 
 # Technical research: Well-Architected hardening of the user-service ECS workload
@@ -207,8 +208,10 @@ Constraints on the evidence:
   - Redis is consumed through phpredis 6.3.0 via
     `RedisAdapter::createConnection(REDIS_URL|REDIS_LOCKOUT_URL)`.
   - There is no ElastiCache IAM token support; IAM auth needs an app change.
-  - `[UNVERIFIED]` whether `rediss://user:pass@host` passes the ACL username
-    through `RedisAdapter` (symfony/cache v7.4.x).
+    D-1 = IAM auth (user decision, 2026-09-30), so this change is story S5.13.
+  - `[UNVERIFIED]` whether phpredis 6.3 accepts `AUTH [user, token]` and
+    re-`AUTH` on an open connection through a custom `RedisAdapter` factory
+    (V-2).
 - **R-21 `[SRC]` user-service, key material and what rotation breaks:**
   - `APP_SECRET` is the kernel secret. Rotation invalidates Symfony-signed
     artefacts.
@@ -251,8 +254,8 @@ Constraints on the evidence:
 | A-04 | DocumentDB can manage the primary password in Secrets Manager at create or modify time. The default rotation is every 7 days and is modifiable. The secret is deleted with the cluster. A CMK may be specified. Global clusters and cross-Region replicas are not supported. | [AWS] documentdb/latest/devguide/docdb-secrets-manager.html |
 | A-05 | Pulumi AWS 7.23.0 `aws.docdb.Cluster` exposes `manage_master_user_password` and `master_user_secrets`, but no `master_user_secret_kms_key_id`. The KMS key of the DocumentDB-managed secret therefore cannot be set from this provider version. | [SDK] pulumi_aws/docdb/cluster.py |
 | A-06 | ElastiCache IAM auth works on Redis OSS ≥7.0 or Valkey ≥7.2 and needs TLS. Username must equal user ID. A token is valid 15 min. Connections drop after 12 h unless re-authenticated. `elasticache:Connect` is required. Current engine: redis 7.1 with TLS required, so it is eligible. | [AWS] AmazonElastiCache/latest/dg/auth-iam.html |
-| A-07 | ElastiCache RBAC passwords can be rotated by a Secrets Manager rotation Lambda through `ModifyUser`. The secret JSON holds `{username,password,user_arn}`. The Lambda needs `elasticache:DescribeUsers` and `ModifyUser` plus the Secrets Manager rotation actions. For Valkey the initial user needs a temporary password with access string `off`. | [AWS] AmazonElastiCache/latest/dg/User-Secrets-Manager.html |
-| A-08 | A user may hold up to two passwords, which gives the dual-password overlap. | [AWS] CDK PasswordUserProps; ModifyUser `passwords`; [SDK] `aws.elasticache.User` supports `authentication_mode.type ∈ {password,no-password-required,iam}` |
+| A-07 | ElastiCache RBAC passwords can be rotated by a Secrets Manager rotation Lambda through `ModifyUser`. The secret JSON holds `{username,password,user_arn}`. The Lambda needs `elasticache:DescribeUsers` and `ModifyUser` plus the Secrets Manager rotation actions. For Valkey the initial user needs a temporary password with access string `off`.  Historical: not used after D-1 = IAM auth. | [AWS] AmazonElastiCache/latest/dg/User-Secrets-Manager.html |
+| A-08 | A user may hold up to two passwords, which gives the dual-password overlap.  Historical: not used after D-1 = IAM auth. | [AWS] CDK PasswordUserProps; ModifyUser `passwords`; [SDK] `aws.elasticache.User` supports `authentication_mode.type ∈ {password,no-password-required,iam}` |
 | A-09 | Migration from AUTH to RBAC uses `modify-replication-group --auth-token-update-strategy DELETE --user-group-ids-to-add`. Not needed here, because the cluster has never been created (R-02). | [AWS] Clusters.RBAC.html |
 | A-10 | ECS injects secrets only at container start. A rotated value needs new tasks or a force new deployment. `valueFrom` = the bare secret ARN resolves AWSCURRENT, and `arn:…:<json-key>::` selects a JSON key (Fargate PV ≥1.4.0). | [AWS] AmazonECS/latest/developerguide/secrets-envvar-secrets-manager.html; containers blog |
 | A-11 | Secrets Manager emits `RotationStarted`, `RotationSucceeded`, `RotationFailed` and `RotationAbandoned` as `AWS Service Event via CloudTrail`. | [AWS] secretsmanager/latest/userguide/cloudtrail_log_entries.html |
@@ -260,28 +263,31 @@ Constraints on the evidence:
 | A-13 | Secret resource policies are evaluated with identity policies, and an explicit deny wins. A deny on `GetSecretValue` conditioned on principal is a documented pattern. | [AWS] determine-acccess_examine-iam-policies.html; storage blog |
 | A-14 | An ALB target group supports HTTPS. The ALB does not validate target certificates, so self-signed ones work. In-VPC traffic is authenticated at packet level. | [AWS] elasticloadbalancing/latest/application/load-balancer-target-groups.html |
 | A-15 | HTTP APIs have no AWS WAF integration; choose REST APIs for WAF. WAF associates with ALB (including internal), REST API stages, AppSync and CloudFront. | [AWS] apigateway/latest/developerguide/http-api-vs-rest.html; WAFV2 AssociateWebACL |
-| A-16 | REST APIs support private integration with an ALB directly through VPC link V2. VPC link V2 subnets and SGs are immutable. Links go INACTIVE after 60 days of inactivity. | [AWS] apigateway set-up-private-integration; whitepaper rest-api.html |
+| A-16 | REST APIs support private integration with an ALB directly through VPC link V2 (V1 supports NLB only). VPC link V2 subnets and SGs are immutable. Links go INACTIVE after 60 days of inactivity. The load balancer, link and API must be in the same account. Re-verified 2026-09-30: the What's New entry of 2025-11 lists Europe (Frankfurt); `pulumi_aws` 7.23.0 `apigateway.Integration` exposes `integration_target` (ALB or NLB ARN for VPC link V2). Live check: V-10. | [AWS] whitepaper best-practices-api-gateway-private-apis-integration/rest-api.html; whats-new/2025/11/api-gateway-rest-apis-integration-load-balancer; [SDK] pulumi_aws/apigateway/integration.py |
 | A-17 | ECS worker scaling can use SQS backlog per task: metric math `ApproximateNumberOfMessagesVisible / RunningTaskCount`. `RunningTaskCount` needs Container Insights. | [AWS] AmazonECS/latest/developerguide/service-autoscaling-queue.html |
 | A-18 | Flow logs to CloudWatch Logs need an IAM role trusted by `vpc-flow-logs.amazonaws.com`, which this repository may not create. Flow logs to S3 need only creator permissions plus the bucket policy. | [AWS] vpc flow-logs-iam-role.html; flow-logs-s3-create-flow-log.html |
 | A-19 | Security Hub EC2.2 requires VPC default security groups with no inbound or outbound rules. | [AWS] securityhub ec2-controls.html |
-| A-20 | Fargate tasks in private subnets use ECR (api, dkr and S3 for layers), Secrets Manager and CloudWatch Logs interface endpoints when present. SES offers only SMTP VPC endpoints, and the app uses the SES API, so SES API egress stays via NAT. | [AWS] AmazonECS/latest/developerguide/vpc-endpoints.html; ses send-email-set-up-vpc-endpoints.html |
+| A-20 | Fargate tasks in private subnets use ECR (api, dkr and S3 for layers), Secrets Manager and CloudWatch Logs interface endpoints when present. **Corrected 2026-09-30:** SES now supports VPC endpoints for its API (What's New 2025-12, all SES Regions), not only SMTP. The endpoint service name and private DNS for the SES v2 host used by async-aws are V-12; if V-12 fails, SES API egress stays via NAT. | [AWS] AmazonECS/latest/developerguide/vpc-endpoints.html; whats-new/2025/12/amazon-ses-vpc-api-endpoints; ses send-email-set-up-vpc-endpoints.html |
 | A-21 | KMS RSA keys support `RSASSA_PKCS1_V1_5_SHA_256` (RS256) sign and verify. `GetPublicKey` exports the public key. | [AWS] kms symm-asymm-choose-key-spec.html |
 | A-22 | The Pulumi 7.23.0 SDK exposes the building blocks the plan needs: `aws.secretsmanager.SecretRotation(rotate_immediately, rotation_lambda_arn)`, `SecretPolicy(block_public_policy)`, `aws.ec2.DefaultSecurityGroup`, `aws.appautoscaling.{Target,Policy,ScheduledAction}` and `aws.elasticache.{User,UserGroup}`. | [SDK] |
+| A-23 | ElastiCache IAM auth limits (re-verified 2026-09-30): TLS required; token valid 15 min (and not beyond the signing credentials' expiry); connection disconnected after 12 h unless `AUTH`/`HELLO` with a new token; no re-auth inside `MULTI`/`EXEC` or Lua; username = user id; for replication groups only `aws:SourceIp` and `aws:ResourceTag/*` conditions; cache names are lower case. Revoking `elasticache:Connect` does not drop open sessions; removing the user from the group does. | [AWS] AmazonElastiCache/latest/dg/auth-iam.html; connecting-public-endpoint.html |
+| A-24 | DocumentDB publishes `StsGetCallerIdentityCalls` (calls the instance makes to regional STS for `MONGODB-AWS`), and the audit log records `mechanism = MONGODB-AWS`. | [AWS] documentdb/latest/devguide/iam-identity-auth.html |
+| A-25 | With `manage_master_user_password`, DocumentDB rotates the primary secret itself (default 7 days); no customer Lambda is deployed. | [AWS] secretsmanager integrating_how-services-use-secrets_DocDB; CDK docdb README |
 
 ## 4. Options analysis
 
 | Topic | Options | Recommendation (default until the user decides) |
 | --- | --- | --- |
 | DocumentDB auth | (a) primary user via secret (today); (b) DocumentDB-managed primary + app user password rotated by Lambda; (c) DocumentDB-managed primary + IAM (`MONGODB-AWS`) app user | (c). No app password exists at all. It needs a reviewed one-time `$external` bootstrap job and a TEST check of ext-mongodb 2.4.1 container credentials. |
-| Redis auth (**D-1**) | (a) IAM auth: phpredis token provider needed (user-service change), 12 h reconnect; (b) RBAC user, password rotated by a reviewed Lambda with dual passwords, URL delivered through a JSON key; (c) keep AUTH token rotation (`ROTATE`/`SET`) | (b) as the infra-only default, pending the user's decision. |
+| Redis auth (**D-1**) | (a) IAM auth: phpredis token provider needed (user-service change), 12 h re-auth; (b) RBAC user, password rotated by a reviewed Lambda with dual passwords, URL delivered through a JSON key; (c) keep AUTH token rotation (`ROTATE`/`SET`) | **Decided by the user 2026-09-30: (a) IAM auth.** It removes the Redis secret, the VPC rotation Lambda and its network path. |
 | App secrets | Reviewed rotation Lambda plus a `RotationSucceeded` → ECS force-new-deployment hook | Adopted. The rotation impact on sessions and tokens is recorded (D-5). |
 | JWT keys, 2FA key | Stay in Secrets Manager (not rotatable without breakage), or KMS asymmetric sign and KMS encrypt | KMS. This needs user-service stories. |
 | Function ownership | This repo, or bootstrap-infrastructure | bootstrap-infrastructure, because of R-16 and the no-IAM rule. |
-| ALB→task TLS (**D-2**) | (a) HTTPS target group with in-container TLS (Caddy internal cert, port 8443); (b) recorded acceptance citing A-14 | (b) for the TEST first deploy. (a) is tracked as a user-service story for PROD if the user chooses it. |
-| WAF (**D-3**) | (a) REST API + WAF + VPC link V2 → ALB; (b) HTTP API, with WAF on the internal ALB; (c) CloudFront + WAF → HTTP API | (a). Under (b) the ALB sees the VPC-link ENI IPs, so IP reputation and rate rules need `forwarded_ip_config` and a spoofing analysis. (c) is rejected, because origin lock-down needs a long-lived shared header secret. |
-| CMK scope (**D-4**) | (a) AWS-managed keys; (b) one bootstrap-owned symmetric CMK per environment for runtime secrets, plus an asymmetric JWT CMK and a symmetric 2FA CMK; (c) per-purpose CMKs | (b). The DocumentDB-managed secret stays on `aws/secretsmanager` until the provider supports `master_user_secret_kms_key_id` (A-05). |
+| ALB→task TLS (**D-2**) | (a) HTTPS target group with in-container TLS (Caddy internal cert, port 8443); (b) recorded acceptance citing A-14 | **Decided by the user 2026-09-30:** (b) for TEST; (a) required in PROD before gate 2. |
+| WAF (**D-3**) | (a) REST API + WAF + VPC link V2 → ALB; (b) HTTP API, with WAF on the internal ALB; (c) CloudFront + WAF → HTTP API | **Decided by the user 2026-09-30: (a)**, with VPC link V2 directly to the ALB (A-16), no NLB. Under (b) the ALB sees the VPC-link ENI IPs, so IP reputation and rate rules need `forwarded_ip_config` and a spoofing analysis. (c) is rejected, because origin lock-down needs a long-lived shared header secret. |
+| CMK scope (**D-4**) | (a) AWS-managed keys; (b) one bootstrap-owned symmetric CMK per environment for runtime secrets, plus an asymmetric JWT CMK and a symmetric 2FA CMK; (c) per-purpose CMKs | (b), a default pending explicit user confirmation. The DocumentDB-managed secret stays on `aws/secretsmanager` until the provider supports `master_user_secret_kms_key_id` (A-05). |
 | Flow logs | S3 or CloudWatch Logs | S3, because no IAM role is needed (A-18). |
-| Egress | SG-only tightening; Network Firewall or DNS Firewall | SG tightening plus VPC endpoints. FQDN filtering is deferred for cost reasons and recorded. |
+| Egress | SG-only tightening; Network Firewall or DNS Firewall | SG tightening plus VPC endpoints, including the SES API endpoint if V-12 passes, which removes the last `0.0.0.0/0` rule. FQDN filtering is deferred for cost reasons and recorded. |
 
 ## 5. Risks discovered
 
@@ -302,6 +308,12 @@ Constraints on the evidence:
    when ECS starts. This needs a synchronous seed invocation (AD-06).
 7. **Session breakage.** Rotation of `APP_SECRET` or `OAUTH_ENCRYPTION_KEY`
    logs users out or invalidates tokens (D-5).
-8. **Non-root image.** Moving to non-root needs the port moved to ≥1024 and the
+8. **Preview and drift roles.** No reviewed BI grant is known to give the
+   preview and drift roles read access to the workload resource types
+   (readiness round 3, finding B-2; the same gap as R-15 for the apply role).
+   Until FR-33 lands, no workload preview or drift check can be relied on.
+9. **Managed-secret ARN.** The DocumentDB-managed secret name is not
+   deterministic, so the bootstrap-job grant must wait for XP-8.
+10. **Non-root image.** Moving to non-root needs the port moved to ≥1024 and the
    supervisor socket re-owned. This is a coordinated change across
    user-service and this repository.

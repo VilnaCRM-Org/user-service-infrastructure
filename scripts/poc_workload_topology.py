@@ -838,7 +838,12 @@ def _task_execution_inputs(resource, projection):
 
 
 def _task_container_inputs(desired, projection):
-    """Check resolved definitions; the unknown sentinel never grants admission."""
+    """Check resolved definitions and return them; unknown ones map to ``None``.
+
+    Admission tolerates first-create unknowns; the post-apply result inspection
+    requires every definition resolved and validates it there.
+    """
+    containers = {}
     for kind in ("web", "worker"):
         inputs = _inputs(desired, f"user-service-{kind}-task")
         require(
@@ -869,15 +874,41 @@ def _task_container_inputs(desired, projection):
             )
         raw = inputs.get("containerDefinitions")
         _container_dependencies(desired, kind)
+        containers[kind] = None
         if raw == registry.UNKNOWN:
             # Output.all(...).apply(json.dumps) is unresolved as a whole when
             # a first-create queue URL, log name or secret version is unknown.
-            # The unconditional terminal stop requires later resolved binding.
+            # inspect_first_task_definitions checks the resolved form after apply.
             continue
         container = _container_json(raw)
         _container_runtime(container, kind, desired, projection)
         _container_environment(container["environment"], kind, projection)
         _container_secrets(container["secrets"], projection)
+        containers[kind] = container
+    return containers
+
+
+def inspect_first_task_definitions(resources, projection, secrets):
+    """Reject a first-create checkpoint whose resolved containers are not hardened.
+
+    Admission cannot see first-create container definitions (the whole JSON is
+    unknown until apply), so this runs on the authenticated post-apply checkpoint.
+    A deviation is therefore detected after apply, fails the run and must be
+    remediated; it is never admitted as a successful first apply. Only non-secret
+    checkpoint inputs and secret metadata (ARN and version id) are read.
+    """
+    projection = _checked(projection)
+    desired = unchanged._inventory(resources)
+    label = "workload-task-container-secrets"
+    for container in _task_container_inputs(desired, projection).values():
+        require(container is not None, "workload-task-container-unresolved")
+        actual = _container_named_values(container["secrets"], "valueFrom", label)
+        for name, purpose in CONTAINER_SECRET_NAMES.items():
+            observed = secrets[purpose]
+            require(
+                actual[name] == f"{observed['arn']}:::{observed['version_id']}",
+                label,
+            )
 
 
 def _task_volumes(volumes, kind):

@@ -183,4 +183,12 @@ follow-up (issue #57).
     evidence.
   Until then any first workload apply is stop-and-escalate. The runtime guard
   independent of the PR-head phase is tracked in issue #57.
+- First-create container hardening before apply (NOT met): a first-create
+  plan leaves both `containerDefinitions` unknown, so read-only root
+  filesystem, dropped capabilities, image, environment and secret references
+  are checked only by the post-apply inspection. A deviation is detected after
+  it is deployed and, per N-06, is not recoverable with shipped tooling. Hard
+  stop: pre-apply validation of the source-rendered container definitions,
+  bound into the execution identity, or an explicit reviewed acceptance of
+  post-apply detection.
 - Live TEST acceptance of the first workload apply, clean drift and rollback.

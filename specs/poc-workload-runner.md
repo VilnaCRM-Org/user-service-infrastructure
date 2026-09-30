@@ -33,8 +33,17 @@ The installed worker sends `test_preview` and first-create `test_apply` to the
 protected workload runner. The exact first-workload topology is checked again
 against the saved plan before replay. A successful apply must produce a new,
 stable complete checkpoint with the fixed graph, unchanged registry resources
-and native secret metadata read twice. The backend and requester are rechecked
-before the job reports success. Workload drift and later releases remain closed
+and native secret metadata read twice. A first-create plan leaves both task
+definitions' `containerDefinitions` unknown (the JSON is built from queue URLs,
+log group names and secret versions that exist only after apply), so the plan
+gate cannot run the container runtime, environment and secret checks on it. The
+runner therefore reads back both resolved task definitions from the stable
+post-apply checkpoint (non-secret inputs only) and applies the same container
+checks; every secret `valueFrom` must equal the observed secret ARN and current
+version. An unresolved or non-hardened definition fails the run. This detects a
+deviation after apply, not before: the deviating task definition is already
+registered and the services may already run it. The backend and requester are
+rechecked before the job reports success. Workload drift and later releases remain closed
 until an authenticated accepted-workload receipt exists. This first-apply result
 is not a success receipt or gateway descriptor; live application acceptance is
 still required.
@@ -80,7 +89,8 @@ ephemeral volumes. The worker drops all Linux capabilities. The web container
 drops every Docker default except `NET_BIND_SERVICE` (FrankenPHP binds `:80`
 through a file capability) and `SETUID`/`SETGID` (PHP preloads as
 `opcache.preload_user=www-data`). These checks operate on the saved native plan
-and preview together; live resource identifiers and effective cloud behavior
+and preview together whenever the container definitions are resolved there; on
+first create they run only in the post-apply inspection above. Live resource identifiers and effective cloud behavior
 still require the accepted-result observer and manual TEST acceptance.
 The generated configuration also fixes the application's JWT issuer/audience and
 metrics namespace to its TEST runtime contract. The protected config overlay and

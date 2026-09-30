@@ -2,23 +2,28 @@
 artifact: implementation-readiness
 workflow: _bmad/bmm/workflows/3-solutioning/bmad-check-implementation-readiness (Validate mode)
 task: workload-wa-hardening
-source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa (workload source); bundle parent 7bf441c (revision 11)
+source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa (workload source); bundle parent b1ed572 (revision 12)
 date: 2026-10-01
-revision: 12
-author: the planning agent that wrote revision 12 (NOT an independent reviewer)
-independent_reviewer: none yet for revision 12
-status: PENDING independent review of revision 12
+revision: 13
+author: the planning agent that wrote revision 13 (NOT an independent reviewer)
+independent_reviewer: none yet for revision 13
+status: PENDING independent review of revision 13
 ---
 
 # Implementation readiness
 
 ## Verdict
 
-**PENDING. Not PASS.** The author of revision 12 wrote this file. It records
+**PENDING. Not PASS.** The author of revision 13 wrote this file. It records
 what changed and the repository source each fix was checked against. It does
 not grade itself.
 
 - Only an independent reviewer's PASS satisfies the planning gate.
+- Revision 13 answers independent readiness round 13 against `b1ed572`
+  (FAIL: 0 major; 2 minor, R13-m1 and R13-m2; 7 nits, R13-n1…n7). No
+  user decision. It is a wording-only pass: no row, story or design
+  choice changes. **No pre-commit audit was run for it**, because the
+  changes are wording; the next independent round verifies it.
 - Revision 12 answers independent readiness round 12 against `7bf441c`
   (FAIL: 2 major, R12-M1 and R12-M2; 4 minor, R12-m1…m4; 3 nits,
   R12-n1…n3). It adds no user decision. It adds two external
@@ -71,7 +76,8 @@ not grade itself.
 | 9 | independent reviewer (relayed by the coordinator) | FAIL: R9-M1, R9-m1, R9-m2, R9-n1…n4 | revision 9 |
 | 10 | independent reviewer (relayed by the coordinator), against `8e097aa` | FAIL: R10-M1, R10-m1, R10-m2, R10-n1…n6; the coordinator relayed user decision D-15 with it | revision 10 |
 | 11 | independent reviewer (relayed by the coordinator), against `9b17199` | FAIL: R11-M1, R11-m1…m4, R11-n1…n4; the coordinator gave the design direction for R11-M1 (independent CloudFormation owners) | revision 11 |
-| 12 | independent reviewer (relayed by the coordinator), against `7bf441c` | FAIL: R12-M1, R12-M2, R12-m1…m4, R12-n1…n3 | revision 12 (this file) |
+| 12 | independent reviewer (relayed by the coordinator), against `7bf441c` | FAIL: R12-M1, R12-M2, R12-m1…m4, R12-n1…n3 | revision 12 |
+| 13 | independent reviewer (relayed by the coordinator), against `b1ed572` | FAIL: 0 major, R13-m1, R13-m2, R13-n1…n7 | revision 13 (this file) |
 
 ## User decisions (all explicit, dated 2026-09-30)
 
@@ -125,6 +131,28 @@ boundary path) is S5.1's since revision 12 (R12-M2).
 - **Planning defaults, not user decisions:** only the 20% TEST cost forecast
   threshold and the rule that every PROD increase is justified (NFR-11,
   m17). The user may change them.
+
+## Round-13 finding → resolution map
+
+Line numbers refer to the revision-13 working tree. Sources: BI `origin/main`
+through `wt-boot-urllib3` (`862b4bf`); #284 `wt-boot-pr280` (`e85534c`);
+#285 `wt-boot-219` (`54e9e2f`). Reads only (`sed`, `grep`).
+
+| Finding | Resolution | Location |
+| --- | --- | --- |
+| R13-m1 `iam:GetRole` does not return managed attachments | S4.6 step 3 keeps `iam:GetRole` for path `/` and the boundary ARN only; the "`-Guard` is the only managed attachment" row comes from `iam:ListAttachedRolePolicies` run by the BI owner, or the attached S5.1/S5.4 verifier output, like the BI-role rows. The Preview role is not widened. | `epics-stories.md:2676-2691`; `architecture.md:2482-2485`, `2488-2491` |
+| R13-m2 row-8 stack PRs asserted the PassRole allow that row 9 creates | The PassRole-allowed half is scoped to seed operations from row 9 on, after XP-18; at row 8 only the deny halves are asserted (PassRole denied elsewhere, CreateRole denied). Added to the XP-18 affected-rows text and S5.1's acceptance. The forward-dependency claim was re-verified. | `architecture.md:2463-2467`, `1829-1831`; `epics-stories.md:3721`, `3841-3843` |
+| R13-n1 front matter | prd, architecture and epics-stories: revision 13, date 2026-10-01 | `prd.md:6-7`; `architecture.md:6-7`; `epics-stories.md:6-7` |
+| R13-n2 "XP-8 items 1-3" | now 1-4 | `run-summary.md:390` |
+| R13-n3 stack-operation rows list | row 50 (S5.24a's PROD ECS stack amendment) added | `readiness.md:1181` (conditional-decision table) |
+| R13-n4 XP-17 permissions | `iam:AttachRolePolicy` added, and `iam:DetachRolePolicy` for a `Modify` row that changes the attachment | `prd.md:753-756` |
+| R13-n5 V-21 and V-25 | V-21's STOP cell follows S4.6 step 4 (read back inline policies; hold to XP-18; other explicit deny STOP plus BI review; implicit deny grant fix then resume). V-25's fallback is an ECS runtime stack amendment with `-Boundary`/`-Guard` `Modify` rows by the XP-17 installer in a row-43 slot. | `architecture.md:2912`, `2916`, `569-575` |
+| R13-n6 `requirements.md` FR2 | cited as #284 `wt-boot-pr280` `requirements.md` line 32, FR5, which supersedes FR2 (line 20) | `prd.md:799-801`; `architecture.md:1833-1835` |
+| R13-n7 PROD `_pull` fixture source | the pull statements take #219's `execution_policy()` shape with XP-14 stand-ins; S5.1's PROD template has no ECR part until row 50 | `epics-stories.md:2108` |
+
+**Ordered list (re-verified in revision 13).** Still 53 rows (0-52); no row
+is added, removed or moved, and no story depends on a higher-numbered row
+(R13-m2 removes the one row-8 assertion that relied on row 9).
 
 ## Round-12 finding → resolution map
 
@@ -1150,7 +1178,7 @@ only if a live check, a measurement or an owner review fails:
 | Conditional: V-16 fails with SSE-KMS | step 12 | SSE-S3 would contradict D-4, so a new decision would be needed |
 | Conditional: a D-14 RPO or RTO target missed | S4.8, before gate 2a | a new user decision: accept the measured value or change the design |
 | Conditional: the BI security review or the seed review rejects XP-11's or S5.24a's Preview and Apply reads or their boundary amendment (R9-M1 (d), R10-M1) | XP-11 before gate 1; S5.24a before gate 2a | a STOP, then a user decision. If only the Apply-role reads are rejected, one option is the recorded fallback design, in which `up-plan` reuses the Preview-role observation. This plan does not choose it. |
-| Conditional: a stack or stack-amendment review is rejected, a preflight finds a role name present (for example #219's `PocRuntimeRoles` registered first), or a post-create or post-update verifier fails (R11-M1) | the row of that seed operation (8, 11, 13, 33, 34, 42, 43, 45 or 47) | a STOP for that story, then an owner decision. The governor-guard route (narrowing a Resource-`*` deny so a CI role can create roles) is not a fallback: it needs a user decision amending NFR-06, which this plan does not take |
+| Conditional: a stack or stack-amendment review is rejected, a preflight finds a role name present (for example #219's `PocRuntimeRoles` registered first), or a post-create or post-update verifier fails (R11-M1) | the row of that seed operation (8, 11, 13, 33, 34, 42, 43, 45, 47 or 50, the last being S5.24a's PROD ECS stack amendment; R13-n3) | a STOP for that story, then an owner decision. The governor-guard route (narrowing a Resource-`*` deny so a CI role can create roles) is not a fallback: it needs a user decision amending NFR-06, which this plan does not take |
 | Conditional: BI cannot authorize any installer role for XP-17 (R12-m1) | before row 8 | a STOP; then a **user decision** (no stack install can start). This is the only condition under which XP-17 becomes a user decision |
 | Conditional: BI's review rejects or defers the retirement of `Issue215CutoverSessions`, or the PROD read-back finds a hold (R12-M1) | XP-18, before row 9; gate 1; S4.6 steps 3-4; gate 2a | a STOP, then an owner decision (the BI owner with `@Kravalg`); this plan removes, narrows or bypasses no hold |
 | Conditional: the Lambda service refuses the scoped network-interface grant (V-29, R12-m2) | S4.6 step 5 (and 18, 20) | a STOP; the recorded fallback steps, each a reviewed stack amendment re-proven by V-29, drop `ec2:Subnet`, then use the resource-type wildcards (`subnet/*`, `security-group/*`, `network-interface/*` in the region and account), then `arn:aws:ec2:eu-central-1:<account>:*`; no user decision is needed within that bound. If the service still refuses: a **user decision** to amend NFR-06 to the documented `"Resource": "*"` form |

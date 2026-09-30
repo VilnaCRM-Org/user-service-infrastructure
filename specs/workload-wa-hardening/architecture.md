@@ -3,8 +3,8 @@ artifact: architecture
 workflow: _bmad/bmm/workflows/3-solutioning/bmad-create-architecture (Create mode, non-interactive)
 task: workload-wa-hardening
 source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa
-date: 2026-09-30
-revision: 11 (readiness round-11 findings R11-M1, R11-m1…m4 and R11-n1…n4 addressed on top of revision 10, which answered round 10 (R10-M1, R10-m1, R10-m2 and R10-n1…n6) and applied user decision D-15 on top of revision 9, which answered round 9 (R9-M1, R9-m1, R9-m2 and R9-n1…n4) on top of revision 8, which answered round 8 on top of revision 7 (round-7 findings R7-M1, R7-M2, R7-m1…m9 and R7-n1…n3, plus audit F2, F6 and F8); decisions D-1…D-15 of 2026-09-30 applied)
+date: 2026-10-01
+revision: 13 (readiness round-13 findings R13-m1, R13-m2 and R13-n1…n7 addressed on top of revision 12, which answered round 12 (R12-M1, R12-M2, R12-m1…m4, R12-n1…n3) on top of revision 11 (readiness round-11 findings R11-M1, R11-m1…m4 and R11-n1…n4 addressed on top of revision 10, which answered round 10 (R10-M1, R10-m1, R10-m2 and R10-n1…n6) and applied user decision D-15 on top of revision 9, which answered round 9 (R9-M1, R9-m1, R9-m2 and R9-n1…n4) on top of revision 8, which answered round 8 on top of revision 7 (round-7 findings R7-M1, R7-M2, R7-m1…m9 and R7-n1…n3, plus audit F2, F6 and F8); decisions D-1…D-15 of 2026-09-30 applied))
 inputDocuments: [research.md, brief.md, prd.md, decisions.md, specs/poc-workload-runner.md, specs/poc/README.md]
 ---
 
@@ -568,7 +568,11 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   service principal, and the docs name no KMS permission for `PutLogEvents`
   (A-28). V-25 checks this live; the fallback is a reviewed row
   `kms:GenerateDataKey` with `kms:ViaService=logs.<r>.amazonaws.com` for the
-  execution role.
+  execution role. It needs an ECS runtime stack amendment (AD-26 layer 6)
+  with `Modify` rows on the execution role's policy and on the
+  `-Boundary` and `-Guard` policies (the guard's `NotResource` deny and
+  the boundary allow), run by the XP-17 installer in a row-43
+  serialization slot (R13-n5).
 - **AD-16 Recovery and admission modes (M-5, M-6, R4-M4; D-7 decided 2026-09-30).**
   - **Diagnostics:** parse the Pulumi event log into an allow-listed summary.
   - **Admission modes:** `first`, `rebuild-first`, `step2`, `resume`, `rollback-zero`
@@ -1821,10 +1825,14 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
      model the TEST one either. While it is attached, an explicit Deny
      overrides every TEST Apply allow of this plan: every TEST Apply allow
      row of the S5.2 (row 9) and XP-11 (row 42) matrices fails, S4.6 step
-     3 fails, and the step-4 apply fails with `AccessDenied`. It also
+     3 fails, and the step-4 apply fails with `AccessDenied`. The
+     PassRole-allowed half of every stack PR's simulator rows (R11-M1
+     evidence) is scoped to row 9 on for the same reason: row 8's stack
+     PRs assert only the deny halves (R13-m2). It also
      blocks XP-9's TEST registry-phase apply, which #284 runs under the
      same role (`specs/test-poc-prerequisite-capability/requirements.md`
-     FR2: the fixed ECR repositories and the SES identity), so XP-9 and
+     line 32, FR5, which supersedes FR2 at line 20: the fixed ECR
+     repositories and the SES identity; R13-n6), so XP-9 and
      XP-13 depend on it as well. This plan
      does not remove, narrow or bypass it. Its retirement is BI's own
      reviewed activation and a named external precondition, **XP-18**
@@ -2449,9 +2457,13 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
        `ae950d73…` or `01dcac0c…` through the guard's catalog
        `statement_ids` order;
      - each applier stays limited to exact role and policy ARNs: the USI
-       Apply role's `iam:PassRole` is allowed only on the two ECS roles of
-       its stack and only to `ecs-tasks.amazonaws.com`, and denied on
-       every other role and to every other service, and the Preview and
+       Apply role's `iam:PassRole` is denied on every other role and to
+       every other service at every row, and is allowed only on the two
+       ECS roles of its stack and only to `ecs-tasks.amazonaws.com` as a
+       seed-operation row from row 9 (S5.2's seed amendment) on, after
+       XP-18 retires the hold, not at row 8: S5.1's stack PRs assert only
+       the deny halves (PassRole denied on every other role and to every
+       service, `iam:CreateRole` denied; R13-m2), and the Preview and
        Drift roles' `iam:PassRole` is denied everywhere; the platform
        apply, `PulumiAutomation` and `PulumiDeploy` roles'
        `iam:PassRole` on every new role is denied (their four existing
@@ -2468,12 +2480,15 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
      - for S5.1's ECS runtime stacks (R12-M2): one verifier row per
        boundary and guard policy (the role's `PermissionsBoundary` ARN
        equals `…:policy/issue219/{env}/boundary/{name}-Boundary`, the
-       role's only managed attachment is its `-Guard`, and each default
-       version document equals the reviewed one), and the TEST execution
+       role's only managed attachment is its `-Guard`, read by
+       `iam:ListAttachedRolePolicies`, which no Preview-role grant covers,
+       and each default version document equals the reviewed one), and the TEST execution
        role's `_pull` set simulated `allowed` with
        `AllowedByPermissionsBoundary` (run by the BI owner at row 8,
        because no USI role's simulate grant exists before S5.17; S4.6
-       step 3 repeats it live under the Preview role); the PROD rows run
+       step 3 repeats the `_pull` and `iam:GetRole` rows live under the Preview
+       role, and attaches the BI owner's attachment read-back and the
+       verifier output for the attachment row, R13-m1); the PROD rows run
        at S5.24a's PROD ECS amendment (row 50) and live in S4.7;
      - the stack's post-create or post-update verifier output, and the
        XP-17 per-install evidence (caller ARN, RoleId, MFA, non-root).
@@ -2894,11 +2909,11 @@ independent scopes, because their stories also wire `workload_phase.py`
   | V-18 | Which `aws.lambda.Invocation` input changes replace it; lifecycle scope (a delete makes no call under the default `CREATE_ONLY` scope) | provider source + live | S1.6 | 19 | STOP: redesign. |
   | V-19 | The DocumentDB-managed secret carries a cluster tag usable as `secretsmanager:ResourceTag` | docs + live read-only `DescribeSecret` (metadata) | S5.5, S5.18a | 5 | Fallback: exact ARN only. |
   | V-20 | `aws:PrincipalAccount` semantics for `ecr:GetAuthorizationToken`; the reviewed ECR registry account | docs + live pull | S3.3 | 7 | STOP: as V-14 (`rollback-zero`, reviewed pin fix, `policy-update` plan). |
-  | V-21 | `CreateDBCluster` with `ManageMasterUserPassword` needs, under the caller (USI apply role), `secretsmanager:CreateSecret` and `TagResource` on `rds!cluster-*` and `kms:DescribeKey` on `alias/aws/secretsmanager` (documented for RDS and Aurora, A-27; not stated for DocumentDB) | docs + live simulate + live apply (CloudTrail `CreateSecret` event for the managed secret, metadata only) | S5.2 | 3, 4 | STOP: step 1 fails with `AccessDenied` → the BI grant is fixed by a reviewed PR, then S4.3 `resume`. An unneeded grant found by the CloudTrail check is removed in a reviewed PR before gate 2. |
+  | V-21 | `CreateDBCluster` with `ManageMasterUserPassword` needs, under the caller (USI apply role), `secretsmanager:CreateSecret` and `TagResource` on `rds!cluster-*` and `kms:DescribeKey` on `alias/aws/secretsmanager` (documented for RDS and Aurora, A-27; not stated for DocumentDB) | docs + live simulate + live apply (CloudTrail `CreateSecret` event for the managed secret, metadata only) | S5.2 | 3, 4 | STOP: step 1 fails with `AccessDenied` → as S4.6 step 4 (R13-n5): the BI owner first reads back the Apply role's inline policies; a hold (`Issue215CutoverSessions` or any inline deny of `*`) goes to XP-18; any other explicit deny is a STOP plus BI review; only an implicit deny (a missing allow) gets the BI grant fix by a reviewed PR, then S4.3 `resume`. An unneeded grant found by the CloudTrail check is removed in a reviewed PR before gate 2. |
   | V-22 | The restore operator needs `secretsmanager:CreateSecret`/`TagResource` and `kms:DescribeKey` for `ModifyDBCluster(ManageMasterUserPassword)`; `kms:CreateGrant`/`Decrypt`/`DescribeKey` on the DocumentDB storage key for the point-in-time restore (R6-m10); and the source-cluster, target-cluster and subnet-group resource permissions of `RestoreDBClusterToPointInTime` (A-27) | docs + live simulate + live restore | S5.18a | 3 (simulate); S4.8 step R-1 | STOP: restore or modify denied → BI grant fix, rehearsal re-run; the temporary cluster is deleted first. |
   | V-23 | ECS service autoscaling at 0 tasks: (a) whether `RegisterScalableTarget` with `min` above `desiredCount=0` scales out by itself; (b) whether the one-time `at()` start action scales 0 → `min` (A-26 documents it); (c) whether a fired one-time action stays listed; (d) whether `scheduledScalingSuspended` blocks one-time actions, and whether a restart plan that un-suspends and creates a start action fires it; (e) (m1) whether the pinned provider's `Target` update re-sends `MinCapacity`/`MaxCapacity`, and which values it sends under `ignore_changes` with `up --refresh` (the hold plan must not change the live 0/0) | docs (A-26, verified 2026-09-30) + provider source (e) + live | S2.1 and S4.9 ((e) is the first case of both) | 7, 7b, 15 | STOP: (b) fails → the services stay at 0 tasks, so nothing needs rolling back; the start mechanism is redesigned in a reviewed PR. (c) shows removal → STOP before the next apply of any mode (m12); the two-part fix of AD-10 (`scaling.consumed` contract PR, so the program stops rendering the fired actions, plus the AD-23 entry). (d) differs from AD-10 → STOP at step 15; the stop and hold sequence is redesigned in a reviewed PR. (e) shows that a hold update can send non-live min/max → S4.9 does not merge until the hold design changes in a reviewed PR. |
   | V-24 | Setting `retain_on_delete` (and `protect=False`, `recovery_window_in_days`, `final_snapshot_identifier`) changes only state in the unprotect plan (`update` steps, no cloud call except `rds:ModifyDBCluster`), and a later `delete` of a retained resource makes no cloud call | engine and provider source + live | S4.2 | 19 | STOP: any cloud delete observed on a retained resource → stop the abandon; recover by S4.3 import. |
-  | V-25 | The ECS awslogs driver writes to a log group encrypted with the runtime CMK with no KMS statement for the execution role (A-28) | docs + live | S2.4 | 7 | Fallback: a reviewed AD-15a row for the execution role (`kms:GenerateDataKey` with `kms:ViaService=logs.<r>.amazonaws.com`), then step 7 is re-run. |
+  | V-25 | The ECS awslogs driver writes to a log group encrypted with the runtime CMK with no KMS statement for the execution role (A-28) | docs + live | S2.4 | 7 | Fallback: a reviewed AD-15a row for the execution role (`kms:GenerateDataKey` with `kms:ViaService=logs.<r>.amazonaws.com`) as an ECS runtime stack amendment with `Modify` rows on the execution role's policy and the `-Boundary` and `-Guard` policies, by the XP-17 installer in a row-43 serialization slot (R13-n5), then step 7 is re-run. |
   | V-26 | The per-type delete action sets derived from the pinned provider's delete paths are complete (drain and detach calls included) for the recovery role | provider source + live (CloudTrail of the abandon run, no `AccessDenied`) | S4.10, S5.7 | 19 | STOP: an `AccessDenied` stops the removal plan mid-way → S4.3 `export`, reviewed S5.7 grant fix, then `recovery-abandon` again from the export receipt. |
   | V-27 | Whether a resource imported with the `import_` option (the rebuild's recovery import, AD-16) keeps `importID` on its checkpoint row after the import apply (R6-m12) | engine source (first case) + live | S4.10 (first case), S4.3 | 20 | If it persists, S4.10's allowance accepts `importID` only on rows whose URN the authenticated import receipt lists, and every other `importID` still fails. A live `importID` on an unlisted row → STOP before `rebuild-first`; S4.3 `export`, then a reviewed fix. |
   | V-28 | `ecr:GetDownloadUrlForLayer` accepts an image's **config** digest (not only a layer digest) and returns a pre-signed URL on exactly `LAYER_HOST` (R9-M1, R10-n5; AD-26 point 1) | docs (the API reference documents image layers and is silent on the config blob) + live | S4.14 (P4, N7; the offline fakes assume acceptance) | 1 (the gate-1 PR's TEST workload `plan`, read-only), confirmed again by the step-4 `up-plan` | STOP: the `plan` fails with `image-config-observation-failed` before any apply. No automatic fallback: the token path needs a user decision that amends NFR-06 and narrows the identity denies and the seed guards (AD-26), plus the BI security and seed reviews approved by `@Kravalg`. |

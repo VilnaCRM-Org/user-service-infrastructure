@@ -3,8 +3,8 @@ artifact: prd
 workflow: _bmad/core/tasks/bmad-create-prd (non-interactive; steps-c 01..12 resolved from task intent)
 task: workload-wa-hardening
 source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa
-date: 2026-09-30
-revision: 11 (readiness round-11 findings R11-M1, R11-m1..m4 and R11-n1..n4 addressed on top of revision 10, which answered round 10 (R10-M1, R10-m1, R10-m2 and R10-n1..n6) and applied user decision D-15 on top of revision 9, which answered round 9 (R9-M1, R9-m1, R9-m2 and R9-n1..n4) on top of revision 8, which answered round 8 on top of revision 7 (round-7 findings R7-M1, R7-M2, R7-m1..m9 and R7-n1..n3, plus audit F2, F6 and F8); decisions D-1..D-15 of 2026-09-30 recorded: D-1..D-7, D-14 and D-15 as user decisions, D-8..D-13 as confirmed details)
+date: 2026-10-01
+revision: 13 (readiness round-13 findings R13-m1, R13-m2 and R13-n1…n7 addressed on top of revision 12, which answered round 12 (R12-M1, R12-M2, R12-m1…m4, R12-n1…n3) on top of revision 11 (readiness round-11 findings R11-M1, R11-m1..m4 and R11-n1..n4 addressed on top of revision 10, which answered round 10 (R10-M1, R10-m1, R10-m2 and R10-n1..n6) and applied user decision D-15 on top of revision 9, which answered round 9 (R9-M1, R9-m1, R9-m2 and R9-n1..n4) on top of revision 8, which answered round 8 on top of revision 7 (round-7 findings R7-M1, R7-M2, R7-m1..m9 and R7-n1..n3, plus audit F2, F6 and F8); decisions D-1..D-15 of 2026-09-30 recorded: D-1..D-7, D-14 and D-15 as user decisions, D-8..D-13 as confirmed details))
 inputDocuments: [research.md, brief.md, decisions.md, specs/poc/README.md, specs/poc-workload-runner.md]
 ---
 
@@ -749,8 +749,11 @@ has an ordered row, like #284):
     clear its obsolete staged change sets); `iam:CreateRole`,
     `iam:PutRolePolicy`, `iam:DeleteRolePolicy`, `iam:TagRole`,
     `iam:UntagRole`, `iam:CreatePolicy`, `iam:CreatePolicyVersion`,
-    `iam:DeletePolicyVersion` (the boundary and guard `Modify` rows) and
-    the matching IAM reads, on the plan's role and policy ARNs;
+    `iam:DeletePolicyVersion` (the boundary and guard `Modify` rows),
+    `iam:AttachRolePolicy` (the `-Guard` attachment at creation; it is
+    carried by the role's `ManagedPolicyArns`, and a `Modify` row that
+    changes it needs `iam:DetachRolePolicy` as well; R13-n4) and the
+    matching IAM reads, on the plan's role and policy ARNs;
     `iam:CreateServiceLinkedRole` for the five service names only;
     `iam:PassRole` on the function roles only, to `lambda.amazonaws.com`
     only; the Lambda create, update, tag and read actions of the handler
@@ -793,7 +796,9 @@ has an ordered row, like #284):
   While it is attached, every TEST Apply allow of S5.2 (row 9), XP-11
   (row 42) and S4.6 steps 3-4 is denied, and so is XP-9's TEST
   registry-phase apply, which #284 runs under the same role (the fixed
-  ECR repositories and the SES identity; `requirements.md` FR2), so XP-9
+  ECR repositories and the SES identity; #284 `wt-boot-pr280`
+  `specs/test-poc-prerequisite-capability/requirements.md` line 32, FR5,
+  which supersedes FR2 at line 20; R13-n6), so XP-9
   and XP-13 depend on XP-18 too. XP-18 is that BI activation,
   reviewed by the BI owner and approved by `@Kravalg`, completed and read
   back before row 9's first TEST Apply allow row: `iam:ListRolePolicies`

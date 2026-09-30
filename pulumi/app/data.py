@@ -158,9 +158,8 @@ class DataPlane(pulumi.ComponentResource):
             "docdb",
             max_length=63,
         )
-        parameter_group_name = build_resource_name(
-            settings.stack_tag, "docdb-params", max_length=255
-        )
+        # Stack tags are at most 65 characters, far below the 255-character limit.
+        parameter_group_name = build_resource_name(settings.stack_tag, "docdb-params")
         parameter_group = aws.docdb.ClusterParameterGroup(
             "user-service-documentdb-parameters",
             name=parameter_group_name,

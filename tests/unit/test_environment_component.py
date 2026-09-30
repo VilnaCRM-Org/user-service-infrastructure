@@ -1959,6 +1959,34 @@ def test_managed_documentdb_is_protected_retained_and_audited() -> None:
     )
 
 
+def test_documentdb_identifiers_respect_the_63_character_limit() -> None:
+    """A 58-character stack tag puts the cluster name exactly one over its limit."""
+    service, environment = "s" * 32, "e" * 25
+    role = f"arn:aws:iam::123456789012:role/user-service-infrastructure-{environment}"
+    resources, _ = _managed_registrations(
+        {
+            "serviceName": service,
+            "environment": environment,
+            "executionRoleArn": role + "-EcsExecution",
+            "taskRoleArn": role + "-EcsTask",
+        }
+    )
+    tag = f"{service}-{environment}"
+    cluster = resources["user-service-documentdb-cluster"]["inputs"]
+    assert len(f"{tag}-docdb") == 64
+    assert cluster["clusterIdentifier"] == build_resource_name(
+        tag, "docdb", max_length=63
+    )
+    assert len(cluster["clusterIdentifier"]) == 63
+    assert len(cluster["finalSnapshotIdentifier"]) == 63
+    assert cluster["finalSnapshotIdentifier"] == build_resource_name(
+        tag, "docdb-final", max_length=63
+    )
+    assert resources["user-service-documentdb-audit-logs"]["inputs"]["name"] == (
+        f"/aws/docdb/{cluster['clusterIdentifier']}/audit"
+    )
+
+
 @pytest.mark.parametrize("environment", ["dev", "test", "prod"])
 def test_documentdb_retention_does_not_depend_on_environment(environment) -> None:
     role = "arn:aws:iam::123456789012:role/user-service-infrastructure-{}-Ecs{}"
@@ -2011,22 +2039,71 @@ def test_managed_queues_redrive_every_work_queue_to_a_dead_letter_queue() -> Non
             in (monitor.options[f"user-service-{source}"]["dependencies"])
         )
     assert "redrivePolicy" not in queues["user-service-health-check"]
+    for name, inputs in queues.items():
+        assert inputs["receiveWaitTimeSeconds"] == 20
+        assert inputs["visibilityTimeoutSeconds"] == 120
+        assert inputs["kmsMasterKeyId"] == "alias/aws/sqs"
+        if name.startswith("user-service-failed-"):
+            assert inputs["messageRetentionSeconds"] == 1_209_600
+
+
+QUEUE_LOGICAL_NAMES = {
+    "sendEmail": "send-email",
+    "failedSendEmail": "failed-send-email",
+    "insertUserBatch": "insert-user-batch",
+    "failedInsertUserBatch": "failed-insert-user-batch",
+    "domainEvents": "domain-events",
+    "failedDomainEvents": "failed-domain-events",
+    "healthCheck": "health-check-queue",
+}
+
+
+def test_managed_messaging_exports_every_queue_by_logical_key() -> None:
+    def program() -> None:
+        stack_component = UserServiceStack("managed-queues")
+        outputs = stack_component.messaging.outputs
+        _assert_output_value(
+            pulumi.Output.all(**outputs.queue_urls),
+            {
+                key: f"https://sqs.eu-central-1.amazonaws.com/123456789012/{name}"
+                for key, name in QUEUE_LOGICAL_NAMES.items()
+            },
+        )
+        _assert_output_value(
+            pulumi.Output.all(**outputs.queue_arns),
+            {
+                key: f"arn:aws:sqs:eu-central-1:123456789012:{name}"
+                for key, name in QUEUE_LOGICAL_NAMES.items()
+            },
+        )
+
+    with mocked_pulumi_context(
+        MANAGED_STACK_CONFIG,
+        aws_config_values={
+            "region": "eu-central-1",
+            "allowedAccountIds": ["123456789012"],
+        },
+    ):
+        _run_pulumi_program(program)
 
 
 def test_offline_preview_exports_the_insert_batch_dead_letter_queue() -> None:
     def program() -> None:
         stack_component = UserServiceStack("offline-dlq")
+        outputs = stack_component.messaging.outputs
         _assert_output_value(
-            pulumi.Output.from_input(
-                stack_component.messaging.outputs.queue_urls["failedInsertUserBatch"]
-            ),
-            "https://sqs.eu-central-1.amazonaws.com/preview/failed-insert-user-batch",
+            pulumi.Output.all(**outputs.queue_urls),
+            {
+                key: f"https://sqs.eu-central-1.amazonaws.com/preview/{name}"
+                for key, name in QUEUE_LOGICAL_NAMES.items()
+            },
         )
         _assert_output_value(
-            pulumi.Output.from_input(
-                stack_component.messaging.outputs.queue_arns["failedInsertUserBatch"]
-            ),
-            "arn:aws:sqs:eu-central-1:preview:failed-insert-user-batch",
+            pulumi.Output.all(**outputs.queue_arns),
+            {
+                key: f"arn:aws:sqs:eu-central-1:preview:{name}"
+                for key, name in QUEUE_LOGICAL_NAMES.items()
+            },
         )
 
     with mocked_pulumi_context({"deploymentMode": "preview"}):

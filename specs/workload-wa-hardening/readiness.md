@@ -55,6 +55,14 @@ default.
 | D-6 | Two gates; `@Kravalg` approval of the README PR still required | `prd.md:324` |
 | D-7 | TEST abandon via a Kravalg-approved manifest and a saved-plan destroy | `decisions.md:13`; `prd.md:325`, `:196` (FR-21), `:197` (FR-22) |
 
+The user also explicitly confirmed the derived details **D-8…D-13** on
+2026-09-30 (`decisions.md:25-30`): the SNS topic on the runtime CMK;
+the ALB access-log bucket on SSE-S3; DocumentDB, ElastiCache and SQS on
+AWS-managed encryption; a TEST abandon always retains both log buckets; the
+abandon rehearsal comes at the end of the campaign, followed by a rebuild;
+and the TEST exercise role with its `test-exercise` environment. XP-14 (the
+PROD registry) is still an open ownership item that blocks gate 2.
+
 ## Round-4 finding → resolution map
 
 Line numbers refer to revision 4. "Source" is the repository file and lines

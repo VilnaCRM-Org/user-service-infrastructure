@@ -1,4 +1,9 @@
-"""State-managed workload secrets; descriptor validation is not AWS admission."""
+"""Workload secret declarations; descriptor validation is not AWS admission.
+
+A hardened (``workload_step``) projection declares seeded secret identities only:
+no Random or TLS generator and no ``SecretVersion`` (AD-25 transition rule). The
+pre-hardening projection keeps generating values in state until S4.10 removes it.
+"""
 
 from __future__ import annotations
 
@@ -56,8 +61,13 @@ class RuntimeSecretsDescriptor:
             raise ValueError("Runtime secrets differ from protected deployment context")
 
     @property
-    def references(self) -> dict[str, dict[str, str]]:
-        """Return a detached copy of the exact ten declared secret identities."""
+    def hardened(self) -> bool:
+        """Report the seeded shape, which only a ``workload_step`` contract has."""
+        return "workload_step" in self._contract
+
+    @property
+    def references(self) -> dict[str, dict[str, Any]]:
+        """Return a detached copy of the exact declared secret identities."""
         return copy.deepcopy(
             self._contract["workload"]["secret_lifecycle"]["references"]
         )
@@ -128,7 +138,9 @@ class RuntimeSecretsDescriptor:
 
 
 class RuntimeSecrets(pulumi.ComponentResource):
-    """Generate once in provider state, then persist exact named AWS versions."""
+    """Declare named AWS secrets; only the pre-hardening shape generates values."""
+
+    values: dict[str, pulumi.Output[str]]
 
     def __init__(
         self,
@@ -147,9 +159,15 @@ class RuntimeSecrets(pulumi.ComponentResource):
         super().__init__(
             "user-service-infrastructure:secrets:Runtime", name, None, opts
         )
-        self.values = self._generate()
-        for purpose, value in self.values.items():
-            self._persist(purpose, value)
+        if self.descriptor.hardened:
+            # Values arrive from the reviewed seed outside Pulumi state.
+            self.values = {}
+            for purpose in self.references:
+                self._declare(purpose)
+        else:
+            self.values = self._generate()
+            for purpose, value in self.values.items():
+                self._persist(purpose, value)
 
     def _generator_options(
         self, version: str, outputs: list[str]
@@ -209,8 +227,8 @@ class RuntimeSecrets(pulumi.ComponentResource):
         values["oauth_public_key"] = pulumi.Output.secret(key.public_key_pem)
         return values
 
-    def _persist(self, purpose: str, value: pulumi.Input[str]) -> pulumi.Output[str]:
-        """Persist one named secret/version without exporting its material."""
+    def _declare(self, purpose: str) -> aws.secretsmanager.Secret:
+        """Register one protected named secret identity without any value."""
         declaration = self.references[purpose]
         secret = aws.secretsmanager.Secret(
             f"runtime-{purpose}",
@@ -218,6 +236,12 @@ class RuntimeSecrets(pulumi.ComponentResource):
             kms_key_id=declaration["kms_key_arn"],
             opts=pulumi.ResourceOptions(parent=self, protect=True),
         )
+        self.secret_arns[purpose] = secret.arn
+        return secret
+
+    def _persist(self, purpose: str, value: pulumi.Input[str]) -> pulumi.Output[str]:
+        """Persist one named secret/version without exporting its material."""
+        secret = self._declare(purpose)
         version = aws.secretsmanager.SecretVersion(
             f"runtime-{purpose}-version",
             secret_id=secret.id,
@@ -226,19 +250,24 @@ class RuntimeSecrets(pulumi.ComponentResource):
                 parent=self, protect=True, additional_secret_outputs=["secretString"]
             ),
         )
-        self.secret_arns[purpose] = secret.arn
         self.version_ids[purpose] = version.version_id
         return secret.arn
 
     def persist_url(self, purpose: str, value: pulumi.Input[str]) -> pulumi.Output[str]:
         """Complete endpoint-dependent declarations using generated credentials."""
-        if purpose not in DERIVED or purpose in self.secret_arns:
+        if (
+            purpose not in DERIVED
+            or purpose in self.secret_arns
+            or purpose not in self.references
+        ):
             raise ValueError("Runtime derived secret purpose is invalid or duplicated")
         return self._persist(purpose, value)
 
     def ecs_secrets(self) -> list[dict[str, pulumi.Input[str]]]:
         """Inject eight version-pinned values through nine environment names."""
-        if set(self.secret_arns) != set(self.references):
+        if set(self.secret_arns) != set(self.references) or set(
+            self.version_ids
+        ) != set(self.references):
             raise ValueError("Runtime secret inventory is incomplete")
         return [
             {
@@ -254,8 +283,9 @@ class RuntimeSecrets(pulumi.ComponentResource):
         ]
 
     def complete(self) -> None:
-        """Export only metadata after both derived secrets have been registered."""
-        self.ecs_secrets()
+        """Export only metadata; the pre-hardening shape needs both derived secrets."""
+        if not self.descriptor.hardened:
+            self.ecs_secrets()
         self.register_outputs(
             {"secretArns": self.secret_arns, "versionIds": self.version_ids}
         )

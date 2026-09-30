@@ -27,3 +27,33 @@ exists. Missing evidence must not select first-creation mode. This binding must
 be wired before workload deployment; passing these tests does not prove live
 secret generation or persistence. Registry-only execution cannot emit a secret
 observation.
+
+## Hardened (seeded) declarations
+
+A contract that carries `workload_step` uses the hardened shape of
+`poc-test-v1` (AD-04). Its `secret_lifecycle.generation` is `rotation-seed`,
+it has no `provider_refresh_actions`, and each reference adds `rotation`
+(`{function_ref, schedule_days: 90}` or, for the interim KMS-bound purposes,
+`non_rotatable`) and `value_kind`. Only `app_secret` and `oauth_encryption_key`
+are rotated; no Redis or DocumentDB purpose may be declared (D-1). The
+DocumentDB-managed secret is observed only, through
+`central.documentdb_managed_secret_arn`, and keeps its service-managed
+rotation. Every `function_ref` must name a key of
+`central.rotation_function_arns`, and a missing central function or CMK makes
+the contract invalid, so admission is refused before any read (NFR-07).
+
+For such a projection the program declares only `Secret` resources: no Random
+or TLS generator and no `SecretVersion`, and a transformation fails the program
+if either is added (FR-09, NFR-01). A seeded secret has no version until the
+seed runs; after that its identity and first version are preserved. The seed
+input is exactly `{secret_arn, purpose}` for a rotated purpose
+(`poc_secret_observation.validate_seed_input`). A contract without
+`workload_step` keeps the pre-hardening shape and graph unchanged until the
+topology story removes that branch (AD-25). Switching a workload contract
+between the two shapes is refused; it would need a reviewed state migration.
+
+V-8 (provider source): pulumi-aws 7.23.0 builds on terraform-provider-aws
+v6.36.0 with no Secrets Manager patch. Reading `Secret` calls only
+`DescribeSecret` and `GetResourcePolicy`, `SecretRotation` only
+`DescribeSecret`, and `SecretPolicy` only `GetResourcePolicy`. Only
+`SecretVersion` calls `GetSecretValue`, so it is never declared.

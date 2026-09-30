@@ -17,6 +17,22 @@ from test_environment_component import (
 from test_poc_workload_phase import graph
 
 ROOT = Path(__file__).parents[2]
+SECRET_MATERIAL = ("random:", "tls:", "aws:secretsmanager/secretVersion:SecretVersion")
+# V-8 provider-source record (first case of S1.1). pulumi-aws 7.23.0 builds on
+# hashicorp/terraform-provider-aws v6.36.0 (upstream submodule commit
+# 4981ec2b44ea4892c1ee4f0c1ed23b761a55f44d); none of its 25 patches touches
+# internal/service/secretsmanager. Read paths at that commit:
+#   secret.go resourceSecretRead -> DescribeSecret, GetResourcePolicy
+#   secret_rotation.go resourceSecretRotationRead -> DescribeSecret
+#   secret_policy.go resourceSecretPolicyRead -> GetResourcePolicy
+# None of their create, read, update or delete paths calls GetSecretValue; only
+# secret_version.go does, which is why no SecretVersion may be declared (FR-09).
+V8_PROVIDER_VERSION = "7.23.0"
+V8_METADATA_READ_TYPES = {
+    "aws:secretsmanager/secret:Secret",
+    "aws:secretsmanager/secretRotation:SecretRotation",
+    "aws:secretsmanager/secretPolicy:SecretPolicy",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -247,6 +263,7 @@ def test_generators_are_pinned_secret_protected_and_release_independent(tmp_path
 
 def test_partial_and_duplicate_derived_inventory_fail_closed():
     resource = object.__new__(module.RuntimeSecrets)
+    resource.descriptor = SimpleNamespace(hardened=False)
     resource.secret_arns = {}
     resource.references = {
         purpose: {}
@@ -330,3 +347,103 @@ def test_legacy_planes_reject_missing_material_before_registration(monkeypatch, 
     ):
         with pytest.raises(ValueError, match="requires application secrets"):
             plane("legacy", **arguments)
+
+
+def _hardened_contract():
+    return json.loads(
+        (
+            ROOT / "tests/fixtures/poc-contract/workload-hardened.synthetic.json"
+        ).read_text()
+    )
+
+
+def test_hardened_descriptor_reports_only_seeded_declarations(contract):
+    assert module.RuntimeSecretsDescriptor(contract).hardened is False
+    descriptor = module.RuntimeSecretsDescriptor(_hardened_contract())
+    assert descriptor.hardened is True
+    assert set(descriptor.references) == {
+        "app_secret",
+        "oauth_encryption_key",
+        "oauth_passphrase",
+        "two_factor_encryption_key",
+        "oauth_private_key",
+        "oauth_public_key",
+    }
+
+
+def test_v8_hardened_secret_types_are_read_by_metadata_only(tmp_path):
+    from poc_provider_runtime import PINS
+
+    assert {pin.name: pin.version for pin in PINS}["aws"] == V8_PROVIDER_VERSION
+    receipt = graph(tmp_path, "hardened")
+    assert receipt["error"] is None
+    managed = {
+        row["type"]
+        for row in receipt["registrations"].values()
+        if row["type"].startswith("aws:secretsmanager/")
+    }
+    assert managed and managed <= V8_METADATA_READ_TYPES
+
+
+def test_hardened_projection_renders_seeded_metadata_and_no_secret_material(tmp_path):
+    baseline, receipt = graph(tmp_path, "registry"), graph(tmp_path, "hardened")
+    assert baseline["error"] is receipt["error"] is None
+    rows = receipt["registrations"]
+    assert {name: rows[name] for name in baseline["registrations"]} == baseline[
+        "registrations"
+    ]
+    types = [row["type"] for row in rows.values()]
+    assert not [kind for kind in types if kind.startswith(SECRET_MATERIAL)]
+    assert not [kind for kind in types if kind.startswith("aws:iam/")]
+    assert "aws:lambda/function:Function" not in types
+    declarations = _hardened_contract()["workload"]["secret_lifecycle"]["references"]
+    secrets = {
+        name: row
+        for name, row in rows.items()
+        if row["type"] == "aws:secretsmanager/secret:Secret"
+    }
+    assert set(secrets) == {f"runtime-{purpose}" for purpose in declarations}
+    for purpose, declaration in declarations.items():
+        row = secrets[f"runtime-{purpose}"]
+        assert row["protect"] and row["additional_secret_outputs"] == []
+        assert row["inputs"]["name"] == declaration["name"]
+        assert row["inputs"]["kmsKeyId"] == declaration["kms_key_arn"]
+        assert set(row["inputs"]) == {"name", "kmsKeyId", "tags"}
+    component = rows["runtime-secrets"]["urn"]
+    assert receipt["outputs"][component]["versionIds"] == {}
+    assert set(receipt["outputs"][component]["secretArns"]) == set(declarations)
+    assert {"network", "messaging"} <= set(rows)
+    assert not {"data", "compute"} & set(rows)
+
+
+def test_pre_hardening_projection_keeps_its_generators_until_s4_10(tmp_path):
+    rows = graph(tmp_path, "bridge")["registrations"]
+    types = [row["type"] for row in rows.values()]
+    assert len([kind for kind in types if kind.startswith(("random:", "tls:"))]) == 7
+    assert types.count("aws:secretsmanager/secretVersion:SecretVersion") == 10
+    assert {"data", "compute"} <= set(rows)
+
+
+@pytest.mark.parametrize("mutation", ["random-password", "secret-version"])
+def test_readding_secret_material_to_the_hardened_graph_fails(tmp_path, mutation):
+    receipt = graph(tmp_path, "hardened", mutation)
+    assert receipt["error"] == "Hardened workload graph must not hold secret material"
+    assert not [
+        name
+        for name, row in receipt["registrations"].items()
+        if row["type"].startswith(SECRET_MATERIAL)
+    ]
+
+
+def test_hardened_inventory_has_no_version_references_or_derived_secrets():
+    resource = object.__new__(module.RuntimeSecrets)
+    resource.references = _hardened_contract()["workload"]["secret_lifecycle"][
+        "references"
+    ]
+    resource.secret_arns = dict.fromkeys(resource.references, "synthetic-arn")
+    resource.version_ids = {}
+    with pytest.raises(ValueError, match="incomplete"):
+        resource.ecs_secrets()
+    for purpose in sorted(module.DERIVED):
+        with pytest.raises(ValueError, match="invalid or duplicated"):
+            resource.persist_url(purpose, "synthetic")

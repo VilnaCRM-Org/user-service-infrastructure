@@ -101,10 +101,10 @@ def _workload_queue_outputs(args, resource_id, values):
     return resource_id, values
 
 
-def _fixture_contract(root, config):
+def _fixture_contract(root, config, name="workload"):
     """Bind synthetic declarations to this exact mocked workload target."""
     contract = json.loads(
-        (root / "tests/fixtures/poc-contract/workload.synthetic.json").read_text()
+        (root / f"tests/fixtures/poc-contract/{name}.synthetic.json").read_text()
     )
     central = contract["workload"]["central"]
     central["execution_role_arn"] = config["executionRoleArn"]
@@ -172,7 +172,26 @@ def _bridge(contract, config, aws_config, mutation, *, generated_child=False):
                     {"__name__": "__main__"},
                 )
         else:
-            run_workload_phase(projection)
+            _add_secret_material(run_workload_phase(projection), mutation)
+
+
+def _add_secret_material(stack, mutation):
+    """Re-add a forbidden generator or version under the hardened owner (N case)."""
+    import pulumi_aws as aws
+    import pulumi_random as random
+
+    import pulumi
+
+    options = pulumi.ResourceOptions(parent=stack.runtime_secrets)
+    if mutation == "random-password":
+        random.RandomPassword("fixture-material", length=16, opts=options)
+    if mutation == "secret-version":
+        aws.secretsmanager.SecretVersion(
+            "fixture-version",
+            secret_id="synthetic",
+            secret_string="synthetic",
+            opts=options,
+        )
 
 
 def _probe(root, mode, mutation, coverage_path):
@@ -305,8 +324,10 @@ def _probe(root, mode, mutation, coverage_path):
             owner="team-user-service",
             cost_center="core",
         )
-        contract = _fixture_contract(root, config)
-        if mode in {"bridge", "generated-child"}:
+        contract = _fixture_contract(
+            root, config, {"hardened": "workload-hardened"}.get(mode, "workload")
+        )
+        if mode in {"bridge", "generated-child", "hardened"}:
             _bridge(
                 contract,
                 config,

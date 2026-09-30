@@ -5,6 +5,10 @@ admitted settings and registry data. Only the protected workload runner reaches
 this class, and only for a ``workload`` phase contract; verified releases,
 secrets, capabilities and native transition acceptance remain separate
 prerequisites of that path.
+
+Transition rule (AD-25): only a projection with ``workload_step`` renders the
+hardened composition, which holds no generator and no ``SecretVersion``. The
+pre-hardening composition stays unchanged until the topology story removes it.
 """
 
 from __future__ import annotations
@@ -57,6 +61,12 @@ TAGGABLE_TYPES = frozenset(
         "aws:sqs/queue:Queue",
     }
 )
+# Secret material may never enter a hardened graph or its Pulumi state (FR-09).
+SECRET_MATERIAL_TYPES = (
+    "random:",
+    "tls:",
+    "aws:secretsmanager/secretVersion:SecretVersion",
+)
 
 
 def _merge_tags(existing, baseline: dict[str, str]) -> dict[str, str]:
@@ -67,6 +77,15 @@ def _merge_tags(existing, baseline: dict[str, str]) -> dict[str, str]:
     ):
         raise ValueError("Workload resource overrides preserved baseline tags")
     return {**existing, **baseline}
+
+
+def _reject_secret_material(
+    args: pulumi.ResourceTransformationArgs,
+) -> pulumi.ResourceTransformationResult | None:
+    """Fail closed before a generator or secret version joins the hardened graph."""
+    if args.type_.startswith(SECRET_MATERIAL_TYPES):
+        raise ValueError("Hardened workload graph must not hold secret material")
+    return None
 
 
 class WorkloadPhaseStack(RegistryPhaseStack):
@@ -90,6 +109,38 @@ class WorkloadPhaseStack(RegistryPhaseStack):
         secrets.validate_target(settings)
         super().__init__(registries=registries)
         self.settings = settings
+        if secrets.hardened:
+            self._compose_hardened(settings, secrets)
+        else:
+            self._compose_pre_hardening(settings, secrets)
+        # Keep existing root/UserService outputs unchanged. New child components
+        # expose workload outputs; an authenticated result observer can read them.
+
+    def _compose_hardened(
+        self, settings: StackSettings, secrets: RuntimeSecretsDescriptor
+    ) -> None:
+        """Compose seeded secret metadata and the credential-free planes only.
+
+        The data and compute planes join this branch once they need no generated
+        credential; no workload phase can be admitted before that composition.
+        """
+        opts = pulumi.ResourceOptions(
+            parent=self,
+            transformations=[_reject_secret_material, self._tag_resource],
+        )
+        self.runtime_secrets = RuntimeSecrets(
+            "runtime-secrets", descriptor=secrets, opts=opts
+        )
+        self.network = NetworkPlane(
+            "network", settings=settings, private_gateway=True, opts=opts
+        )
+        self.messaging = MessagingPlane("messaging", settings=settings, opts=opts)
+        self.runtime_secrets.complete()
+
+    def _compose_pre_hardening(
+        self, settings: StackSettings, secrets: RuntimeSecretsDescriptor
+    ) -> None:
+        """Keep the installed composition, generators included, unchanged."""
         # No provider override: preserve the installed default AWS provider,
         # including the existing ECR provider links and canonical account pins.
         opts = pulumi.ResourceOptions(parent=self, transformations=[self._tag_resource])
@@ -118,8 +169,6 @@ class WorkloadPhaseStack(RegistryPhaseStack):
             runtime_secrets=self.runtime_secrets,
             opts=opts,
         )
-        # Keep existing root/UserService outputs unchanged. New child components
-        # expose workload outputs; an authenticated result observer can read them.
 
     @staticmethod
     def _validate_target(settings: StackSettings, registries: RegistryInputs) -> None:

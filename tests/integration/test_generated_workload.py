@@ -90,6 +90,24 @@ def local_sts():
         thread.join()
 
 
+def _bound_contract(name, roles):
+    """Bind a synthetic contract to the fixed TEST roles and registries."""
+    contract = json.loads(
+        (
+            PROJECT_ROOT / f"tests/fixtures/poc-contract/{name}.synthetic.json"
+        ).read_text()
+    )
+    contract["workload"]["central"].update(roles)
+    for kind in ("web", "worker"):
+        row = contract["registries"][kind]
+        row["logical_name"] = f"user-service-{kind}-repository"
+        row["name"] = f"user-service-test-{kind}"
+        row["arn"] = f"arn:aws:ecr:eu-central-1:891377212104:repository/{row['name']}"
+        row["uri"] = f"891377212104.dkr.ecr.eu-central-1.amazonaws.com/{row['name']}"
+        contract["workload"]["release"][kind]["repository_uri"] = row["uri"]
+    return contract
+
+
 @pytest.fixture
 def native_stack(tmp_path, verified_plugins, local_sts):
     """Prepare fixed TEST identities on an isolated file backend with fake creds."""
@@ -100,11 +118,6 @@ def native_stack(tmp_path, verified_plugins, local_sts):
         Path(__file__).with_name("generated_workload_program.py"), work / "__main__.py"
     )
     (work / "source-root.txt").write_text(str(PROJECT_ROOT))
-    contract = json.loads(
-        (
-            PROJECT_ROOT / "tests/fixtures/poc-contract/workload.synthetic.json"
-        ).read_text()
-    )
     roles = {
         "execution_role_arn": (
             "arn:aws:iam::891377212104:role/"
@@ -114,15 +127,12 @@ def native_stack(tmp_path, verified_plugins, local_sts):
             "arn:aws:iam::891377212104:role/user-service-infrastructure-test-EcsTask"
         ),
     }
-    contract["workload"]["central"].update(roles)
-    for kind in ("web", "worker"):
-        row = contract["registries"][kind]
-        row["logical_name"] = f"user-service-{kind}-repository"
-        row["name"] = f"user-service-test-{kind}"
-        row["arn"] = f"arn:aws:ecr:eu-central-1:891377212104:repository/{row['name']}"
-        row["uri"] = f"891377212104.dkr.ecr.eu-central-1.amazonaws.com/{row['name']}"
-        contract["workload"]["release"][kind]["repository_uri"] = row["uri"]
-    (work / "contract.json").write_text(json.dumps(contract))
+    for name, target in (
+        ("workload", "contract.json"),
+        ("workload-hardened", "hardened-contract.json"),
+    ):
+        contract = _bound_contract(name, roles)
+        (work / target).write_text(json.dumps(contract))
     (work / "scenario.json").write_text('{"mode":"workload"}')
     backend = tmp_path / "backend"
     backend.mkdir()
@@ -239,6 +249,43 @@ def test_native_generated_workload_preserves_registry_and_registers_secret_versi
     assert types.count("aws:ecs/taskDefinition:TaskDefinition") == 2
     assert not any(kind.startswith("aws:iam/") for kind in types)
     assert local_sts[1] == ["GetUser", "GetCallerIdentity"] * 2
+
+
+SECRET_MATERIAL = ("random:", "tls:", "aws:secretsmanager/secretVersion:SecretVersion")
+
+
+def test_native_hardened_workload_renders_no_secret_material(native_stack):
+    """A workload_step projection previews seeded metadata only (FR-09, NFR-01)."""
+    stack, work = native_stack
+    events = []
+    (work / "scenario.json").write_text('{"mode":"registry"}')
+    stack.preview(on_event=events.append)
+    baseline = {row.urn: row for row in resources(events)}
+    events.clear()
+    (work / "scenario.json").write_text('{"mode":"hardened-workload"}')
+    result = stack.preview(on_event=events.append)
+    assert result.change_summary
+    actual = {row.urn: row for row in resources(events)}
+    assert set(baseline) <= set(actual)
+    for urn, row in baseline.items():
+        assert vars(actual[urn].new) == vars(row.new)
+    types = [row.type for row in actual.values()]
+    assert types.count("aws:secretsmanager/secret:Secret") == 6
+    assert not [kind for kind in types if kind.startswith(SECRET_MATERIAL)]
+    assert not [kind for kind in types if kind.startswith("aws:iam/")]
+    assert "aws:lambda/function:Function" not in types
+
+
+def test_native_hardened_workload_rejects_readded_secret_material(native_stack):
+    stack, work = native_stack
+    (work / "scenario.json").write_text('{"mode":"hardened-secret-material"}')
+    events = []
+    with pytest.raises(AutomationRuntimeError) as failure:
+        stack.preview(on_event=events.append)
+    assert "must not hold secret material" in str(failure.value)
+    assert not [
+        row for row in resources(events) if row.type.startswith(SECRET_MATERIAL)
+    ]
 
 
 def test_native_legacy_workload_program_registers_managed_planes(native_stack):

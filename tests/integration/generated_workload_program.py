@@ -28,7 +28,11 @@ import pulumi  # noqa: E402
 
 root = Path(__file__).parent
 scenario = json.loads((root / "scenario.json").read_text())
-contract = json.loads((root / "contract.json").read_text())
+mode = scenario["mode"]
+hardened = mode.startswith("hardened")
+contract = json.loads(
+    (root / ("hardened-contract.json" if hardened else "contract.json")).read_text()
+)
 registries = {
     kind: {key: row[key] for key in ("logical_name", "name")}
     for kind, row in contract["registries"].items()
@@ -39,9 +43,23 @@ metadata = SimpleNamespace(
     owner="team-user-service",
     cost_center="core",
 )
-mode = scenario["mode"]
 if mode == "registry":
     RegistryPhaseStack(registries=registries)
+elif hardened:
+    # A workload_step contract renders the hardened composition (AD-25).
+    workload = WorkloadPhaseStack(
+        settings=resolve_stack_settings(metadata, generated_secrets=True),
+        registries=registries,
+        secrets=RuntimeSecretsDescriptor(contract),
+    )
+    if mode == "hardened-secret-material":
+        import pulumi_random as random
+
+        random.RandomPassword(
+            "fixture-material",
+            length=16,
+            opts=pulumi.ResourceOptions(parent=workload.runtime_secrets),
+        )
 elif mode == "legacy-workload":
     # The installed entrypoint stays metadata-only. Exercise the legacy managed
     # topology through this explicit integration-only program instead.

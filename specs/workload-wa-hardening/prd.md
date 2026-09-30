@@ -4,7 +4,7 @@ workflow: _bmad/core/tasks/bmad-create-prd (non-interactive; steps-c 01..12 reso
 task: workload-wa-hardening
 source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa
 date: 2026-09-30
-revision: 9 (readiness round-9 findings R9-M1, R9-m1, R9-m2 and R9-n1..n4 addressed on top of revision 8, which answered round 8 on top of revision 7 (round-7 findings R7-M1, R7-M2, R7-m1..m9 and R7-n1..n3, plus audit F2, F6 and F8); decisions D-1..D-14 of 2026-09-30 recorded: D-1..D-7 and D-14 as user decisions, D-8..D-13 as confirmed details)
+revision: 10 (readiness round-10 findings R10-M1, R10-m1, R10-m2 and R10-n1..n6 and user decision D-15 addressed on top of revision 9, which answered round 9 (R9-M1, R9-m1, R9-m2 and R9-n1..n4) on top of revision 8, which answered round 8 on top of revision 7 (round-7 findings R7-M1, R7-M2, R7-m1..m9 and R7-n1..n3, plus audit F2, F6 and F8); decisions D-1..D-15 of 2026-09-30 recorded: D-1..D-7, D-14 and D-15 as user decisions, D-8..D-13 as confirmed details)
 inputDocuments: [research.md, brief.md, decisions.md, specs/poc/README.md, specs/poc-workload-runner.md]
 ---
 
@@ -209,11 +209,11 @@ matching run is a finding. S2.5 tests every row (P, N, B).
 | FR-28 | Front-door security per D-3 (decided 2026-09-30), outside the hard stop and required before any public exposure: a REST API regional endpoint with AWS WAF (managed common, known-bad-inputs and IP-reputation groups plus a rate rule), a private integration over **VPC link V2 directly to the internal ALB** (`integration_target` = ALB ARN; no NLB; V-10), a custom domain and a deploy pipeline. Live TEST evidence is S4.6 step 17; PROD public exposure requires it before gate 2. | AGI (+USI outputs) | T→P | L |
 | FR-29 | The legacy managed path (`pulumi/app/stack.py` `UserServiceStack`, `compute.py::_create_runtime_secrets`, `data.py::_persist_url` fallback) fails closed for `test` and `prod`, or is removed. It currently writes config-supplied secret material, including the social-login client secrets, into `SecretVersion`s. Social-login secrets, if ever enabled, are written outside Pulumi by a governance secret-write path. That is future work, recorded here. | USI | T→P | ST, CON |
 | FR-30 | Backup and rollback. **Restore:** a point-in-time restore of the TEST cluster (`RestoreDBClusterToPointInTime` with `UseLatestRestorableTime`, R6-m10) to a temporary cluster `<stack>-docdb-restore-rehearsal` under the BI restore-operator role (S5.18a). The cluster is switched to a managed primary password. A VPC-attached BI reader (bootstrap-job SG, attached in S5.18b after XP-8) records the restore time and a document-count sample. Then the temporary cluster is deleted. This is a PROD gate. **Recovery targets (user decision D-14, dated 2026-09-30; architecture AD-19; R6-m1):** DocumentDB RPO ≤ 1 hour inside the backup retention window, recorded as the restore request time minus the achieved recovery point of the point-in-time restore (the source `LatestRestorableTime` it used), and RTO ≤ 24 hours from the restore request to the reader's document-count sample; a measured value above a target is a STOP at gate 2a for a new user decision. Redis is rebuilt, not restored. **Rollback (m4):** (a) *first deployment*, before any accepted-workload receipt exists: there is no prior release, so rollback means stop serving. A create-only `rollback-zero` plan (FR-11) scales both services to 0, and the stack stays in place for `resume`, recovery or `abandon`. (b) *later releases*, after an accepted-workload receipt (FR-35): re-apply the prior accepted release (image digests, task-definition inputs, original registry anchor) as a saved plan. The ECS circuit breaker (AD-19) covers in-deploy failures in both cases. | USI + BI | T (gate for P) | IAM, L |
-| FR-31 | Two-gate phase admission (D-6). **Gate 1 (TEST-only admission):** `poc-test.json` `phase: "workload"` with `admission: {"test": true, "prod": false}`, allowed only when all of these hold: (a) every story in the explicit gate-1 list (`epics-stories.md` S4.6 preconditions) is merged; (b) the BI prerequisites S5.1, S5.2, S5.17, S5.4, S5.3, S5.23, S5.7 and S5.18a are applied, and the USI repository controls S5.21 and S5.22 are applied; (c) the one-time metadata observation confirms R-02; (d) every decision applicable to gate 1 (D-1, D-2 TEST part, D-4, D-5, D-6, D-7) is **resolved**, as all are since 2026-09-30; (e) the existing runner prerequisites XP-9 … XP-13 (§7) hold, XP-11 including the TEST Preview and Apply workload-observation reads and the narrowed `ssm:GetParameter` denies that §7 names, with the BI simulator matrix and the BI security review approved by `@Kravalg` (R9-M1, architecture AD-26). **Gate 2 (PROD admission), in two parts.** **2a:** `admission.prod: "preview"` admits only the PROD `plan`. It is allowed when every gate-1 check still passes, the TEST acceptance receipt (§3.3) is campaign-complete, the restore item (FR-30, S4.8, measured against D-14) is present, and XP-14, XP-15 and XP-16 hold (R8-m6), and S5.24a's PROD Preview and Apply workload-observation reads are applied (R9-M1, AD-26). **2b:** `admission.prod: true`, allowed when every 2a condition holds and the receipt is complete and schema-valid. Gate 2b also requires **scheduled workload drift detection for the `prod` workload stack** (S4.17, R6-m11): merged, and two uploaded result records linked in the receipt, each with its run link, artifact ID and artifact sha256 (R8-M1): a clean scheduled TEST run with `status: checked` (R7-m1; a `before-acceptance` record never counts as the TEST item), and a PROD record with `status: before-acceptance` and `null` receipt fields from a scheduled run after the gate-2a PR that first set `poc-prod.json` `phase: workload` (R8-m1; the S4.17 jobs are data-driven, and a `registry-phase` record never counts). PROD cannot apply before gate 2b, so no PROD success receipt exists and a PROD `checked` record cannot occur; because that record runs no PROD image, capability or certificate comparison, gate 2b also links the S5.24b PROD Drift simulator evidence (R9-n1). No risk acceptance replaces it. It must link live evidence for: step 1 and step 2 with their receipts (FR-34, FR-35), clean drift (FR-32), rollback, the resume, abandon and rebuild rehearsals, timing (FR-24), restore (FR-30), the FR-28 front door if PROD is publicly exposed, the P-1 PROD preview (FR-19), D-2 PROD (FR-19 HTTPS, S5.20 published) and D-3 resolved. **Stack → contract mapping (R6-m11):** stack `test` reads `specs/poc/poc-test.json`; stack `prod` reads a new `specs/poc/poc-prod.json`, validated by a separate PROD schema `schemas/poc-prod-v1.schema.json` that S4.14 owns (R7-m4; architecture AD-04), committed with XP-14 as `phase: registry` and moved to `phase: workload` only by the S4.7 PRs; `admission` lives only in `poc-test.json`, the single gate record for both stacks. The hard-stop test and the README change encode both gates. | USI | T, then P | ST, L |
+| FR-31 | Two-gate phase admission (D-6). **Gate 1 (TEST-only admission):** `poc-test.json` `phase: "workload"` with `admission: {"test": true, "prod": false}`, allowed only when all of these hold: (a) every story in the explicit gate-1 list (`epics-stories.md` S4.6 preconditions) is merged; (b) the BI prerequisites S5.1, S5.2, S5.17, S5.4, S5.3, S5.23, S5.7 and S5.18a are applied, and the USI repository controls S5.21 and S5.22 are applied; (c) the one-time metadata observation confirms R-02; (d) every decision applicable to gate 1 (D-1, D-2 TEST part, D-4, D-5, D-6, D-7, D-15) is **resolved**, as all are since 2026-09-30; (e) the existing runner prerequisites XP-9 … XP-13 (§7) hold: XP-10 is the gateway-supplied certificate ARN pinned in the reviewed TEST contract (user decision D-15), and XP-11 includes the TEST Preview and Apply workload-observation reads that §7 names (no `ssm:GetParameter` read and no narrowed deny or seed guard, D-15), with their seed boundary amendment, the BI simulator matrix and the BI security review approved by `@Kravalg` (R9-M1, R10-M1, architecture AD-26). **Gate 2 (PROD admission), in two parts.** **2a:** `admission.prod: "preview"` admits only the PROD `plan`. It is allowed when every gate-1 check still passes, the TEST acceptance receipt (§3.3) is campaign-complete, the restore item (FR-30, S4.8, measured against D-14) is present, and XP-14, XP-15 and XP-16 hold (R8-m6), and S5.24a's PROD Preview and Apply workload-observation reads are applied (R9-M1, AD-26). **2b:** `admission.prod: true`, allowed when every 2a condition holds and the receipt is complete and schema-valid. Gate 2b also requires **scheduled workload drift detection for the `prod` workload stack** (S4.17, R6-m11): merged, and two uploaded result records linked in the receipt, each with its run link, artifact ID and artifact sha256 (R8-M1): a clean scheduled TEST run with `status: checked` (R7-m1; a `before-acceptance` record never counts as the TEST item), and a PROD record with `status: before-acceptance` and `null` receipt fields from a scheduled run after the gate-2a PR that first set `poc-prod.json` `phase: workload` (R8-m1; the S4.17 jobs are data-driven, and a `registry-phase` record never counts). PROD cannot apply before gate 2b, so no PROD success receipt exists and a PROD `checked` record cannot occur; because that record runs no PROD image, capability or certificate comparison, gate 2b also links the S5.24b PROD Drift simulator evidence (R9-n1). No risk acceptance replaces it. It must link live evidence for: step 1 and step 2 with their receipts (FR-34, FR-35), clean drift (FR-32), rollback, the resume, abandon and rebuild rehearsals, timing (FR-24), restore (FR-30), the FR-28 front door if PROD is publicly exposed, the P-1 PROD preview (FR-19), D-2 PROD (FR-19 HTTPS, S5.20 published) and D-3 resolved. **Stack → contract mapping (R6-m11):** stack `test` reads `specs/poc/poc-test.json`; stack `prod` reads a new `specs/poc/poc-prod.json`, validated by a separate PROD schema `schemas/poc-prod-v1.schema.json` that S4.14 owns (R7-m4; architecture AD-04), committed with XP-14 as `phase: registry` and moved to `phase: workload` only by the S4.7 PRs; `admission` lives only in `poc-test.json`, the single gate record for both stacks. The hard-stop test and the README change encode both gates. | USI | T, then P | ST, L |
 | FR-32 | Drift allow-list (M-1). The contract carries a closed, per-resource-type list of fields allowed to change outside Pulumi (architecture AD-23). Every `ignore_changes` in the program must appear on that list and nothing else. "Clean drift" means the executed workload drift path (R5-M1, R6-M1, R6-m4: the new `self-deploy.yml` job `test_workload_drift` → worker → runner → `run_pulumi_command._dispatch_command("plan", …)`, that is the `plan` invocation `preview --json --refresh --save-plan` with a drift gate, as the registry runner handles drift) exits 0 **and** the FR-32 reducer in `scripts/poc_workload_reconciliation.py`, run by that gate, accepts every refresh-time state change against the checkpoint of the latest success receipt only on listed fields (V-13). The gate-2 clean-drift evidence comes from that job under the **preview** role (the same role step as the registry drift job, `self-deploy.yml` line 546; PROD: `prod_workload_drift`). The registry job `test_post_apply_drift` stays registry-only and unchanged. `scripts/run_pulumi_drift_check.py` is not executed by anything and carries no FR-32 logic. A drift whose refresh plans a replace or delete of a protected resource fails closed earlier, with the shared safe-preview message and no field named (audit F8). The baseline scheduled drift (`scheduled-drift.yml`, drift role, baseline program) excludes a workload-phase stack with the recorded reason `workload-drift-routed-to-runner`, per stack: `test` when `poc-test.json` has `phase: workload` (S4.13), `prod` only when `poc-prod.json` exists with `phase: workload` (S4.14; R7-m2). Scheduled workload drift for both workload stacks is S4.17 (R6-m11, R7-M2), launched in the isolated worker container with scheduled-main provenance and no PR request, and required before gate 2b; each run that exits 0 writes one uploaded result record (`checked`, `before-acceptance`, or `registry-phase` for a stack whose installed contract has `phase: registry`; R7-m1, R8-m1, R8-M1), and a run whose installed program differs from the applied base fails with its own reason (R8-m4). | USI | T→P | CON, L |
-| FR-33 | Preview and drift read capability (B-2). BI grants the `GitHubCiPreview-user-service-infrastructure-{env}` and `GitHubCiDrift-user-service-infrastructure-{env}` roles read-only access (`Describe*`/`List*`/`Get*`, except secret values and function code) to every workload resource type: ec2 (VPC, subnets, SGs, endpoints, flow logs), ecs, docdb/rds describe, elasticache (including users and user groups), logs, cloudwatch, application-autoscaling (including scheduled actions), elbv2, wafv2, apigateway, events, sns, s3 (bucket configuration), and secretsmanager `DescribeSecret`/`GetResourcePolicy`/`ListSecretVersionIds` (S5.17). The kms `DescribeKey`/`GetKeyPolicy`/`GetKeyRotationStatus`/`ListResourceTags` read for both roles is granted in **S5.4** on the exact new key ARNs, through the key policies and identity statements, because the key ARNs exist only after S5.4 (m7). `GetSecretValue`, `lambda:GetFunction` and `kms:Decrypt` stay denied. The simulator matrix regression covers both roles. The scheduled workload drift (S4.17) also reads IAM, ECR, SSM and ACM for its capability, image and certificate checks, and the registry rows (ECR repositories, the SES identity and the Route53 DKIM records) for its refresh and capture checks; every capture also reads `s3:GetBucketVersioning` on the stack's state bucket (R9-m1). Those reads, including `ecr:GetDownloadUrlForLayer`, with `iam:SimulatePrincipalPolicy` on the execution role only, come through the BI story S5.24 (its Drift PR, S5.24b) after XP-14, XP-15 and XP-16 and before S4.17 (R7-m9, R8-m3). S5.24b leaves the Drift role's explicit secret-read deny unchanged: S4.17 takes the certificate ARN from the success receipt, so the Drift role reads no SSM parameter, and S4.14's token-free image config read needs no `ecr:GetAuthorizationToken` (R9-m2, architecture AD-26). The PR `plan` and `up-plan` paths observe the same prerequisites under the Preview and Apply roles; their reads and the one narrowed deny (`ssm:GetParameter` on the exact certificate parameter) are XP-11 for TEST and S5.24a for PROD, and every such allow is also added to the roles' permissions boundary (R9-M1). | BI + USI | T→P | IAM, L |
+| FR-33 | Preview and drift read capability (B-2). BI grants the `GitHubCiPreview-user-service-infrastructure-{env}` and `GitHubCiDrift-user-service-infrastructure-{env}` roles read-only access (`Describe*`/`List*`/`Get*`, except secret values and function code) to every workload resource type: ec2 (VPC, subnets, SGs, endpoints, flow logs), ecs, docdb/rds describe, elasticache (including users and user groups), logs, cloudwatch, application-autoscaling (including scheduled actions), elbv2, wafv2, apigateway, events, sns, s3 (bucket configuration), and secretsmanager `DescribeSecret`/`GetResourcePolicy`/`ListSecretVersionIds` (S5.17). The kms `DescribeKey`/`GetKeyPolicy`/`GetKeyRotationStatus`/`ListResourceTags` read for both roles is granted in **S5.4** on the exact new key ARNs, through the key policies and identity statements, because the key ARNs exist only after S5.4 (m7). `GetSecretValue`, `lambda:GetFunction` and `kms:Decrypt` stay denied. The simulator matrix regression covers both roles. The scheduled workload drift (S4.17) also reads IAM, ECR and ACM for its capability, image and certificate checks (no SSM, D-15), and the registry rows (ECR repositories, the SES identity and the Route53 DKIM records) for its refresh and capture checks; every capture also reads `s3:GetBucketVersioning` on the stack's state bucket (R9-m1). Those reads, including `ecr:GetDownloadUrlForLayer`, with `iam:SimulatePrincipalPolicy` on the execution role only, come through the BI story S5.24 (its Drift PR, S5.24b) after XP-14, XP-15 and XP-16 and before S4.17 (R7-m9, R8-m3). S5.24b leaves the Drift role's explicit secret-read deny and its seed guard unchanged: S4.17 takes the certificate ARN from the contract its success receipt applied (D-15), so the Drift role reads no SSM parameter, and S4.14's token-free image config read needs no `ecr:GetAuthorizationToken` (R9-m2, architecture AD-26). The PR `plan` and `up-plan` paths observe the same prerequisites under the Preview and Apply roles; their reads are XP-11 for TEST and S5.24a for PROD. No role gets `ssm:GetParameter`, and no identity deny, seed guard, seed boundary statement or catalog hash is loosened for SSM (D-15). Every remaining allow is also added to the roles' seed-owned permissions boundary through a seed catalog amendment (R9-M1, R10-M1). | BI + USI | T→P | IAM, L |
 | FR-34 | Two-step first-workload admission (M-12). The contract names the step (`workload_step: 1 \| 2`). **Step 1** creates the network, data, secret metadata and ECS services at 0 tasks, with no seed, rotation, secret policy, autoscaling target or scheduled action. **Step 2** is admitted only in a **create-only** mode. Every step in the saved plan is `create` or `same`. Its created URNs are exactly the step-2 set: seed Invocations, `SecretRotation`s, `SecretPolicy`s (including the DocumentDB-managed secret policy in state `deny-other-readers`), autoscaling targets and policies, the one-time start scheduled actions of the single unconsumed `scaling.starts` entry (`<svc>-start-1` on an on-time first build; a missed window moves that uncreated entry to `scaling.consumed` and appends the next `seq`) and, in TEST only, the night and weekend `ScheduledAction`s (FR-14c). There is no `update`, `replace` or `delete` of any step-1 URN. Step 2 also requires the authenticated step-1 result receipt (FR-35), the S5.5 evidence receipt and the XP-8 metadata in the installed `main` central metadata. After step 2, a health observation must show every service steady with running = desired ≥ 1 and healthy targets. | USI | T→P | ST, CON, L |
-| FR-35 | Runner lifecycle (R4-B2). The installed path admits only a first TEST apply: the runner binds the checkpoint to the registry anchor (`scripts/poc_workload_runner.py` lines 44-47), calls only `admit_first_workload_plan` (line 61), is TEST-only (line 53) and refuses `drift` (line 154). Admission `inspect_registry` (`scripts/poc_workload_admission.py` lines 150-166) requires a registry-only checkpoint equal to the registry receipt. The worker (`scripts/service_execution_worker.py` lines 25-30, 90-94, 99) and `self-deploy.yml` are TEST-only and refuse workload drift. The C-runner chain changes this, in order: **(1)** authenticated **receipts after every admitted apply**, successful or failed (`poc-workload-step-receipt-v1`: checkpoint, run, attempt, mode, outcome, digests, secret metadata), plus a receipt from every recovery subcommand that writes the checkpoint: **export** (also written by `clear-pending`, with `cause: clear-pending` and a link to the prior receipt, R5-M2), **import** and **abandon**. The failure-path receipt (also written when the post-apply result inspection fails, R6-m9) is published by the `test_apply_receipt` job, because the worker fails the apply job on a non-zero status (`scripts/service_execution_worker.py` line 127). They are published through the same governance-evidence path as the registry proof. Admission and the runner bind each mode to its anchor by the mode → anchor table (architecture AD-24): `first` → registry receipt; `resume` → the latest failed or export receipt (so an interrupted step 1 is resumable, and so is a failed operation after `clear-pending`), finishing the operation that receipt names; `step2` → the latest step-1 success; `rollback-zero` and `policy-update` → the latest success after step 2; the recovery modes → the latest receipt or export. A stale receipt is refused. The release identity keeps the original registry anchor. **(2)** Mode routing from the reviewed contract field `workload_operation` (never a request flag), including `rebuild-first` after an abandon (anchor: the recovery import receipt that follows the abandon receipt). **(3)** An authenticated **accepted-workload receipt**, written by the first passing health observation after step 2. It opens `drift` in the runner and the worker. Releases also need a clean-drift result. The pinned README, runner-spec and log-health sentences and their tests change through a reviewed amendment. **(4)** A **PROD path**: worker jobs and account, `self-deploy.yml` PROD jobs, gate 2a (`plan` only) and gate 2b (apply), the PROD contract schema (R7-m4), the PROD certificate parameter, the PROD topology and the PROD registry anchor (XP-14). The post-acceptance route that opens the drift job comes from the authenticated receipt lineage, never from the contract bytes, so a `rollback-zero` or `policy-update` before the first accepted receipt runs no drift job (R7-m5). The existing binding negatives keep passing. | USI | T→P | ST, CON, L |
+| FR-35 | Runner lifecycle (R4-B2). The installed path admits only a first TEST apply: the runner binds the checkpoint to the registry anchor (`scripts/poc_workload_runner.py` lines 44-47), calls only `admit_first_workload_plan` (line 61), is TEST-only (line 53) and refuses `drift` (line 154). Admission `inspect_registry` (`scripts/poc_workload_admission.py` lines 150-166) requires a registry-only checkpoint equal to the registry receipt. The worker (`scripts/service_execution_worker.py` lines 25-30, 90-94, 99) and `self-deploy.yml` are TEST-only and refuse workload drift. The C-runner chain changes this, in order: **(1)** authenticated **receipts after every admitted apply**, successful or failed (`poc-workload-step-receipt-v1`: checkpoint, run, attempt, mode, outcome, digests, secret metadata), plus a receipt from every recovery subcommand that writes the checkpoint: **export** (also written by `clear-pending`, with `cause: clear-pending` and a link to the prior receipt, R5-M2), **import** and **abandon**. The failure-path receipt (also written when the post-apply result inspection fails, R6-m9) is published by the `test_apply_receipt` job, because the worker fails the apply job on a non-zero status (`scripts/service_execution_worker.py` line 127). They are published through the same governance-evidence path as the registry proof. Admission and the runner bind each mode to its anchor by the mode → anchor table (architecture AD-24): `first` → registry receipt; `resume` → the latest failed or export receipt (so an interrupted step 1 is resumable, and so is a failed operation after `clear-pending`), finishing the operation that receipt names; `step2` → the latest step-1 success; `rollback-zero` and `policy-update` → the latest success after step 2; the recovery modes → the latest receipt or export. A stale receipt is refused. The release identity keeps the original registry anchor. **(2)** Mode routing from the reviewed contract field `workload_operation` (never a request flag), including `rebuild-first` after an abandon (anchor: the recovery import receipt that follows the abandon receipt). **(3)** An authenticated **accepted-workload receipt**, written by the first passing health observation after step 2. It opens `drift` in the runner and the worker. Releases also need a clean-drift result. The pinned README, runner-spec and log-health sentences and their tests change through a reviewed amendment. **(4)** A **PROD path**: worker jobs and account, `self-deploy.yml` PROD jobs, gate 2a (`plan` only) and gate 2b (apply), the PROD contract schema (R7-m4), the PROD certificate ARN pinned in the PROD contract (XP-15, D-15), the PROD topology and the PROD registry anchor (XP-14). The post-acceptance route that opens the drift job comes from the authenticated receipt lineage, never from the contract bytes, so a `rollback-zero` or `policy-update` before the first accepted receipt runs no drift job (R7-m5). The existing binding negatives keep passing. | USI | T→P | ST, CON, L |
 
 #### 3.3 TEST acceptance receipt (FR-31 gate 2, M-11)
 
@@ -242,7 +242,7 @@ all-zero IDs or hashes) and any item without every field.
 | NFR-03 | The quality floors (§2) are unchanged and green. | `make ci-pr`, `make test-coverage`. | offline |
 | NFR-04 | TEST before PROD. Each live step is approved by Kravalg, with a requester different from the approver. | Workflow run evidence; receipt field check (§3.3). | evidence-only |
 | NFR-05 | Credential changes cause no outage. **IAM paths (Redis IAM, DocumentDB IAM):** zero authentication failures. **Single-key rotations (`APP_SECRET`, `OAUTH_ENCRYPTION_KEY`):** impact stays within D-5. | **IAM paths:** during a 13 h soak that crosses the 12 h Redis connection limit and at least two task-credential refreshes, the app `auth_failure{backend=redis\|documentdb}` log metric and the ElastiCache `AuthenticationFailures` metric are both 0. **Single-key:** window W = `RotationSucceeded` time → ECS deployment `COMPLETED` + 5 min; in W the ALB 5xx alarm does not fire, and the counts of failed refresh-token and failed decrypt log events are recorded; the result passes if every failure is a forced re-login accepted by D-5. | evidence-only |
-| NFR-06 | Least privilege. Every new grant is scoped to named ARNs, name patterns (`<name>-??????`), deterministic ARNs or exact XP-8 ARNs, with conditions. An explicit secret-read deny is narrowed only where no non-weakening design exists, only to one exact ARN, and only after the BI security review approved by `@Kravalg` (AD-26, R9-M1). The BI seed and rotation functions act only on allow-listed secret ARNs. | Reviewed IAM document hashes plus the offline capability simulator, and a live `iam:SimulatePrincipalPolicy` run (S4.6 step 3). | offline + live |
+| NFR-06 | Least privilege. Every new grant is scoped to named ARNs, name patterns (`<name>-??????`), deterministic ARNs or exact XP-8 ARNs, with conditions. An explicit secret-read deny or seed guard is narrowed only where no non-weakening design exists, only to one exact ARN, and only after the BI security review approved by `@Kravalg` (AD-26, R9-M1); this plan narrows none (user decision D-15, R10-M1). A permissions-boundary addition goes through a seed catalog amendment (AD-26). The BI seed and rotation functions act only on allow-listed secret ARNs. | Reviewed IAM document hashes plus the offline capability simulator, and a live `iam:SimulatePrincipalPolicy` run (S4.6 step 3). | offline + live |
 | NFR-07 | Fail closed: a missing central role, CMK, decision or evidence, or a forbidden prior-checkpoint URN, gives BLOCKED admission. | Negative admission and capability tests. | offline |
 | NFR-08 | An alarm reaches SNS within 5 min. | TEST alarm exercise: time from the induced condition to the SNS delivery record. | evidence-only |
 | NFR-09 | An interrupted TEST apply is resumed, or abandoned (D-7, decided 2026-09-30; TEST only, Kravalg-approved manifest), through FR-22 within one working day, with complete evidence. Every recovery subcommand that writes the checkpoint (`clear-pending`, `import`, `abandon`) leaves a receipt bound to the new checkpoint, so the resume anchor never goes stale (R5-M2). | TEST rehearsals: resume after `release-lock` and `clear-pending` (S4.6 step 13) and abandon plus rebuild (S4.6 steps 19–20). | evidence-only |
@@ -292,7 +292,7 @@ P = positive, N = negative, B = boundary. Every cell is filled; no row uses
 | FR-32 | Program `ignore_changes` equals the allow-list. | An `ignore_changes` field not on the list fails. A refresh-time change on an unlisted field fails the drift reducer. | ECS `desiredCount` change by autoscaling gives a clean drift result. | `test_drift_allow_list.py` (S1.11); `tests/unit/test_poc_workload_reconciliation.py` (`validate_drift`) and `tests/unit/test_poc_workload_runner.py` (the drift plan-plus-gate dispatch) (S4.13); `tests/unit/test_poc_scheduled_workload_drift.py` (S4.17) | TEST clean drift after scaling, from `test_workload_drift` under the preview role (S4.6 step 14); a clean scheduled TEST run (S4.17) before gate 2b. |
 | FR-33 | Simulator: every workload read allowed for both roles. | `GetSecretValue`, `GetFunction`, `kms:Decrypt` and any write denied. | Condition-less `Describe*` on types whose API has no resource ARN is recorded. | BI tests; `test_poc_workload_capabilities.py` | TEST live simulator run; a TEST preview completes. |
 | FR-34 | Step 1 and step 2 URN sets; step 2 admitted in create-only mode. | A step-2 plan with any update, replace or delete of a step-1 URN is refused. Step 2 without the step-1 receipt, S5.5 evidence or XP-8 metadata is refused. A step-2 plan missing a TEST `ScheduledAction` is refused. | An empty step-2 plan (all `same`) is admitted and changes nothing. | `test_poc_workload_admission.py`, topology tests | TEST step 1, step 2 and the step-2 health observation. |
-| FR-35 | Receipts are issued after every admitted apply (success and failure); each mode is admitted only with its anchor from the AD-24 table; the accepted-workload receipt opens `drift`. | `step2` without a step-1 success receipt, `resume` without a failed or export receipt, or `drift` without an accepted receipt is refused (`workload-accepted-state-receipt-required` in the runner, `workload-drift-not-enabled` in the worker). A receipt with a changed checkpoint sha256, run ID or contract digest, or a stale receipt, is refused. An unknown mode, or a mode not named by `workload_operation`, is refused. The existing negatives keep passing (`workload-checkpoint-binding` for `first`, `workload-completed-registry-required`, `workload-registry-checkpoint-changed`, `workload-stack`, `workload-first-command`, `workload-request-binding`, `workload-source-binding`, `workload-certificate-parameter-required`). A PROD run with `admission.prod` false is refused; a PROD apply with `"preview"` is refused. | A step 1 interrupted before any receipt is resumable from the recovery export receipt. A failed receipt followed by `clear-pending`, which writes an export receipt (`cause: clear-pending`) linked to the failed one, admits `resume`; a `clear-pending` without that receipt leaves every receipt stale and `resume` is refused (R5-M2). `drift` with an accepted receipt but no clean-drift result admits drift and refuses a release. | `test_poc_workload_runner.py`, `test_poc_workload_admission.py`, `test_poc_workload_receipts.py`, `test_poc_workload_recovery.py`, `test_service_execution_worker.py`, `test_workload_apply_docs_consistency.py` | TEST step-1 receipt (S4.6 step 4), step 2 admitted with it (step 7), accepted receipt and drift (steps 7b and 14), resume from the export and clear-pending receipts after a cancelled run (step 13), rebuild (step 20). |
+| FR-35 | Receipts are issued after every admitted apply (success and failure); each mode is admitted only with its anchor from the AD-24 table; the accepted-workload receipt opens `drift`. | `step2` without a step-1 success receipt, `resume` without a failed or export receipt, or `drift` without an accepted receipt is refused (`workload-accepted-state-receipt-required` in the runner, `workload-drift-not-enabled` in the worker). A receipt with a changed checkpoint sha256, run ID or contract digest, or a stale receipt, is refused. An unknown mode, or a mode not named by `workload_operation`, is refused. The existing negatives keep passing (`workload-checkpoint-binding` for `first`, `workload-completed-registry-required`, `workload-registry-checkpoint-changed`, `workload-stack`, `workload-first-command`, `workload-request-binding`, `workload-source-binding`; `workload-certificate-parameter-required` is replaced by `workload-certificate-arn-required`: the contract pins `certificate_arn` and carries no `certificate_parameter_name`, D-15, S4.14). A PROD run with `admission.prod` false is refused; a PROD apply with `"preview"` is refused. | A step 1 interrupted before any receipt is resumable from the recovery export receipt. A failed receipt followed by `clear-pending`, which writes an export receipt (`cause: clear-pending`) linked to the failed one, admits `resume`; a `clear-pending` without that receipt leaves every receipt stale and `resume` is refused (R5-M2). `drift` with an accepted receipt but no clean-drift result admits drift and refuses a release. | `test_poc_workload_runner.py`, `test_poc_workload_admission.py`, `test_poc_workload_receipts.py`, `test_poc_workload_recovery.py`, `test_service_execution_worker.py`, `test_workload_apply_docs_consistency.py` | TEST step-1 receipt (S4.6 step 4), step 2 admitted with it (step 7), accepted receipt and drift (steps 7b and 14), resume from the export and clear-pending receipts after a cancelled run (step 13), rebuild (step 20). |
 
 ### 5.2 Non-functional requirements
 
@@ -327,6 +327,7 @@ defaults (FR-31).
 | D-6 | Amend the hard stop into two gates (FR-31) | Two-gate admission, or keep the single gate | **APPROVED 2026-09-30 by the user: two gates.** Governance still requires `@Kravalg` approval of the source PR that amends `specs/poc/README.md` and its test (S4.6 step 1). What D-6 relaxes is listed in §6.1. | S4.6, S4.7 |
 | D-7 | Abandon authority | (a) governance recovery command with a reviewed manifest, TEST only, which amends AGENTS.md rule 14 as in architecture AD-16; (b) no abandon | **RESOLVED 2026-09-30 by the user: (a).** @Kravalg approves a reviewed recovery manifest, and a saved-plan destroy removes exactly the listed resources, in TEST only. PROD is never abandoned automatically. The abandon scope of FR-21, FR-22, S4.2, S4.3 and S5.7, the AGENTS.md rule-14a amendment and the runbook section are unconditional. Kravalg-specific approval is enforced by environment protection and the in-run approver check (FR-21), not by CODEOWNERS alone. | S4.2, S4.3, S5.7, S5.21, gate 1 |
 | D-14 | Recovery targets (FR-30) | RPO and RTO values for DocumentDB | **RESOLVED 2026-09-30 by the user: RPO ≤ 1 hour, RTO ≤ 24 hours** for TEST and PROD (replacing the proposed RPO ≤ 5 min / RTO ≤ 4 h). S4.8 measures against them; a miss is a STOP at gate 2a for a new user decision. The 20% TEST cost threshold and the PROD justification rule (NFR-11) are not covered: they stay planning defaults. | S4.8, S4.15, gate 2a |
+| D-15 | Gateway certificate source for the workload observation (XP-10, XP-15; AD-26) | (a) the gateway owner publishes the ARN in SSM and the Preview and Apply roles get an exact `ssm:GetParameter` carve-out (revision 9); (b) the ARN is pinned in the reviewed USI workload contract and checked only with ACM | **RESOLVED 2026-09-30 by the user (given in chat, answering the coordinator's question): (b).** The gateway certificate ARN is pinned in the reviewed USI workload contract and checked only with `acm:DescribeCertificate`. No CI role (Preview, Apply or Drift; TEST or PROD) gets any `ssm:GetParameter` read, and no identity deny, seed guard, seed boundary or catalog hash is loosened for SSM. Accepted rationale: ACM managed renewal keeps the same ARN, so a reviewed USI PR is needed only if the certificate is replaced. S4.14 implements it. Operating residual (recorded in §7 XP-10 with its exact windows): PR plans keep checking the old ARN until that PR merges, then fail closed on the ACM read until the exact-ARN grant update (and any seed amendment) is applied; scheduled drift keeps checking the applied contract's ARN until an apply of the new-ARN contract writes a new success receipt. | S4.14, XP-10, XP-11, XP-15, S5.24a, S5.24b, S4.17, gate 1, gate 2a |
 
 ### 6.1 What D-6 relaxes, and what it keeps
 
@@ -408,63 +409,180 @@ one (FR-31 e):
   Deny tombstones when `withdrawn`. Moving the capability to `withdrawn`
   or `disabled` while stack `test` has `phase: workload` is a STOP
   (R9-m1). Gate 1 checks the capability as part of XP-9.
-- **XP-10.** The gateway-owned, issued ACM certificate, published in SSM as
-  `/vilnacrm/test/user-service/gateway-certificate-arn` (String, positive
-  version, same-account regional ACM ARN). The runner refuses without it
-  (`workload-certificate-parameter-required`).
+- **XP-10 (rewritten by user decision D-15, 2026-09-30).** The
+  gateway-owned, issued ACM certificate for `user.vilnacrmtest.com`. The
+  gateway owner supplies its ARN (a same-account regional ACM ARN), and a
+  reviewed USI contract PR pins it as
+  `workload.external.domain.certificate_arn` in `specs/poc/poc-test.json`
+  (the gate-1 PR, S4.6 step 1, which writes the `workload` block). Nothing
+  is published in or read from SSM. S4.14 makes the code match: the TEST
+  schema requires `certificate_arn` and drops the
+  `certificate_parameter_name` alternative
+  (`schemas/poc-test-v1.schema.json` lines 508-527); the runner's
+  `workload-certificate-parameter-required` rule
+  (`scripts/poc_workload_runner.py` lines 170-176) is removed; and the
+  capabilities module loses its SSM read path (`_certificate_input`,
+  `scripts/poc_workload_capabilities.py` lines 295-319, and the
+  `("ssm", "get-parameter")` entry of `_native`, lines 37-47). The only
+  certificate read left is ACM `DescribeCertificate` on the pinned ARN
+  (`_certificate`, lines 243-266: issued, currently valid, the FQDN in
+  the SANs, TLS server-auth usage). ACM managed renewal keeps the ARN, so
+  a renewal needs no USI change. A **replacement** (a new ARN) runs in
+  this order: the gateway owner issues the new certificate and supplies
+  its ARN; the exact-ARN `acm:DescribeCertificate` grant (XP-11 for
+  TEST, S5.24a and S5.24b for PROD and Drift) adds the new ARN through its
+  BI review, as it did under revision 9, and, if the boundary holds the
+  exact ARN rather than a service-family ceiling, through a seed catalog
+  amendment too (AD-26); a reviewed USI contract PR pins the new ARN; an
+  apply moves the listener to it.
+  **Operating residual (D-15; R10-n4), not a risk acceptance
+  (corrected by the pre-commit audit, finding 6):**
+  - PR plans: after the contract PR merges, every PR `plan` and `up-plan`
+    of that stack checks the new ARN. Until the grant update (and any
+    seed amendment) is applied, they fail closed with `AccessDenied` on
+    the ACM read. Before the contract PR merges they keep checking the
+    old ARN.
+  - Scheduled drift: S4.17 checks the ARN of the contract its latest
+    success receipt applied, so it keeps checking the old ARN until an
+    apply of the new-ARN contract writes a new success receipt.
+  - The old ARN passes the ACM check only while that certificate is still
+    issued and valid. ACM does not delete a certificate that a listener
+    still uses, so the check fails closed
+    (`workload-certificate-validity` or `workload-certificate-binding`)
+    only once the old certificate is revoked, expires or is re-bound;
+    then both paths fail closed until the new ARN is applied.
+  - No apply runs while a check fails; the deployed listener keeps the
+    certificate it was applied with.
+  - **Discrepancy with D-15's accepted rationale, surfaced for the user
+    (not decided here):** D-15's rationale says only a reviewed USI PR
+    is needed on replacement. Under NFR-06's exact-ARN rule, a
+    replacement also needs the BI grant update and, with an exact-ARN
+    boundary, a seed amendment. The plan's default is (a), exact-ARN
+    grants with a BI grant update and seed amendment on replacement; the
+    user may choose (b) or (c). (a) accepts the extra BI and seed PRs;
+    (b) an ACM certificate-family
+    ceiling in the boundary (seed review), which removes the seed
+    amendment but not the BI identity update; (c) an identity grant of
+    `acm:DescribeCertificate` on the account's regional `certificate/*`
+    (metadata only), which removes both but amends NFR-06 and so needs
+    a user decision.
 - **XP-11.** The bootstrap #219 grants: installed central runtime and
   deployment IAM, and the TEST workload-observation reads of the `plan`
-  and `up-plan` paths (R9-M1, architecture AD-26). Every workload `plan`
-  and `up-plan` calls `poc_workload_admission.observe_workload`
+  and `up-plan` paths (R9-M1, R10-M1, architecture AD-26). Every workload
+  `plan` and `up-plan` calls `poc_workload_admission.observe_workload`
   (`scripts/poc_workload_runner.py` line 178, and in the gate at line 55;
   `scripts/poc_workload_admission.py` lines 464-475) under the Preview
   role (`plan`) and the Apply role (`up-plan`)
   (`scripts/poc_backend_observer.py` lines 173-174). XP-11 therefore
   gives `GitHubCiPreview-user-service-infrastructure-test` and
-  `GitHubCiApply-user-service-infrastructure-test`:
-  - **allows:** `iam:GetRole` on the TEST ECS execution and task roles;
-    `iam:SimulatePrincipalPolicy` on the TEST execution role only for the
-    Apply role (the Preview role already has it through S5.17, on the
-    unchanged S4.6 step-3 role list); `ecr:BatchGetImage`,
-    `ecr:BatchCheckLayerAvailability` and `ecr:GetDownloadUrlForLayer` on
-    `user-service-test-web` and `user-service-test-worker`;
-    `acm:DescribeCertificate` on the XP-10 certificate; and
-    `ssm:GetParameter` on exactly
-    `arn:aws:ssm:eu-central-1:891377212104:parameter/vilnacrm/test/user-service/gateway-certificate-arn`
-    (`scripts/poc_workload_capabilities.py` lines 30-34). The
+  `GitHubCiApply-user-service-infrastructure-test`, in four layers:
+  - **identity allows (only allows that no deny or guard blocks, D-15):**
+    `iam:GetRole` on the TEST ECS execution and task roles;
+    `iam:SimulatePrincipalPolicy` on the TEST execution role only, for
+    the Apply role (the Preview role already has it through S5.17, on
+    the unchanged S4.6 step-3 role list); `ecr:BatchGetImage`,
+    `ecr:BatchCheckLayerAvailability` and `ecr:GetDownloadUrlForLayer`
+    on `user-service-test-web` and `user-service-test-worker`; and
+    `acm:DescribeCertificate` on the XP-10 certificate ARN that the TEST
+    contract pins. **No `ssm:GetParameter`** (D-15). The
     `s3:GetBucketVersioning` read of every capture comes from the TEST
     capability's `PocBackendVersioning` statement, which needs the
-    packaged TEST capability to stay `enabled`, as XP-9 already does;
-  - **one narrowed deny:** an explicit Deny overrides these allows, so
-    `ssm:GetParameter` moves out of `DenySecretLeakingReads` for the
-    Preview role only and out of `DenySecretLeakingReadsApply` for the
-    Apply role. It moves into a separate Deny whose `NotResource` is
-    exactly that parameter ARN. `DenySecretLeakingReads` is BI
-    `pulumi/infra/governance.py` lines 266-271 at `origin/main` `bea5252`,
-    shared with the Drift role, so the document becomes purpose-aware.
-    `DenySecretLeakingReadsApply` is `pulumi/infra/ci_bootstrap.py` lines
-    634-663, and the action lists are lines 132-145 and 153-166.
-    `ssm:GetParameters`, `ssm:GetParametersByPath`,
-    `ecr:GetAuthorizationToken` and every other listed action stay denied
-    as today. The token is not needed, because S4.14 replaces the
-    registry-HTTP config read with `ecr:GetDownloadUrlForLayer`;
-  - **boundary:** each allow above is also added, exactly as narrow, to
-    the roles' permissions boundary `GovernanceBoundary-<project>-test`.
-    That boundary is BI `pulumi/infra/governance_automation.py`
-    `service_boundary_policy`, lines 422-455, attached at
-    `pulumi/infra/governance.py` lines 486-497. Without the addition the
-    allows stay implicitly denied (AD-26);
+    packaged TEST capability to stay `enabled`, as XP-9 already does.
+    The new statements render for the USI identity only:
+    `_governance_policy_documents` (BI `pulumi/infra/governance.py`
+    lines 414-475) renders every enrolled repository, so the statements
+    are keyed to repository `user-service-infrastructure` and stack
+    `test` (R10-n3);
+  - **identity denies: unchanged.** `DenySecretLeakingReads` (BI
+    `pulumi/infra/governance.py` lines 266-271, over
+    `pulumi/infra/ci_bootstrap.py` lines 132-145) and
+    `DenySecretLeakingReadsApply` (`pulumi/infra/ci_bootstrap.py` lines
+    634-663, over lines 153-166) keep `ssm:GetParameter`,
+    `ssm:GetParameters`, `ssm:GetParametersByPath` and
+    `ecr:GetAuthorizationToken` denied as today. The deny renderers do
+    not change at all; `_apply_secret_deny_document` is also used by the
+    platform apply role (`ci_bootstrap.py` line 700), and that role's
+    document stays byte-identical (R10-n3). The token is not needed,
+    because S4.14 replaces the registry-HTTP config read with
+    `ecr:GetDownloadUrlForLayer` (V-28);
+  - **seed guard: unchanged (R10-M1).** Each USI CI role carries an
+    attached, hash-pinned `immutable_managed_guard` in the BI seed
+    catalog (BI `origin/main` `pulumi/seed/catalogs/test.json`: Apply
+    lines 649-663 with statement `9f269660…` at lines 3102-3118; Drift
+    and Preview lines 712-761 with statement `ae950d73…` at lines
+    3273-3299). Both statements deny `ssm:GetParameter*` and
+    `ecr:GetAuthorizationToken`. With D-15 and the token-free image read
+    no guard statement, guard template hash or catalog guard entry
+    changes. The allows above are blocked by no guard statement (the
+    only other guard statement that could match them, `d413d73a…` at
+    `test.json` lines 3667 on, is limited to the seed's own bucket, key
+    and secrets);
+  - **seed-owned permissions boundary (R10-M1, R10-m1):** each allow
+    above must also be inside the roles' permissions boundary
+    `GovernanceBoundary-user-service-infrastructure-test`, or it stays
+    implicitly denied. BI renders its content in
+    `pulumi/infra/governance_automation.py` `service_boundary_policy`
+    (lines 422-455), attached at `pulumi/infra/governance.py` lines
+    486-497, but the installed policy is seed-owned: an
+    `existing_capability_boundary` in `pulumi/seed/catalogs/test.json`
+    (lines 307-319, template `4a170a1c…`), whose catalog hashes are
+    pinned in `pulumi/seed/policy_registry.py` lines 18-21. So the
+    addition is a **seed catalog amendment**, like #219's
+    (`pulumi/seed/test_poc_prerequisite_amendment.py` lines 1-5, 20-40
+    and 58-72), with a new catalog hash pin, a named seed owner,
+    CloudFormation change-set evidence and `@Kravalg`'s approval. The
+    boundary is one managed policy of at most 6144 characters
+    (`governance_automation.py` lines 185-194; the amendment's check at
+    lines 69-72), shared by Preview, Apply, Drift and the ConfigRead
+    roles, so the amendment
+    records its rendered size. If the exact allows do not fit, the
+    fallback form is a service or resource-family ceiling in the
+    boundary, as BI's `platform_control_boundary` does
+    (`pulumi/infra/platform_iam.py` lines 642-645), approved in the seed
+    review, with the exact allows kept in the identity policies
+    (architecture AD-26);
+  - **seed attachment constraint (pre-commit audit 1):** the seed lets
+    the Apply role hold only its guard and the managed policies that
+    `_mutable_attachment_sets` names (`pulumi/seed/policy_registry.py`
+    lines 532-551, checked by `verify_active_enrollment`, lines
+    554-591); Preview and Drift documents are inline. So the Preview
+    allows go into the existing inline documents, and the Apply allows
+    go into the TEST `-poc-prerequisites` managed policy that #219
+    admits, within 6144 characters. **Inline size check (pre-commit recheck N1):**
+    IAM limits a role's aggregate inline policy size to 10,240
+    characters, so XP-11 (like S5.17, S5.4, S5.24a and S5.24b) records the
+    aggregate rendered inline size of each Preview and Drift role it
+    touches and fails above that limit; the fallback is a new managed
+    policy for that role, with a seed catalog `attachment_arns`
+    amendment and a seed code change in the same seed review. If the
+    Apply allows do not fit, a new Apply
+    managed policy needs the seed code, the governance-apply write scope
+    (`pulumi/infra/governance_automation.py` lines 480-489) and the Apply
+    guard's policy-write list amended in the same seed review (AD-26
+    layer 5);
+  - **serialization (R10-m2):** every seed amendment pins baseline policy
+    hashes and a result catalog hash (`test_poc_prerequisite_amendment.py`
+    lines 32-40), so two open amendments conflict, and every amendment edits `pulumi/seed/policy_registry.py` (`CATALOG_HASHES`, TEST line 19 and PROD line 20, adjacent; some also `_mutable_attachment_sets`), so a TEST and a PROD amendment conflict too and are serialized across both catalogs (pre-commit recheck N2). The
+    XP-11 amendment runs in C-BI order after S5.18a (ordered row 42) and
+    before S4.6 (row 43), after the S5.2, S5.17 and S5.4 amendments
+    (rows 9-11) and after #219's own amendment (the module was prepared on
+    BI `origin/main` by #274, commit `1ed394d`; round 10 reports that
+    bootstrap PRs #284 and #285 carry the #219 seed work, not verified
+    locally); its baseline is the catalog those left (architecture §4,
+    C-BI);
   - **governance:** the BI owner's security review, approved by
-    `@Kravalg`, with the PR number recorded in the acceptance receipt;
-    the review also records the two repositories' ECR repository
-    policies (AD-26). It fails closed: a rejection is a gate-1 STOP. If
-    only the Apply-role narrowing is rejected, adopting the fallback
-    design (`up-plan` reuses the Preview-role observation) needs a user
-    decision, which this plan does not take;
+    `@Kravalg`, with the PR numbers (identity and seed) recorded in the
+    acceptance receipt; the review also records the two repositories'
+    ECR repository policies (AD-26). It fails closed: a rejection is a
+    gate-1 STOP. If only the Apply-role reads are rejected, adopting the
+    fallback design (`up-plan` reuses the Preview-role observation) needs
+    a user decision, which this plan does not take;
   - **evidence:** the XP-11 BI simulator matrix (AD-26). It covers the
-    TEST Preview and Apply allows and denies and the TEST Drift denies
-    only; the TEST Drift allows are S5.24b's. It is repeated live in S4.6
-    step 3.
+    TEST Preview and Apply allows, the denies for all three TEST roles
+    (including `ssm:GetParameter` denied for every role on every
+    parameter), the guard-layer, renderer-scope, ConfigRead and
+    attachment rows; the TEST Drift allows are S5.24b's. It is repeated
+    live in S4.6 step 3.
 - **XP-12.** Authenticated immutable image publication: the application
   manifest and both ECR images (`sha-` tags, multi-arch per S5.14),
   authenticated by the runner.
@@ -507,25 +625,35 @@ Gate 2 also needs prerequisites that this plan does not build:
   lines 156-164), and the only BI `GetBucketVersioning` grant that
   reaches the service CI roles is the TEST `PocBackendVersioning`
   statement (lines 369-374). XP-14 also adds the grant to the PROD
-  service boundary (AD-26). The PROD Drift role's read is S5.24b's.
-- **XP-15. PROD counterpart of XP-10 (R7-m3, R8-m6).** The PROD gateway
-  certificate SSM parameter, owned by the gateway owner as XP-10.
+  service boundary, through a PROD seed catalog amendment under the XP-11
+  rules (AD-26, R10-M1). The PROD Drift role's read is S5.24b's.
+- **XP-15. PROD counterpart of XP-10 (R7-m3, R8-m6; rewritten by D-15).**
+  The gateway-owned, issued PROD ACM certificate, whose ARN (a
+  same-account regional ACM ARN in account `933245420672`) the gateway
+  owner supplies. The S4.7 PROD workload contract PR pins it as
+  `certificate_arn` in `specs/poc/poc-prod.json`; S4.14's PROD schema
+  requires that field and has no parameter alternative. There is no PROD
+  certificate SSM parameter and no PROD `ssm:GetParameter` grant (D-15).
+  Replacement and the fail-closed window are as in XP-10.
 - **XP-16. PROD counterpart of XP-11 (R7-m3, R8-m6).** The PROD
   permissions-boundary path that `scripts/poc_workload_capabilities.py`
   line 111 pins for TEST, owned by the bootstrap owner as XP-11. The PROD
-  counterparts of XP-11's workload-observation reads and narrowed
-  `ssm:GetParameter` denies for the PROD Preview and Apply roles are not
-  XP-16. They are S5.24a (ordered row 50, before gate 2a, R9-M1 (c)),
-  because S5.24 already follows XP-14, XP-15 and XP-16, whose PROD
-  repositories, parameter and boundary path it names, and it goes
-  through the same BI review and approval.
-- **Assumption for XP-15 and XP-16, not a decision (R8-m6).** S4.14 pins
-  the deterministic, TEST-analogous names
-  `/vilnacrm/prod/user-service/gateway-certificate-arn` and
+  counterparts of XP-11's workload-observation reads for the PROD
+  Preview and Apply roles (no SSM read, D-15) are not XP-16. They are
+  S5.24a (ordered row 50, before gate 2a, R9-M1 (c)), because S5.24
+  already follows XP-14, XP-15 and XP-16, whose PROD repositories,
+  certificate and boundary path it names, and it goes through the same
+  BI review, the same PROD seed catalog amendment rules and the same
+  approval.
+- **Assumption for XP-16, not a decision (R8-m6).** S4.14 pins the
+  deterministic, TEST-analogous boundary path
   `arn:aws:iam::933245420672:policy/issue219/prod/boundary/` in its PROD
-  fixtures. Each owner confirms the name in the S4.14 PR before it
+  fixtures. The bootstrap owner confirms it in the S4.14 PR before it
   merges; that naming statement is recorded in S4.14 and is not the XP
-  deliverable. XP-15 and XP-16 are the parameter and the boundary path
-  existing live under those names, gate-2a prerequisites (ordered row
-  49); S4.7 verifies both live, and gate 2a and the S4.7 preconditions
-  refuse PROD without them.
+  deliverable. The revision-8 assumption for an XP-15 parameter name is
+  withdrawn, because D-15 removes the parameter. XP-15 (the PROD
+  certificate issued and its ARN supplied) and XP-16 (the boundary path
+  existing live under the confirmed name) are gate-2a prerequisites
+  (ordered row 49); S4.7 verifies both live (the certificate through the
+  ACM check on the ARN its contract PR pins), and gate 2a and the S4.7
+  preconditions refuse PROD without them.

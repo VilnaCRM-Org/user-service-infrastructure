@@ -4,7 +4,7 @@ workflow: _bmad/bmm/workflows/3-solutioning/bmad-create-architecture (Create mod
 task: workload-wa-hardening
 source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa
 date: 2026-09-30
-revision: 9 (readiness round-9 findings R9-M1, R9-m1, R9-m2 and R9-n1…n4 addressed on top of revision 8, which answered round 8 on top of revision 7 (round-7 findings R7-M1, R7-M2, R7-m1…m9 and R7-n1…n3, plus audit F2, F6 and F8); decisions D-1…D-14 of 2026-09-30 applied)
+revision: 10 (readiness round-10 findings R10-M1, R10-m1, R10-m2 and R10-n1…n6 and user decision D-15 addressed on top of revision 9, which answered round 9 (R9-M1, R9-m1, R9-m2 and R9-n1…n4) on top of revision 8, which answered round 8 on top of revision 7 (round-7 findings R7-M1, R7-M2, R7-m1…m9 and R7-n1…n3, plus audit F2, F6 and F8); decisions D-1…D-15 of 2026-09-30 applied)
 inputDocuments: [research.md, brief.md, prd.md, decisions.md, specs/poc-workload-runner.md, specs/poc/README.md]
 ---
 
@@ -925,9 +925,11 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
       marker present, the BI prerequisite markers present, the R-02
       observation receipt present, the XP-9 … XP-13 prerequisite markers
       present (XP-9 including the packaged TEST capability `enabled` in
-      BI, R9-m1; XP-11 including the TEST Preview and Apply
-      workload-observation reads, their boundary additions, the narrowed
-      `ssm:GetParameter` denies and the approving BI PR; AD-26, R9-M1),
+      BI, R9-m1; XP-10 as the gateway-supplied certificate ARN pinned in
+      the TEST contract, user decision D-15; XP-11 including the TEST
+      Preview and Apply workload-observation reads, their seed boundary
+      amendment and the approving BI and seed PRs, with no deny and no
+      seed guard narrowed; AD-26, R9-M1, R10-M1),
       and every applicable decision marked `resolved` with a date in
       `prd.md` §6 and `decisions.md` (defaults do not count); or
     - gate 2a: every gate-1 condition, plus `admission.prod: "preview"`,
@@ -1140,7 +1142,8 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     `topology.admit_first_workload_plan` (line 61) for stack `test` only
     (line 53); `execute` refuses `drift` (line 154,
     `workload-accepted-state-receipt-required`) and requires the gateway
-    certificate parameter (lines 170-176).
+    certificate parameter (lines 170-176; S4.14 replaces this rule with
+    `workload-certificate-arn-required`, user decision D-15, AD-26).
   - **Admission observation** (`scripts/poc_workload_admission.py`):
     `inspect_registry` (lines 150-166), called by `observe_workload` (lines
     464-475) for every command, requires the live checkpoint to hold exactly
@@ -1180,8 +1183,9 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   `uri`, `manifest_media_type`, `config_digest`, `config_size` and
   `platform` of `scripts/poc_workload_phase_entrypoint.py` lines 52-93,
   and the certificate observation `{parameter_arn, parameter_version,
-  certificate_arn}` of `scripts/poc_workload_capabilities.py` line 277;
-  runner lines 177-184) and the program trees (the git object IDs of
+  certificate_arn}` of `scripts/poc_workload_capabilities.py` line 277,
+  or `null`, which S4.14 makes the only value under user decision D-15
+  because the contract then carries the ARN; runner lines 177-184) and the program trees (the git object IDs of
   `scripts`, `pulumi`, `policy`, `schemas`, `pyproject.toml` and
   `uv.lock` in the installed checkout), which the scheduled path uses
   instead of a PR request (R7-M2, R8-m4). **Failure path (m4, audit).** Two processes
@@ -1345,9 +1349,9 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
      `epics-stories.md` S4.14). The source binding accepts
      `prod` only when the installed `main` contract has `admission.prod` =
      `"preview"` (PROD `plan` only, gate 2a) or `true` (gate 2b). The runner
-     accepts `prod` with the PROD certificate parameter (XP-15, the PROD
-     counterpart of XP-10; its TEST-analogous name is pinned as an
-     assumption the gateway owner confirms in the S4.14 PR, R8-m6), the PROD
+     accepts `prod` with the PROD certificate ARN pinned in
+     `poc-prod.json` (XP-15, the PROD counterpart of XP-10; no SSM
+     parameter, user decision D-15), the PROD
      topology (S4.10), the PROD registry anchor (XP-14) and `prod-recovery`.
      `abandon` is never admitted for PROD. S4.14 also owns the PROD
      contract schema (AD-04, R7-m4), the PROD baseline-drift exclusion
@@ -1436,7 +1440,8 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
      239-245, so a merged but unapplied operation PR does not change the
      check; the digest binding of
      `scripts/poc_workload_phase_entrypoint.py` line 104 holds), the full
-     image rows and the certificate observation. Fresh Drift-role reads
+     image rows and the certificate observation (`null` under D-15; the
+     ARN is in that contract). Fresh Drift-role reads
      are comparisons, never inputs: the image, capability and certificate
      reads, the captured checkpoint and the registry-row checks must equal
      the receipt. Because the program is imported from installed `main`
@@ -1484,11 +1489,13 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
      XP-15 and XP-16 and before S4.17, with
      `iam:SimulatePrincipalPolicy` on the execution role only, citing the
      existing TEST grants of BI `origin/main` (active only while the
-     packaged TEST capability is `enabled`). It no longer narrows the
-     Drift role's deny (AD-26): the certificate ARN comes from the
-     receipt (through the reader parameter S4.14 adds), so the Drift role
-     reads no SSM parameter, and S4.14's token-free config read needs no
-     `ecr:GetAuthorizationToken`. The PROD job needs the PROD observer
+     packaged TEST capability is `enabled`). It narrows neither the
+     Drift role's deny nor its seed guard (AD-26): the certificate ARN
+     comes from the contract the receipt applied (user decision D-15; the
+     receipt's certificate observation is `null`), so no role reads an
+     SSM parameter, and S4.14's token-free config read needs no
+     `ecr:GetAuthorizationToken`. Its boundary additions go through a
+     seed catalog amendment (R10-M1). The PROD job needs the PROD observer
      coordinates of XP-14. S4.17 is a gate-2b precondition (AD-21), and it
      rewrites the scheduled workflow pins and the host and worker
      copy-out pins with Kravalg's approval
@@ -1509,9 +1516,10 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     `workload-completed-registry-required`,
     `workload-registry-checkpoint-changed`, `workload-stack`,
     `workload-first-command`, `workload-request-binding`,
-    `workload-source-binding`, `workload-certificate-parameter-required`,
-    `workload-isolated-transport-required`, `workload-plan-bytes-changed`)
-    keep passing for the modes they cover today.
+    `workload-source-binding`, `workload-isolated-transport-required`,
+    `workload-plan-bytes-changed`) keep passing for the modes they cover
+    today; `workload-certificate-parameter-required` is replaced by
+    `workload-certificate-arn-required` (user decision D-15, S4.14).
 - **AD-25 Topology, native gates and secret history owned by one story (R4-M1).**
   `scripts/poc_workload_topology.py::expected_graph` (line 142) is the closed
   installed composition. Today it contains the Random and TLS providers and
@@ -1594,7 +1602,7 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   applied in between, because `phase` stays `registry` until gate 1 and
   gate 1 lists S4.10.
 
-- **AD-26 Workload observation reads under the explicit secret-read denies (R9-M1, R9-m1, R9-m2).**
+- **AD-26 Workload observation reads under the explicit secret-read denies and the seed-owned IAM layers (R9-M1, R9-m1, R9-m2; revision 10: user decision D-15, R10-M1, R10-m1, R10-m2, R10-n3).**
   **Problem.** Every workload `plan` and `up-plan` observes its
   prerequisites: `scripts/poc_workload_runner.py` line 178 and the gate at
   line 55 call `poc_workload_admission.observe_workload`
@@ -1612,16 +1620,16 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   `NotResource` exempts only the `/{project}/ci/*` secrets
   (`pulumi/infra/ci_bootstrap.py` lines 634-663). Both action lists
   (`ci_bootstrap.py` lines 132-145 and 153-166) include `ssm:GetParameter`
-  and `ecr:GetAuthorizationToken`. An explicit Deny overrides every Allow.
-  Unchanged, the first TEST workload `plan` (from the S4.6 gate-1 PR on)
-  and `prod_preview` (gate 2a) fail with `AccessDenied`, and so would every
-  `up-plan`. Before revision 9, XP-11 named only "the exact SSM read
-  grant", and no story named the PROD Preview and Apply reads.
+  and `ecr:GetAuthorizationToken`. The seed-owned guards deny the same
+  two actions again (fourth layer below). An explicit Deny overrides
+  every Allow. Unchanged, the first TEST workload `plan` (from the S4.6
+  gate-1 PR on) and `prod_preview` (gate 2a) fail with `AccessDenied`,
+  and so would every `up-plan`.
 
-  **Non-weakening evaluation first** (least privilege: AWS Well-Architected
-  Security Pillar SEC03, best practice SEC03-BP02 "Grant least privilege
-  access"):
-  1. **The ECR token: removable. Adopted (S4.14).** The token has one use:
+  **Non-weakening design, adopted for both reads** (least privilege: AWS
+  Well-Architected Security Pillar SEC03, best practice SEC03-BP02 "Grant
+  least privilege access"). Revision 10 narrows no deny and no guard.
+  1. **The ECR token: removed (S4.14).** The token has one use:
      it downloads the image config blob (`_authorization`, lines 123-143;
      `_download_config`, lines 206-231, with the `Authorization: Basic`
      header at line 219; called from `_config`, lines 244-245), so the
@@ -1637,80 +1645,102 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
      regional layer-bucket host that is already allow-listed (`LAYER_HOST`,
      lines 46-48; `_blob_target`, lines 153-169), with no `Authorization`
      header and the size, digest and platform checks unchanged.
-     `ecr:GetDownloadUrlForLayer` is in neither deny list, so the
-     `ecr:GetAuthorizationToken` deny is narrowed for no role.
-     **Open point, fail closed.** The AWS API reference documents
-     `GetDownloadUrlForLayer` for image layers referenced in an image. It
-     does not state that the config blob is accepted, and the offline
-     tests cannot prove it (`docs/poc-workload-admission.md` line 69 says
-     the same of today's path). The first live call is the first TEST
-     workload `plan`, which is read-only. A refused config digest, or a
-     URL outside `LAYER_HOST`, fails that plan with
-     `image-config-observation-failed` before any apply. That is a STOP.
-     The fallback keeps the token path and removes
-     `ecr:GetAuthorizationToken` from the Preview, Apply and Drift denies.
-     That weakens a deny on Resource `*`, which the NFR-06 rule (narrow
-     only to one exact ARN) does not allow. It therefore needs a user
-     decision that amends NFR-06, as well as the BI security review
+     `ecr:GetDownloadUrlForLayer` is in no deny list and no guard
+     statement, so the `ecr:GetAuthorizationToken` deny is narrowed for
+     no role. **Open point V-28, fail closed.** The AWS API reference
+     documents `GetDownloadUrlForLayer` for image layers referenced in an
+     image. It does not state that the config blob is accepted, and the
+     offline tests cannot prove it (`docs/poc-workload-admission.md` line
+     69 says the same of today's path). The first live call is the first
+     TEST workload `plan` (S4.6 step 1, the gate-1 PR's `plan`), which is
+     read-only. A refused config digest, or a URL outside `LAYER_HOST`,
+     fails that plan with `image-config-observation-failed` before any
+     apply. That is a STOP. The fallback keeps the token path and removes
+     `ecr:GetAuthorizationToken` from the Preview, Apply and Drift denies
+     **and** from the seed guards (the `ae950d73…` statement of the
+     Preview and Drift guards and the `9f269660…`/`ce12c400…` statements
+     of the Apply guards, below), which changes the guard template
+     hashes and the catalog hashes through a seed amendment. That weakens
+     denies on Resource `*`, which the NFR-06 rule (narrow only to one
+     exact ARN) does not allow. It therefore needs a user decision that
+     amends NFR-06, as well as the BI security review and the seed review
      approved by `@Kravalg`. This plan does not take it.
-  2. **The certificate parameter on the PR paths: not removable without a
-     user decision. The narrowing stays.** The capabilities reader skips
-     SSM when the contract carries `certificate_arn` (`_certificate_input`,
-     lines 295-298; `certificate_projection`, lines 269-272), and ACM
-     `DescribeCertificate` then binds the certificate alone (`_certificate`,
-     lines 243-266). But the runner refuses a workload contract without
-     `certificate_parameter_name` or with `certificate_arn`
-     (`scripts/poc_workload_runner.py` lines 170-176,
-     `workload-certificate-parameter-required`). XP-10, an existing runner
-     prerequisite, has the gateway owner publish the ARN in SSM
-     (`specs/poc-workload-runner.md` lines 110-113). Moving the ARN into
-     the reviewed contract changes that prerequisite and who owns the
-     value, so it is recorded as an alternative for the user and not
-     chosen. The PR paths keep the parameter read, with the narrowest
-     carve-out below. Deriving the ARN from ACM alone (for example by
+  2. **The certificate parameter: removed by user decision D-15
+     (2026-09-30).** The gateway owner supplies the certificate ARN, and a
+     reviewed USI contract PR pins it in the workload contract
+     (`workload.external.domain.certificate_arn`; XP-10 for TEST, XP-15
+     for PROD). The capabilities reader already skips SSM when the
+     contract carries `certificate_arn` (`_certificate_input`, lines
+     295-298; `certificate_projection`, lines 269-272), and ACM
+     `DescribeCertificate` then binds the certificate alone
+     (`_certificate`, lines 243-266: issued, currently valid, the FQDN in
+     the SANs, TLS server-auth usage). S4.14 makes this the only path: the
+     TEST schema requires `certificate_arn` and drops the
+     `certificate_parameter_name` alternative
+     (`schemas/poc-test-v1.schema.json` lines 508-527), the PROD schema
+     has only `certificate_arn`, the runner's
+     `workload-certificate-parameter-required` rule
+     (`scripts/poc_workload_runner.py` lines 170-176) becomes
+     `workload-certificate-arn-required`, and the SSM read path
+     (`_certificate_input`'s `ssm get-parameter`, line 299, and the
+     `("ssm", "get-parameter")` entry of `_native`, lines 37-47) is
+     removed. **No CI role (Preview, Apply or Drift; TEST or PROD) gets
+     any `ssm:GetParameter` read, and no identity deny, seed guard, seed
+     boundary or catalog hash is loosened for SSM** (D-15). ACM managed
+     renewal keeps the same ARN, so a USI contract PR is needed only when
+     the certificate is replaced. **Operating residual (R10-n4), not a
+     risk acceptance (PRD §7 XP-10 has the exact order and windows):** a
+     replacement needs the exact-ARN `acm:DescribeCertificate` grant
+     update (which revision 9 needed as well, plus a seed amendment if
+     the boundary holds the exact ARN) and the USI contract PR, then an
+     apply. PR plans fail closed on the ACM check between the contract
+     PR and the grant update; S4.17 checks the applied contract's ARN
+     until the new ARN is applied; and once the old certificate is no
+     longer issued or valid, both fail closed until then. The gap
+     between this and D-15's rationale ("only a USI PR") is surfaced to
+     the user in `readiness.md`, not decided here. Deriving the ARN from ACM alone (for example by
      listing certificates for the FQDN) would drop the gateway owner's
-     binding and is rejected.
-  3. **The certificate parameter and the ECR token in scheduled drift:
-     removable. Adopted (S4.14 adds the reader parameter, S4.17 uses it;
-     R9-m2).** S4.17 builds the projection from
-     the latest success receipt. The receipt's certificate observation
-     already carries `certificate_arn` (capabilities lines 269-292), and
-     the refresh plan observes the deployed listener. S4.17 therefore
-     passes the receipt's observation to the capabilities reader, which
-     then never calls `ssm get-parameter` and still reads ACM
-     `DescribeCertificate` on that ARN (issued, currently valid, bound to
-     the FQDN). With point 1 the image comparison needs no token either,
-     so **the Drift role's deny is not narrowed at all.** One thing is
-     lost: a scheduled run no longer notices that the gateway owner
-     re-pointed the parameter after the last apply. The next PR `plan`
-     reads the parameter fresh under the Preview role and shows the change
-     as a projection difference.
+     binding and stays rejected.
+  3. **Scheduled drift: no SSM and no token (S4.14, S4.17; R9-m2).**
+     S4.17 builds the projection from the latest success receipt and the
+     contract that receipt applied. Under D-15 that contract carries the
+     certificate ARN, and the receipt's certificate observation is
+     `null` (S1.1 schema), so S4.17 calls
+     `capabilities.inspect_capabilities(contract)` on the applied
+     contract: role reads, the execution-role pull simulation and ACM
+     `DescribeCertificate` on the pinned ARN, and no parameter read,
+     because none exists. Revision 9's `certificate=` reader parameter is
+     no longer needed and is not added. With point 1 the image comparison
+     needs no token either, so **the Drift role's deny and guard are not
+     narrowed at all.** Revision 9's lost signal (a gateway re-pointing of
+     the parameter between applies) no longer exists: the ARN changes
+     only through a reviewed contract PR.
 
-  **Required grants and the one remaining narrowing, per stack** (TEST
-  Preview and Apply: XP-11; PROD Preview and Apply: S5.24a, R9-M1 (c);
-  Drift, both stacks: S5.24b):
+  **Required grants per stack** (TEST Preview and Apply: XP-11; PROD
+  Preview and Apply: S5.24a, R9-M1 (c); Drift, both stacks: S5.24b).
+  Only allows that no deny and no guard statement blocks (D-15):
 
-  | Role | Allow (exact resources) | Deny change |
+  | Role | Allow (exact resources) | Deny and guard change |
   | --- | --- | --- |
-  | `GitHubCiPreview-user-service-infrastructure-{env}` | `iam:GetRole` on the stack's ECS execution and task roles; `iam:SimulatePrincipalPolicy` on the execution role (S5.17 already grants it on the S4.6 step-3 role list, which stays unchanged); `ecr:BatchGetImage`, `ecr:BatchCheckLayerAvailability` and `ecr:GetDownloadUrlForLayer` on the stack's two workload repositories; `acm:DescribeCertificate` on the stack's gateway certificate (metadata only); `ssm:GetParameter` on exactly the stack's certificate parameter ARN (TEST XP-10, PROD XP-15); `s3:GetBucketVersioning` on the stack's state bucket (TEST: the `PocBackendVersioning` statement of the enabled TEST capability; PROD: XP-14) | `ssm:GetParameter` leaves `DenySecretLeakingReads` for this role only (the BI read-only document becomes purpose-aware, because Drift shares it) and gets its own Deny whose `NotResource` is that one parameter ARN. `ssm:GetParameters`, `ssm:GetParametersByPath`, `ecr:GetAuthorizationToken` and every other listed action stay denied on `*`. |
-  | `GitHubCiApply-user-service-infrastructure-{env}` | the same reads, with `iam:SimulatePrincipalPolicy` on the execution role only | the same split of `DenySecretLeakingReadsApply`: `ssm:GetParameter` gets its own Deny whose `NotResource` is that one parameter ARN; every other action keeps the CI-secret `NotResource`. |
-  | `GitHubCiDrift-user-service-infrastructure-{env}` | the same reads without `ssm:GetParameter`, with `iam:SimulatePrincipalPolicy` on the execution role only (S5.24b; `s3:GetBucketVersioning` for TEST from `PocBackendVersioning`, for PROD from S5.24b) | none |
+  | `GitHubCiPreview-user-service-infrastructure-{env}` | `iam:GetRole` on the stack's ECS execution and task roles; `iam:SimulatePrincipalPolicy` on the execution role (TEST: S5.17 already grants it on the S4.6 step-3 role list, which stays unchanged; PROD: S5.24a grants it on the PROD execution role only); `ecr:BatchGetImage`, `ecr:BatchCheckLayerAvailability` and `ecr:GetDownloadUrlForLayer` on the stack's two workload repositories; `acm:DescribeCertificate` on the certificate ARN the stack's contract pins (metadata only; TEST XP-10, PROD XP-15); `s3:GetBucketVersioning` on the stack's state bucket (TEST: the `PocBackendVersioning` statement of the enabled TEST capability; PROD: XP-14) | none: `DenySecretLeakingReads` and the seed guard stay as they are |
+  | `GitHubCiApply-user-service-infrastructure-{env}` | the same reads, with `iam:SimulatePrincipalPolicy` on the execution role only | none: `DenySecretLeakingReadsApply` and the seed guard stay as they are |
+  | `GitHubCiDrift-user-service-infrastructure-{env}` | the same reads, with `iam:SimulatePrincipalPolicy` on the execution role only (S5.24b; `s3:GetBucketVersioning` for TEST from `PocBackendVersioning`, for PROD from S5.24b) | none |
 
-  The parameter is a `String` (capabilities line 307 requires it), and the
-  call passes no `--with-decryption`, so no `kms:Decrypt` is needed or
-  granted. The `iam:SimulatePrincipalPolicy` calls simulate the execution
-  role's own ECR pull, including `ecr:GetAuthorizationToken` for that
-  role (`_pull`, lines 193-232). They do not call it, so the caller's
-  token deny does not affect them.
+  No role gets `ssm:GetParameter`, `ssm:GetParameters`,
+  `ssm:GetParametersByPath` or `ecr:GetAuthorizationToken`. The
+  `iam:SimulatePrincipalPolicy` calls simulate the execution role's own
+  ECR pull, including `ecr:GetAuthorizationToken` for that role (`_pull`,
+  lines 193-232). They do not call it, so the caller's token deny does
+  not affect them.
 
   **Reachable privilege of the Drift role after S5.24b (R9-m2):**
 
   | Principal | Action | Resource | Reachable privilege |
   | --- | --- | --- | --- |
   | Drift `{env}` | `ecr:BatchGetImage`, `ecr:BatchCheckLayerAvailability`, `ecr:GetDownloadUrlForLayer` | the stack's two workload repositories | manifests, layer availability and pre-signed blob URLs of those two repositories, plus whatever a repository policy grants (below) |
-  | Drift `{env}` | `ecr:GetAuthorizationToken` | `*` | none: still explicitly denied, so no registry HTTP access |
-  | Drift `{env}` | `ssm:GetParameter`, `ssm:GetParameters`, `ssm:GetParametersByPath` | `*` | none: still explicitly denied; the certificate ARN comes from the receipt |
-  | Drift `{env}` | `acm:DescribeCertificate` | the stack's gateway certificate | certificate metadata; no private key (`acm:ExportCertificate` is not granted) |
+  | Drift `{env}` | `ecr:GetAuthorizationToken` | `*` | none: still explicitly denied (identity deny and seed guard), so no registry HTTP access |
+  | Drift `{env}` | `ssm:GetParameter`, `ssm:GetParameters`, `ssm:GetParametersByPath` | `*` | none: still explicitly denied (identity deny and seed guard); the certificate ARN comes from the applied contract (D-15) |
+  | Drift `{env}` | `acm:DescribeCertificate` | the certificate ARN the stack's contract pins | certificate metadata; no private key (`acm:ExportCertificate` is not granted) |
   | Drift `{env}` | `iam:GetRole` | the stack's ECS execution and task roles | role metadata and trust policies |
   | Drift `{env}` | `iam:SimulatePrincipalPolicy` | the execution role only | simulation decisions for that role's policies |
   | Drift `{env}` | `s3:GetBucketVersioning` | the stack's state bucket | the versioning status |
@@ -1728,77 +1758,247 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   STOP for that review. A statement that names the account principal is
   recorded; for same-account callers it defers to identity policies.
 
-  **Third layer: the service permissions boundary (pre-commit audit).**
-  An allow is effective only inside the role's permissions boundary.
-  In BI `origin/main`, the preview, apply and drift service roles all
-  carry `GovernanceBoundary-<project>-<env>`
-  (`pulumi/infra/governance.py` lines 486-497, with
-  `permissions_boundary` at line 492; the ARN is built at lines 98-109).
-  That boundary, `service_boundary_policy` in
-  `pulumi/infra/governance_automation.py` (lines 422-455), allows only
-  these:
-  - `sts:GetCallerIdentity`;
-  - the state-bucket S3 actions;
-  - the Pulumi KMS alias;
-  - the repository's CI secret reads;
-  - the TEST PoC statements while the capability is rendered (#219 calls
-    the boundary the seed-owned "ceiling", `wt-boot-219`
-    `pulumi/infra/governance.py` lines 279-283).
+  **The four IAM layers of each USI CI role, and the seed's attachment
+  constraint (R10-M1; pre-commit audit 1).** An allow is effective only
+  if an identity policy allows it, the permissions boundary allows it,
+  and no explicit identity deny or seed guard denies it. Checked
+  read-only against BI `origin/main` `bea5252` (the `wt-boot-urllib3`
+  worktree, whose `pulumi/` tree equals `origin/main`):
+  1. **Identity allows: new, scoped to the USI identity (R10-n3).** The
+     grants above. `_governance_policy_documents` (`pulumi/infra/
+     governance.py` lines 414-475) renders every enrolled repository, so
+     the new statements are keyed to repository
+     `user-service-infrastructure` and its stack; every other enrolled
+     repository's rendered documents stay byte-identical.
+  2. **Identity denies: unchanged.** `DenySecretLeakingReads` and
+     `DenySecretLeakingReadsApply` keep their action lists and resources.
+     With D-15 the deny documents do not change at all: neither
+     `_governance_read_only_policy_document` (`governance.py` line 212
+     on, the deny at lines 266-271) nor `_apply_secret_deny_document`
+     (`ci_bootstrap.py` lines 634-663), which also renders the platform
+     apply role's `secret-read-deny` document (line 700), so the platform
+     roles' documents stay byte-identical as well.
+  3. **Permissions boundary: seed-owned, amended by a seed catalog
+     amendment.** The Preview, Apply and Drift roles carry
+     `GovernanceBoundary-user-service-infrastructure-{env}`
+     (`pulumi/infra/governance.py` lines 486-497, with
+     `permissions_boundary` at line 492; the ARN is built at lines
+     98-109). The same boundary also bounds the ConfigRead roles
+     `GitHubCiConfigRead-user-service-infrastructure-{env}` and
+     `…-test-pr` (TEST) or `…-prod-preview` (PROD) (the catalog
+     `principals`; pre-commit audit 4). BI renders its content in
+     `pulumi/infra/governance_automation.py` `service_boundary_policy`
+     (lines 422-455): `sts:GetCallerIdentity`, the state-bucket S3
+     actions, the Pulumi KMS alias, the repository's CI secret reads, and
+     the TEST PoC statements while the capability is rendered. The
+     installed policy is seed-owned: an `existing_capability_boundary`
+     with ownership `existing_operator_policy_transfer_to_seed` in the
+     seed catalog (TEST `test.json` lines 307-319, template `4a170a1c…`;
+     PROD `prod.json` lines 307-319, template `b331c0c6…`), whose catalog
+     hashes are pinned in `pulumi/seed/policy_registry.py` lines 18-21
+     (`CATALOG_HASHES`). #219 needed a dedicated seed amendment for its
+     boundary change (`pulumi/seed/test_poc_prerequisite_amendment.py`
+     lines 1-5 (no AWS calls; a live CloudFormation owner and the
+     observed policy versions must be authenticated before a change set
+     runs), 20-40 (the target policies, the result catalog hash and the
+     baseline policy hashes) and 58-72 (the statement replacement and the
+     6144-character check); prepared on `origin/main` by #274, commit
+     `1ed394d`; identical in `wt-boot-219`). So **every boundary addition
+     goes through a seed catalog amendment** with a new catalog hash pin
+     in `policy_registry.py`, a named seed owner, CloudFormation
+     change-set evidence and `@Kravalg`'s approval, in addition to the BI
+     security review of the identity change. This applies to XP-11,
+     S5.24a, S5.24b, the XP-14 PROD `s3:GetBucketVersioning` addition,
+     and every other BI grant story that gives these roles a new allow
+     (S5.2, whose amendment also covers S5.5's later exact-ARN
+     `secretsmanager:PutResourcePolicy` and `GetResourcePolicy` through
+     the `secret:rds!cluster-*` pattern, S5.17, the S5.4 identity
+     statements; `epics-stories.md` Epic 5). A boundary addition changes
+     no ConfigRead role's effective permissions, because their identity
+     policies do not change; the matrices assert that (ConfigRead rows).
+  4. **Seed guard: unchanged.** Each USI CI role has an attached,
+     hash-pinned `immutable_managed_guard` in the seed catalog. TEST
+     (`pulumi/seed/catalogs/test.json`): Preview and Drift, lines
+     712-761, both with statement `ae950d73…` (lines 3273-3299; Deny,
+     Resource `*`); Apply, lines 649-663, with statement `9f269660…`
+     (lines 3102-3118; Deny, `NotResource` the `/{project}/ci/*`
+     secrets). PROD (`pulumi/seed/catalogs/prod.json`): Apply lines
+     649-663 with statement `ce12c400…` (lines 3711-3727); Drift lines
+     712-725 and Preview lines 747-760, both with `ae950d73…` (lines
+     3277-3303). These statements deny `ssm:GetParameter*` and
+     `ecr:GetAuthorizationToken`. With D-15 and the token-free image read
+     no guard narrowing is needed: no guard statement, guard template
+     hash or catalog guard entry changes. The new allows are blocked by
+     no guard statement; the only other guard statement whose actions
+     match them (`d413d73a…` TEST, `aec83856…` PROD, `Action: *`) is
+     limited to the seed's own bucket, KMS key and secrets. The token
+     fallback of point 1 would also have to narrow these guards, which
+     stays a user decision amending NFR-06.
+  5. **Seed attachment constraint: where the Apply allows live
+     (pre-commit audit 1).** The seed's `verify_active_enrollment`
+     (`pulumi/seed/policy_registry.py` lines 554-591, with `_verify_mutable_role` at 554-567) lets the USI Apply
+     role hold only its guard plus the managed policies that
+     `_mutable_attachment_sets` names (lines 532-551: `-pulumi-backend`
+     and `-secret-read-deny`; #219 adds the TEST `-poc-prerequisites` in
+     `wt-boot-219` lines 542-546). Every other enrolled role keeps its
+     exact attachment set. BI attaches every Apply document as its own
+     customer-managed policy (`pulumi/infra/ci_bootstrap.py` lines
+     770-773 and 814-842), and the governance apply role may write only
+     the policy names of `_managed_policy_resources`
+     (`pulumi/infra/governance_automation.py` lines 480-489). Preview and
+     Drift documents are inline role policies, which the seed does not
+     pin for these roles, so **new Preview and Drift allows go into their
+     existing inline documents**. **Inline size check (pre-commit recheck N1):** IAM
+     limits the aggregate size of a role's inline policies to 10,240
+     characters (whitespace is not counted), and the Preview and Drift
+     roles already carry inline documents. S5.17, S5.4 (the Preview and
+     Drift KMS read), XP-11, S5.24a and S5.24b therefore each record, in
+     their PR, the aggregate rendered inline size of every role they
+     touch (the current documents plus the new allows) and fail an offline
+     check above 10,240 characters. The fallback is a new managed policy
+     for that role, which needs a seed catalog `attachment_arns`
+     amendment and a seed code change (the role's attachment rule in
+     `policy_registry.py`, as for the Apply role's
+     `_mutable_attachment_sets`), in the same seed review and
+     serialization order. For the Apply role: the TEST XP-11
+     allows go into the TEST `-poc-prerequisites` managed policy that
+     #219 admits, within 6144 characters. Any **new Apply managed
+     policy** (S5.2's workload capability, S5.24a's PROD reads, or XP-11
+     if it does not fit) needs, in the same seed review and in the
+     serialization order below, three changes: the seed code
+     (`_mutable_attachment_sets`), the governance-apply write scope
+     (`_managed_policy_resources`), and a catalog amendment of the Apply
+     guard's policy-write `NotResource` list (as #219 does,
+     `test_poc_prerequisite_amendment.py` lines 135-144). Each matrix
+     has a `verify_active_enrollment` row: the Apply role's attachment
+     set is inside the permitted set, and every other role's is exact.
 
-  Every allow in the table above must therefore also be added to that
-  boundary, in the same BI change and review: `iam:GetRole`,
-  `iam:SimulatePrincipalPolicy`, the three ECR reads,
-  `acm:DescribeCertificate`, `ssm:GetParameter` on the exact ARN, and
-  the PROD `s3:GetBucketVersioning`. Otherwise the allows stay
-  implicitly denied. The same rule holds for every BI grant story that
-  gives these three roles a new allow (S5.2, S5.17, the S5.4 identity
-  statements and S5.24; `epics-stories.md` Epic 5). The boundary
-  additions are exactly as narrow as the allows, and no deny is widened
-  or narrowed by them.
+  **Boundary size and fallback form (R10-m1).** The boundary is one
+  managed policy of at most 6144 characters (`governance_automation.py`
+  lines 185-194; the amendment's check at
+  `test_poc_prerequisite_amendment.py` lines 69-72), shared by Preview,
+  Apply, Drift and the ConfigRead roles; today it renders to about 1.2 thousand characters
+  (TEST 1235, PROD 1240, measured over the catalog statements). Copying
+  every allow of S5.2, S5.17, S5.4, XP-11 and S5.24 into it exactly will
+  not fit. So each story that adds boundary content records the rendered
+  boundary size in its seed amendment and fails its size check above
+  6144. The fallback form, approved in the seed review, is a service or
+  resource-family ceiling in the boundary (for example `ecr:BatchGetImage`,
+  `ecr:BatchCheckLayerAvailability` and `ecr:GetDownloadUrlForLayer` on
+  `arn:aws:ecr:eu-central-1:<account>:repository/user-service-*`), as
+  BI's `platform_control_boundary` already caps service and resource
+  families while the identity policies keep the exact verb grants
+  (`pulumi/infra/platform_iam.py` lines 642-645). The exact allows stay
+  in the identity policies, so the effective permission of the Preview,
+  Apply and Drift roles is unchanged. A ceiling also raises the
+  ConfigRead roles' ceiling; their identity policies do not change, so
+  their effective permission does not either, and the ConfigRead rows
+  of each matrix prove it (pre-commit audit 4). S5.2 already anticipates several managed policies for the Apply role's
+  identity capability (`epics-stories.md` S5.2 attachment quota); the
+  boundary itself stays one policy. No boundary addition and no ceiling
+  adds an action outside the allows' services, and no deny is widened or
+  narrowed by it.
 
-  **Governance, failure and evidence (R9-M1 (d), (f)).** Each narrowing
-  goes through the BI owner's security review and `@Kravalg`'s approval,
-  as S5.24 already required. XP-11 covers the TEST Preview and Apply
-  roles. S5.24 ships as two separately reviewed and approved BI PRs:
-  **S5.24a**, the PROD Preview and Apply reads with their narrowed denies
-  (needed for gate 2a), and **S5.24b**, the Drift reads for TEST and PROD
-  (needed for S4.17 and gate 2b). The split separates the two reviews
-  and their records; a rejected Drift part still stops gate 2a, through
-  S4.17, C-runner and the S4.7 live PROD matrix (recheck N1). The approving PR numbers are recorded in the acceptance
-  receipt. It fails closed. A rejected review is a STOP: at gate 1 for
-  XP-11, at gate 2a for S5.24a, and at S4.17 and so gate 2a for S5.24b. What follows
-  a rejection is a user decision, and this plan takes none. If only the
-  Apply-role narrowing is rejected, adopting the fallback design
-  (`up-plan` reuses the Preview-role observation instead of re-reading
-  under the Apply role) needs that user decision. So does the
-  contract-carried certificate ARN of point 2.
+  **Seed amendment serialization (R10-m2).** Every seed amendment pins
+  its baseline policy hashes and its result catalog hash
+  (`test_poc_prerequisite_amendment.py` lines 32-40), so two open
+  amendments of one catalog conflict. They are serialized in C-BI order
+  (§4): #219's own amendment first (bootstrap PRs #284 and #285 carry
+  the #219 seed work, as round 10 reports; not verified locally), then
+  S5.2 → S5.17 → S5.4 (ordered rows 9-11), then XP-11 (after S5.18a, row
+  42, before S4.6, row 43), then XP-14's PROD addition, S5.24a and
+  S5.24b (rows 48 and 50). #219's amendment has no ordered row: it is an
+  **external precondition of row 9's TEST amendment** (and so of rows
+  10, 11 and 42), stated in the ordered list (pre-commit audit 8). An
+  Apply managed-policy change of the attachment constraint (layer 5)
+  rides in its story's amendment in this order. S5.5 needs no amendment
+  of its own: S5.2's covers its later exact-ARN grant (layer 3; audit
+  3). Only one amendment is open at a time across both catalogs (pre-commit recheck
+  N2); each takes the merged predecessor's result catalog hash of its own
+  catalog as its baseline. The TEST and PROD catalogs have separate
+  hashes, but every amendment edits `pulumi/seed/policy_registry.py`:
+  `CATALOG_HASHES` (TEST line 19, PROD line 20, adjacent, so a TEST and a
+  PROD amendment conflict in one hunk) and, for an Apply attachment
+  change, `_mutable_attachment_sets` (lines 532-551). A TEST and a PROD
+  amendment are therefore serialized too, in the order above, and each
+  rebases on the merged predecessor before it opens.
+
+  **Governance, failure and evidence (R9-M1 (d), (f)).** Each grant goes
+  through the BI owner's security review and `@Kravalg`'s approval, and
+  its boundary addition through the seed review, as S5.24 already
+  required. XP-11 covers the TEST Preview and Apply roles. S5.24 ships as
+  two separately reviewed and approved BI PRs: **S5.24a**, the PROD
+  Preview and Apply reads (needed for gate 2a), and **S5.24b**, the Drift
+  reads for TEST and PROD (needed for S4.17 and gate 2b). The split
+  separates the two reviews and their records; a rejected Drift part
+  still stops gate 2a, through S4.17, C-runner and the S4.7 live PROD
+  matrix (recheck N1). The approving PR numbers (identity and seed) are
+  recorded in the acceptance receipt. It fails closed. A rejected review
+  is a STOP: at gate 1 for XP-11, at gate 2a for S5.24a, and at S4.17 and
+  so gate 2a for S5.24b. What follows a rejection is a user decision,
+  and this plan takes none. If only the Apply-role reads are rejected,
+  adopting the fallback design (`up-plan` reuses the Preview-role
+  observation instead of re-reading under the Apply role) needs that
+  user decision.
 
   **Regression evidence.** A BI simulator matrix per owner.
   `iam:SimulatePrincipalPolicy` evaluates the permissions boundary, so
-  each allow row also proves the boundary addition.
-  - **XP-11 (TEST, before gate 1):**
-    - Preview and Apply: `ssm:GetParameter` allowed on the exact XP-10
-      parameter.
-    - Preview, Apply and Drift: `ssm:GetParameter` denied on any other
-      parameter; `ssm:GetParameters` and `ssm:GetParametersByPath`
-      denied on any parameter, that one included; and
-      `ecr:GetAuthorizationToken` denied (not needed).
-    - Drift: `ssm:GetParameter` on the exact parameter denied (only
-      Drift *denies* are asserted here, because the TEST Drift allows
-      are S5.24b's, row 50, after gate 1).
-    - Preview and Apply: the three ECR reads allowed on the two TEST
-      repositories and denied on any other.
-    - Apply: `iam:SimulatePrincipalPolicy` allowed on the execution role
-      only. Preview keeps S5.17's grant on the S4.6 step-3 role list,
-      and that list is unchanged.
+  each allow row also proves the boundary addition. Each matrix has six
+  kinds of rows:
+  - **allow rows:** each listed read allowed for its role on its exact
+    resource and denied on any other (other roles, repositories,
+    certificates);
+  - **SSM and token rows (D-15):** `ssm:GetParameter` denied for every
+    role on every parameter, the former certificate parameter
+    `/vilnacrm/{env}/user-service/gateway-certificate-arn` included;
+    `ssm:GetParameters` and `ssm:GetParametersByPath` denied on any
+    parameter; `ecr:GetAuthorizationToken` denied;
+  - **guard-layer rows (R10-M1):** each role's seed guard is attached
+    with its catalog template hash unchanged (TEST Preview and Drift
+    `3a5ec954…`, Apply `326bd0c9…`; PROD Preview and Drift `9d60b32c…`,
+    Apply `cfc893b4…`), its `ae950d73…`, `9f269660…` or `ce12c400…`
+    statement still lists `ssm:GetParameter`, `ssm:GetParameters`,
+    `ssm:GetParametersByPath` and `ecr:GetAuthorizationToken`, and each
+    simulated SSM and token denial lists the guard among its
+    `MatchedStatements` next to the identity deny. The simulator reports
+    a matched statement by its `SourcePolicyId` (the guard policy) and
+    its position in that policy's document, and the matrix maps the
+    position to the catalog statement hash through the guard's
+    `statement_ids` order in the catalog (pre-commit audit 11);
+  - **renderer-scope rows (R10-n3):** the rendered governance documents
+    of every other enrolled repository, and the platform roles'
+    documents (including the platform apply role's `secret-read-deny`
+    from `_apply_secret_deny_document`, `ci_bootstrap.py` line 700), are
+    byte-identical before and after the change; the USI
+    `DenySecretLeakingReads` and `DenySecretLeakingReadsApply` documents
+    are byte-identical too;
+  - **ConfigRead rows (pre-commit audit 4):** each boundary-sharing
+    ConfigRead role's simulated decision for every new allow is
+    unchanged (still denied), because its identity policies do not
+    change;
+  - **attachment rows (layer 5):** `verify_active_enrollment` over the
+    amended catalog passes: the Apply role's managed attachments stay
+    inside `_mutable_attachment_sets`, and every other role's set is
+    exact.
+
+  The matrices:
+  - **XP-11 (TEST, before gate 1):** the allow rows for Preview and Apply
+    (the three ECR reads on the two TEST repositories, `iam:GetRole` on
+    both ECS roles, `acm:DescribeCertificate` on the XP-10 ARN;
+    `iam:SimulatePrincipalPolicy` for Apply on the execution role only,
+    Preview keeping S5.17's unchanged step-3 list), and the SSM, token,
+    guard-layer and renderer-scope rows for Preview, Apply and Drift.
+    Only Drift *denies* are asserted, because the TEST Drift allows are
+    S5.24b's (row 50, after gate 1).
   - **S5.24a (PROD Preview and Apply):** the same rows on the PROD roles,
-    repositories and XP-15 parameter.
-  - **S5.24b (Drift, TEST and PROD):**
-    - its allows: the ECR, IAM, ACM, registry-row, refresh and
-      versioning reads;
-    - `iam:SimulatePrincipalPolicy` on the execution role only;
-    - `ssm:GetParameter` on every parameter, the exact one included,
-      denied, and `ecr:GetAuthorizationToken` denied.
+    repositories and XP-15 certificate ARN, plus an allow row for the
+    PROD Preview role's `iam:SimulatePrincipalPolicy` on the PROD
+    execution role, which S5.24a grants because S5.17's step-3 list names
+    only TEST roles (pre-commit audit 12).
+  - **S5.24b (Drift, TEST and PROD):** its allows (the ECR, IAM, ACM,
+    registry-row, refresh and versioning reads; `iam:SimulatePrincipalPolicy`
+    on the execution role only), and the SSM, token, guard-layer and
+    renderer-scope rows for the Drift roles.
   - The existing matrices stay unchanged.
 
   Live repeats: the S4.6 step-3 simulator run (TEST, the XP-11 matrix)
@@ -1812,11 +2012,11 @@ after its predecessor merges.
 
 | Chain | Order |
 | --- | --- |
-| C-BI (IAM/KMS/Lambda, governance apply) | S5.1 (every central role: execution, task, app-rotation, redeploy, bootstrap-job, restore-operator, restore-reader, exercise; no KMS statements) → S5.2 (apply capability, including the managed-password and log-group KMS describe grants) → S5.17 (preview/drift read without KMS; `iam:SimulatePrincipalPolicy` for the preview role) → S5.4 (CMKs whose key policies name only existing roles, per AD-15a; then the matching identity statements, including the preview/drift KMS read) → S5.3 (functions that use the S5.1 roles; KMS-encrypted function log groups; rules) → S5.23 (TEST exercise role) → S5.7 (test-recovery role and grants, derived from the S4.10 graph) → S5.18a (grants on the S5.1 restore-operator and restore-reader roles, reader package, no VPC) → [live, after USI step 1] S5.5 (XP-8 metadata, exact-ARN grant, bootstrap-job VPC attach, job run) → S5.18b (restore-reader VPC attach, after XP-8) → S5.6 (conditional) → S5.19 (prod-recovery role and grants) → [after XP-14, XP-15 and XP-16] S5.24 (Drift-role registry-row, refresh, `s3:GetBucketVersioning`, IAM, ECR and ACM read inventory and grants for S4.17, with `SimulatePrincipalPolicy` on the execution role only and the Drift-role deny unchanged; plus the PROD Preview and Apply workload-observation reads with their narrowed `ssm:GetParameter` denies, before gate 2a; two separately approved PRs, S5.24a (PROD Preview/Apply) and S5.24b (Drift); each adds the matching service-boundary statements; R7-m9, R8-m3, R9-M1, R9-m1, R9-m2, AD-26). The TEST Preview and Apply counterparts are XP-11, a gate-1 prerequisite outside the chain. Every C-BI grant to the preview, apply or drift service role also widens `GovernanceBoundary-<project>-<env>` by exactly that grant (AD-26) |
+| C-BI (IAM/KMS/Lambda, governance apply) | S5.1 (every central role: execution, task, app-rotation, redeploy, bootstrap-job, restore-operator, restore-reader, exercise; no KMS statements) → S5.2 (apply capability, including the managed-password and log-group KMS describe grants) → S5.17 (preview/drift read without KMS; `iam:SimulatePrincipalPolicy` for the preview role) → S5.4 (CMKs whose key policies name only existing roles, per AD-15a; then the matching identity statements, including the preview/drift KMS read) → S5.3 (functions that use the S5.1 roles; KMS-encrypted function log groups; rules) → S5.23 (TEST exercise role) → S5.7 (test-recovery role and grants, derived from the S4.10 graph) → S5.18a (grants on the S5.1 restore-operator and restore-reader roles, reader package, no VPC) → XP-11 (the TEST Preview and Apply workload-observation reads and their seed boundary amendment: an external gate-1 prerequisite whose BI and seed changes take this C-BI slot, after S5.18a (row 42) and before S4.6 (row 43); R10-m2) → [live, after USI step 1] S5.5 (XP-8 metadata, exact-ARN grant, bootstrap-job VPC attach, job run) → S5.18b (restore-reader VPC attach, after XP-8) → S5.6 (conditional) → S5.19 (prod-recovery role and grants) → [after XP-14, XP-15 and XP-16] S5.24 (Drift-role registry-row, refresh, `s3:GetBucketVersioning`, IAM, ECR and ACM read inventory and grants for S4.17, with `SimulatePrincipalPolicy` on the execution role only and the Drift-role deny unchanged; plus the PROD Preview and Apply workload-observation reads (no SSM read and no deny or guard narrowed, user decision D-15), before gate 2a; two separately approved PRs, S5.24a (PROD Preview/Apply) and S5.24b (Drift); each adds the matching boundary statements through a seed catalog amendment; R7-m9, R8-m3, R9-M1, R9-m1, R9-m2, R10-M1, AD-26). The TEST Preview and Apply counterparts are XP-11, in the slot after S5.18a. Every C-BI grant to the preview, apply or drift service role also widens the seed-owned `GovernanceBoundary-user-service-infrastructure-<env>` through a seed catalog amendment, by exactly that grant or by the seed-approved service or resource-family ceiling, with a size check against the 6144-character limit (AD-26, R10-M1, R10-m1). **Seed amendment order (R10-m2):** every amendment pins baseline and result catalog hashes, so one amendment is open at a time across both catalogs (every amendment edits `policy_registry.py`; recheck N2), in this order: #219's own amendment → S5.2 → S5.17 → S5.4 → XP-11 → XP-14's PROD `s3:GetBucketVersioning` addition → S5.24a → S5.24b; each takes its predecessor's result catalog hash as its baseline |
 | C-controls (USI GitHub repository controls, m3: `scripts/configure_github_repository_controls.py`, `scripts/_github_repository_controls.py`, `scripts/_github_environment_controls.py`, `tests/unit/test_configure_repository_controls.py`; admin apply by Kravalg) | S5.21 (Kravalg-only environments `test`, `prod`, `test-recovery`, `test-exercise`, `prod-recovery`; `governance-evidence` checked unchanged) → S5.22 (ruleset: `abandon-manifest-approval` required with a pinned issuer, after S4.3) |
 | C-contract (`schemas/` (including the S4.14 PROD contract schema `poc-prod-v1.schema.json` and the S4.15 `poc-workload-scheduled-drift-result-v1.schema.json`; R7-m4, R7-m1), `scripts/poc_contract.py`, `scripts/poc_phase_admission.py` (the stack → contract mapping, S4.14), secret validators, admission, drift allow-list, receipt schemas, `scripts/poc_workload_reconciliation.py` and `docs/poc-workload-reconciliation.md` (R5-M1, R5-M5), `scripts/poc_registry_plan.py` (only S4.3's post-abandon baseline acceptance, R6-m13), `scripts/poc_registry_phase_entrypoint.py` (only S4.10's stack-keyed registry-set selector next to `_REGISTRIES`; the `prod` entry is XP-14's, outside this plan; R9-n4), acceptance-receipt validator) | S1.1 → S1.7 → S1.9 → S1.8 → S1.11 → S4.10 → S4.11 → S4.9 → S4.2 → S4.3 → S4.12 → S4.13 → S4.14 → S4.15 → S4.6 → S4.7. S1.11 follows S1.8, which follows S2.1 in C-compute, so the program's `ignore_changes` exist when S1.11 checks them (R5-M4). S4.9 precedes S4.2 (R6-M2): S4.2's `resume` applies S4.9's per-mode admission rules and `start_at` window, while S4.9 depends only on S4.10, S4.11 and S2.6. |
 | C-topology (`scripts/poc_workload_topology.py`, `scripts/poc_workload_secret_result.py`, the native integration test, the Random/TLS pins, `recovery/delete-actions.json`, the runner-spec topology text) | S4.10 only (AD-25) |
-| C-runner (`scripts/poc_workload_runner.py`, `scripts/service_execution_worker.py`, `scripts/service_execution_host.py` (receipt copy-out; PROD `JOBS`, lines 27-31; the S4.17 scheduled entries with scheduled-main provenance, R7-M2), the worker diagnostics, `.github/workflows/self-deploy.yml`, `.github/workflows/scheduled-drift.yml`, `scripts/run_pulumi_command.py` (the scheduled exclusion), `scripts/poc_phase_source_adapter.py` (the `workload_route` and `workload_observation` outputs, R6-M1), `scripts/poc_workload_observation.py`, `scripts/poc_scheduled_workload_drift.py` (S4.17), the admission observation functions (including `scripts/poc_workload_images.py` and `scripts/poc_workload_capabilities.py`, which only S4.14 edits in this plan; S4.17 calls them; R9-M1, AD-26), receipt modules, `specs/poc-workload-runner.md` lifecycle text, the README line-127 sentence, `docs/poc-workload-log-health.md`, `test_workload_apply_docs_consistency.py`, `tests/unit/test_service_execution_worker.py`, and the workflow-shape tests that pin the CI graph (R6-M1): `tests/pulumi/test_ci_guardrails.py`, `tests/unit/test_trusted_test_controller_workflow.py`, `tests/unit/test_service_execution_workflow.py`, `tests/unit/test_poc_registry_completion_workflow.py`, `tests/unit/test_poc_registry_workflow.py`, `tests/unit/test_poc_source_workflow.py`, `tests/unit/test_poc_phase_source_adapter.py`, `tests/unit/test_service_initializer.py`, `tests/unit/test_service_execution_host.py`, `tests/unit/test_poc_scheduled_registry_workflow.py`, `tests/unit/test_service_reviewed_credentials.py` (R7-m7)) | S4.1 → S4.4 → S4.5 → S4.11 → S4.12 → S4.13 → S4.14 → S4.17 → S4.7 (R8-m7: S4.7's unstubbed PROD host seam test edits `tests/unit/test_service_execution_host.py`). S4.1 heads it because its FR-20 test is `tests/unit/test_service_execution_worker.py` (m5). S4.11–S4.14 also hold the C-contract slot at their position in that chain, because they edit `poc_workload_admission.py`. S4.17 follows XP-14, XP-15, XP-16 and S5.24 and is a gate-2b precondition only. Every rewrite of a workflow-shape test is a guardrail change that needs an `APPROVED` review by `@Kravalg` specifically, recorded like the round-5 m14 hard-stop amendment (`epics-stories.md` S4.11, S4.13, S4.14, S4.17, S4.7). |
+| C-runner (`scripts/poc_workload_runner.py`, `scripts/service_execution_worker.py`, `scripts/service_execution_host.py` (receipt copy-out; PROD `JOBS`, lines 27-31; the S4.17 scheduled entries with scheduled-main provenance, R7-M2), the worker diagnostics, `.github/workflows/self-deploy.yml`, `.github/workflows/scheduled-drift.yml`, `scripts/run_pulumi_command.py` (the scheduled exclusion), `scripts/poc_phase_source_adapter.py` (the `workload_route` and `workload_observation` outputs, R6-M1), `scripts/poc_workload_observation.py`, `scripts/poc_scheduled_workload_drift.py` (S4.17), the admission observation functions (including `scripts/poc_workload_images.py` and `scripts/poc_workload_capabilities.py`, which only S4.14 edits in this plan: the token-free config read, the D-15 certificate change and the release-platform pin at capabilities lines 327-330; S4.9's multi-arch check lives in `scripts/poc_workload_admission.py`, C-contract, and edits neither module; S4.17 calls them; R9-M1, R10-n6, AD-26), receipt modules, `specs/poc-workload-runner.md` lifecycle text, the README line-127 sentence, `docs/poc-workload-log-health.md`, `test_workload_apply_docs_consistency.py`, `tests/unit/test_service_execution_worker.py`, and the workflow-shape tests that pin the CI graph (R6-M1): `tests/pulumi/test_ci_guardrails.py`, `tests/unit/test_trusted_test_controller_workflow.py`, `tests/unit/test_service_execution_workflow.py`, `tests/unit/test_poc_registry_completion_workflow.py`, `tests/unit/test_poc_registry_workflow.py`, `tests/unit/test_poc_source_workflow.py`, `tests/unit/test_poc_phase_source_adapter.py`, `tests/unit/test_service_initializer.py`, `tests/unit/test_service_execution_host.py`, `tests/unit/test_poc_scheduled_registry_workflow.py`, `tests/unit/test_service_reviewed_credentials.py` (R7-m7)) | S4.1 → S4.4 → S4.5 → S4.11 → S4.12 → S4.13 → S4.14 → S4.17 → S4.7 (R8-m7: S4.7's unstubbed PROD host seam test edits `tests/unit/test_service_execution_host.py`). S4.1 heads it because its FR-20 test is `tests/unit/test_service_execution_worker.py` (m5). S4.11–S4.14 also hold the C-contract slot at their position in that chain, because they edit `poc_workload_admission.py`. S4.17 follows XP-14, XP-15, XP-16 and S5.24 and is a gate-2b precondition; because S4.7 (gate 2a) follows it in C-runner, a stop of S4.17 (for example a rejected S5.24b) also stops gate 2a (recheck N1, R10-n1). Every rewrite of a workflow-shape test is a guardrail change that needs an `APPROVED` review by `@Kravalg` specifically, recorded like the round-5 m14 hard-stop amendment (`epics-stories.md` S4.11, S4.13, S4.14, S4.17, S4.7). |
 | C-composition (`pulumi/app/workload_phase.py`: the plane imports and wiring at lines 13-29 and in `WorkloadPhaseStack.__init__`, `TAGGABLE_TYPES`, `_validate_target`) (m6) | S1.1 (`workload_step` branch) → S1.3 (step-1/step-2 structure, XP-8 exports) → S1.4 (ElastiCache user and group types) → S2.1 (autoscaling plane) → S2.3 (observability plane, with every taggable type S2.4 and S2.5 add) → S3.2 (default SG) → S3.1 (flow-log plane and bucket family) → S3.3 (endpoints and endpoint SG) → S3.5-A (`_validate_target` parameterized by stack so the program renders `prod`; today it pins `test` and the TEST registries, lines 125-160; before S4.10, whose PROD native plan needs it) |
 | C-autoscaling (`pulumi/app/autoscaling.py`) | S2.1 → S2.2 → S2.6 (TEST schedules) |
 | C-observability (`pulumi/app/observability.py`) | S2.3 → S2.4 → S2.5 |
@@ -1968,3 +2168,4 @@ independent scopes, because their stories also wire `workload_phase.py`
   | V-25 | The ECS awslogs driver writes to a log group encrypted with the runtime CMK with no KMS statement for the execution role (A-28) | docs + live | S2.4 | 7 | Fallback: a reviewed AD-15a row for the execution role (`kms:GenerateDataKey` with `kms:ViaService=logs.<r>.amazonaws.com`), then step 7 is re-run. |
   | V-26 | The per-type delete action sets derived from the pinned provider's delete paths are complete (drain and detach calls included) for the recovery role | provider source + live (CloudTrail of the abandon run, no `AccessDenied`) | S4.10, S5.7 | 19 | STOP: an `AccessDenied` stops the removal plan mid-way → S4.3 `export`, reviewed S5.7 grant fix, then `recovery-abandon` again from the export receipt. |
   | V-27 | Whether a resource imported with the `import_` option (the rebuild's recovery import, AD-16) keeps `importID` on its checkpoint row after the import apply (R6-m12) | engine source (first case) + live | S4.10 (first case), S4.3 | 20 | If it persists, S4.10's allowance accepts `importID` only on rows whose URN the authenticated import receipt lists, and every other `importID` still fails. A live `importID` on an unlisted row → STOP before `rebuild-first`; S4.3 `export`, then a reviewed fix. |
+  | V-28 | `ecr:GetDownloadUrlForLayer` accepts an image's **config** digest (not only a layer digest) and returns a pre-signed URL on exactly `LAYER_HOST` (R9-M1, R10-n5; AD-26 point 1) | docs (the API reference documents image layers and is silent on the config blob) + live | S4.14 (P4, N7; the offline fakes assume acceptance) | 1 (the gate-1 PR's TEST workload `plan`, read-only), confirmed again by the step-4 `up-plan` | STOP: the `plan` fails with `image-config-observation-failed` before any apply. No automatic fallback: the token path needs a user decision that amends NFR-06 and narrows the identity denies and the seed guards (AD-26), plus the BI security and seed reviews approved by `@Kravalg`. |

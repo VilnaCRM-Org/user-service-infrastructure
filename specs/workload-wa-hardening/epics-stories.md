@@ -4,7 +4,7 @@ workflow: _bmad/bmm/workflows/3-solutioning/bmad-create-epics-and-stories (Creat
 task: workload-wa-hardening
 source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa
 date: 2026-09-30
-revision: 9 (readiness round-9 findings R9-M1, R9-m1, R9-m2 and R9-n1…n4 addressed on top of revision 8, which answered round 8 on top of revision 7 (round-7 findings R7-M1, R7-M2, R7-m1…m9 and R7-n1…n3, plus audit F2, F6 and F8); decisions D-1…D-14 of 2026-09-30 applied)
+revision: 10 (readiness round-10 findings R10-M1, R10-m1, R10-m2 and R10-n1…n6 and user decision D-15 addressed on top of revision 9, which answered round 9 (R9-M1, R9-m1, R9-m2 and R9-n1…n4) on top of revision 8, which answered round 8 on top of revision 7 (round-7 findings R7-M1, R7-M2, R7-m1…m9 and R7-n1…n3, plus audit F2, F6 and F8); decisions D-1…D-15 of 2026-09-30 applied)
 inputDocuments: [prd.md, architecture.md, decisions.md]
 ---
 
@@ -14,15 +14,18 @@ inputDocuments: [prd.md, architecture.md, decisions.md]
 
 - **FRs:** FR-01…FR-35.
 - **NFRs:** NFR-01…NFR-11.
-- **Decisions:** D-1…D-7 and D-14, all resolved by explicit user decisions
-  dated 2026-09-30 (`decisions.md`; D-4 and D-5 as clarified the same day;
-  D-6 approved, with `@Kravalg` approval of the README PR still required;
-  D-14 sets the recovery targets RPO ≤ 1 hour and RTO ≤ 24 hours), and the
+- **Decisions:** D-1…D-7, D-14 and D-15, all resolved by explicit user
+  decisions dated 2026-09-30 (`decisions.md`; D-4 and D-5 as clarified the
+  same day; D-6 approved, with `@Kravalg` approval of the README PR still
+  required; D-14 sets the recovery targets RPO ≤ 1 hour and RTO ≤ 24
+  hours; D-15 pins the gateway certificate ARN in the reviewed USI
+  workload contract, checked only with `acm:DescribeCertificate`, with no
+  `ssm:GetParameter` for any CI role and nothing loosened for SSM), and the
   derived details D-8…D-13, confirmed the same day. The 20% TEST cost
   threshold and the PROD justification rule (NFR-11) are planning
   defaults, not decisions.
-- **External prerequisites:** XP-1…XP-16 (XP-15 and XP-16, the PROD counterparts of XP-10 and XP-11, are numbered in revision 8, R8-m6; revision 9 makes XP-11 name the TEST Preview and Apply workload-observation reads and the one narrowed `ssm:GetParameter` deny, R9-M1, architecture AD-26).
-- **Verification items:** V-1…V-27 (method and place in `architecture.md` §5).
+- **External prerequisites:** XP-1…XP-16 (XP-15 and XP-16, the PROD counterparts of XP-10 and XP-11, are numbered in revision 8, R8-m6; revision 9 makes XP-11 name the TEST Preview and Apply workload-observation reads, R9-M1; revision 10 rewrites XP-10 and XP-15 as the gateway-supplied certificate ARN pinned in the reviewed USI contract (D-15) and gives XP-11 its four IAM layers and its C-BI seed-amendment slot, R10-M1, R10-m2, architecture AD-26).
+- **Verification items:** V-1…V-28 (method and place in `architecture.md` §5; V-28, the config-blob `GetDownloadUrlForLayer` open point, is new in revision 10, R10-n5).
 
 All of these are defined in `prd.md` and `architecture.md`.
 
@@ -60,7 +63,7 @@ All of these are defined in `prd.md` and `architecture.md`.
 | FR-11 | S2.1, S5.2, S4.9 (`rollback-zero`) |
 | FR-12 | S2.2 |
 | FR-13 | S2.3, S2.4, S2.5, S5.4 |
-| FR-14 | S2.6, S5.14, S3.3 |
+| FR-14 | S2.6, S5.14, S3.3, S4.9 (ARM64 admission check), S4.10 (topology `cpuArchitecture`), S4.14 (capabilities and projection platform pins, image-publisher request platform) (R10-n6, recheck of audit 2) |
 | FR-15 | S3.1, S5.2, S5.4 |
 | FR-16 | S3.2 |
 | FR-17 | S3.3 |
@@ -77,9 +80,9 @@ All of these are defined in `prd.md` and `architecture.md`.
 | FR-28 | S5.16, S4.6 step 17 |
 | FR-29 | S1.10 |
 | FR-30 | S4.8 (point-in-time restore; RPO/RTO per D-14, AD-19), S5.18a, S5.18b, S4.9 (`rollback-zero`) |
-| FR-31 | S4.15, S4.6, S4.7, S4.14 (stack → contract mapping), S4.17 (gate 2b) |
+| FR-31 | S4.15, S4.6, S4.7, S4.14 (stack → contract mapping; D-15 contract certificate ARN), S4.17 (gate 2b), XP-11 (TEST Preview and Apply observation reads, gate 1, R10-n2), S5.24a (PROD Preview and Apply observation reads, gate 2a, R10-n2) |
 | FR-32 | S1.11 (list and program check), S4.10 (checkpoint-field allowance), S4.13 (drift reducer on the executed path), S4.14 (`prod_workload_drift` and the PROD baseline exclusion, R8-n3), S4.17 (scheduled workload drift), S4.6 step 14 |
-| FR-33 | S5.17, S5.4 (KMS read), S5.24 (Drift-role reads for S4.17, R7-m9), S4.6 step 3 |
+| FR-33 | S5.17, S5.4 (KMS read), S5.24b (Drift-role reads for S4.17, R7-m9), XP-11 (TEST Preview and Apply observation reads, R10-n2), S5.24a (PROD Preview and Apply observation reads, R10-n2), S4.6 step 3 |
 | FR-34 | S4.9, S4.10, S1.3, S4.6 steps 4–7 |
 | FR-35 | S4.11, S4.12, S4.13, S4.14, S4.3 (export, clear-pending, import and abandon receipts), S4.6 steps 4, 7, 7b, 13, 14, 20 |
 
@@ -90,7 +93,7 @@ All of these are defined in `prd.md` and `architecture.md`.
 | NFR-03 | all |
 | NFR-04 | S4.6, S4.7, S5.21, S5.22 |
 | NFR-05 | S1.4, S5.13, S1.6, S4.6 steps 9–10 |
-| NFR-06 | S5.1–S5.7, S5.17, S5.18a, S5.18b, S5.19, S5.21, S5.24b (Drift-role reads, R8-m3), S5.24a (PROD Preview and Apply workload-observation reads, R9-M1), XP-11 (TEST Preview and Apply workload-observation reads, R9-M1), S4.14 (token-free image config read, R9-M1), S4.17 (no Drift-role SSM read, R9-m2), S4.6 step 3, S4.7 (PROD simulator run) |
+| NFR-06 | S5.1–S5.7, S5.17, S5.18a, S5.18b, S5.19, S5.21, S5.24b (Drift-role reads, R8-m3), S5.24a (PROD Preview and Apply workload-observation reads, R9-M1), XP-11 (TEST Preview and Apply workload-observation reads, R9-M1, R10-M1), S4.14 (token-free image config read, R9-M1; the D-15 removal of the SSM read path), S4.17 (no SSM read, R9-m2, D-15), S4.6 step 3, S4.7 (PROD simulator run) |
 | NFR-07 | S1.1, S4.2, S4.4, S4.9, S4.10, S4.11–S4.14, S4.6 |
 | NFR-08 | S2.4, S4.6 step 11 |
 | NFR-09 | S4.3 (receipt after every checkpoint-writing subcommand), S4.2, S4.6 steps 13, 19 and 20 |
@@ -165,7 +168,9 @@ Every hard-stop precondition has an FR:
     the digests; the **certificate observation**
     `{parameter_arn, parameter_version, certificate_arn}` (the closed set
     of `scripts/poc_workload_capabilities.py` line 277), or `null` when the
-    contract pins `certificate_arn`; and the **program trees**: the git
+    contract pins `certificate_arn` (S4.14 narrows the field to `null`,
+    because under user decision D-15 every contract pins it); and the
+    **program trees**: the git
     object IDs of `scripts`, `pulumi`, `policy`, `schemas`,
     `pyproject.toml` and `uv.lock` in the installed checkout that ran the
     apply (the applied base). The scheduled path (S4.17) rebuilds the same
@@ -844,7 +849,14 @@ step 13 (induced failure).
     registry resource is ever imported. `docs/poc-workload-reconciliation.md`
     records the change;
   - `specs/poc-workload-runner.md` topology and checker text, with
-    doc-marker tests.
+    doc-marker tests;
+  - **release platform in the topology (FR-14 (a), R10-n6, pre-commit
+    audit 2):** the native task-definition check's `runtimePlatform`
+    `cpuArchitecture` (`scripts/poc_workload_topology.py` line 828, today
+    `X86_64`) follows the contract's release platform: `X86_64` for
+    `linux/amd64`, `ARM64` for `linux/arm64`. Fixture: an ARM64 contract
+    with an ARM64 program passes; an ARM64 contract with an `X86_64` task
+    definition fails.
 - **V-27** (engine source, R6-m12) is a first case, like V-24: whether
   `importID` persists on a checkpoint row after an `import_` apply, read
   from the pinned Pulumi engine.
@@ -1086,7 +1098,28 @@ step 13 (induced failure).
     lookup are the S4.11 library's, and the job that writes the record is
     S4.13's. `hold` admission calls the S4.11 lookup for the stop
     observation bound to the latest success receipt (the `stop` plan's);
-  - the multi-arch admission check (moved from S2.6).
+  - the multi-arch admission check (moved from S2.6). **Where it lives
+    (R10-n6):** in `scripts/poc_workload_admission.py` (C-contract), after
+    `images.inspect_images` in `observe_workload` (lines 464-475): an
+    ARM64 contract is refused unless the image rows carry an arm64
+    manifest and config platform. S4.9 edits neither
+    `scripts/poc_workload_images.py` nor
+    `scripts/poc_workload_capabilities.py` (only S4.14 edits them). The
+    AMD64-only pins further down the path have their own owners
+    (pre-commit audit 2): S4.10 (row 28, the only C-topology writer)
+    derives the topology `cpuArchitecture` (`scripts/poc_workload_topology.py`
+    line 828, today `X86_64`) from the release platform (`X86_64` for
+    `linux/amd64`, `ARM64` for `linux/arm64`); S4.14 (row 39) widens the
+    capabilities release-platform check (`scripts/poc_workload_capabilities.py`
+    lines 327-330, `workload-supported-platform`) and the projection check
+    (`scripts/poc_workload_phase_entrypoint.py` line 59) to the schema's
+    enum (`linux/amd64`, `linux/arm64`), and the publisher request's
+    platform (`scripts/poc_publisher_dispatch.py` line 170; see S4.14's
+    release-platform pins). Until S4.14 merges, an ARM64 contract fails
+    closed at those pins, after S4.9's check. FR-14 (a) is admissible from
+    gate 1 only through S4.10 (row 28) and S4.14 (row 39), which owns the
+    publisher line 170 row; both are on the gate-1 list and precede S4.6
+    (row 43), so there is no forward dependency.
 
 **Acceptance criteria:**
 
@@ -1717,7 +1750,7 @@ step 13 (induced failure).
   | `scripts/service_execution_host.py` | 142 | S4.14 | pin-table row |
   | `scripts/poc_workload_runner.py` | 53, 82, 164, 202; 190, 191, 194, 195; 42 | S4.14 | pin-table rows (53, 82, 164, 202, 194-195; 42: the capture row). 190-191 excluded: `registry.ROOT` there is `poc_registry_runner.ROOT`, the installed repository path (`scripts/poc_registry_runner.py` line 35), not a stack coordinate |
   | `scripts/poc_workload_materializer.py` | 24, 89, 126 | S4.14 | pin-table rows |
-  | `scripts/poc_workload_capabilities.py` | 22, 23; 30, 32, 92, 111, 130, 133, 286 | S4.14 (with XP-15 and XP-16) | pin-table row |
+  | `scripts/poc_workload_capabilities.py` | 22, 23; 30, 32, 92, 111, 130, 133, 286 | S4.14 (with XP-16) | pin-table row; 30 and 32 (the certificate parameter) are deleted by the D-15 change above rather than made stack-aware |
   | `scripts/poc_workload_images.py` | —; 44, 68, 126, 282, 349; 53, 239, 346 | S4.14 (the PROD registry set: XP-14) | pin-table row; 126 (and the registry host of 44, if unused) is removed by the token-free config read (R9-M1) |
   | `scripts/poc_workload_phase_entrypoint.py` | 18, 41, 111 | S4.14 | 18 and 41: the `CONTRACT_PATH` row; 111: the role-prefix row (109-116) |
   | `scripts/poc_workload_admission.py` | 110; —; 148, 154 | S4.14 (the PROD registry set: XP-14) | 110: the `CONTRACT_PATH` row; 148 and 154: the `inspect_registry` row |
@@ -1734,7 +1767,7 @@ step 13 (induced failure).
   | `scripts/poc_registry_completion.py` | 30, 32, 33, 105, 257, 367; 118; 116, 150, 153, 159, 173, 198, 200, 280, 282 | XP-14 | the registry-completion row |
   | `scripts/poc_mail_prerequisite.py` | —; 13, 14, 15; 13, 27, 394 | XP-14 | the capture row (the SES and DKIM inventory) and the `_mail_semantics` row |
   | `scripts/poc_scheduled_registry_drift.py` | 24, 106, 138, 184; 177, 178; 125, 126, 128 | XP-14 | excluded from S4.14 and S4.17: the TEST registry scheduled diagnostic, connected to no workflow (`specs/poc/README.md` lines 52-57); S4.17 models its gate and does not call it |
-  | `scripts/poc_publisher_dispatch.py` | 89 | XP-14 (with the PROD counterpart of XP-12) | excluded from S4.14: the TEST image publisher environment `poc-test-images`, used by the TEST registry dispatch job (`self-deploy.yml` lines 762 and 780); PROD image publication is outside this plan |
+  | `scripts/poc_publisher_dispatch.py` | 89; 170 | XP-14 (with the PROD counterpart of XP-12); S4.14 | 89 excluded from S4.14: the TEST image publisher environment `poc-test-images`, used by the TEST registry dispatch job (`self-deploy.yml` lines 762 and 780); PROD image publication is outside this plan. 170 (`"platform": "linux/amd64"` in the publisher request) is S4.14's: the release-platform row (FR-14 (a), recheck of pre-commit audit 2) |
   | `scripts/poc_workload_reconciliation.py` | —; —; 15 | S4.14 | the reconciliation row (`PREFIX`/`ROOT` imports) |
   | `scripts/poc_workload_secret_result.py` | —; —; 68 | S4.10 (the PROD registry set: XP-14, stubbed) | the S4.10 registry-set note below |
   | `scripts/configure_github_repository_controls.py` | 80, 85 | — | excluded: environment-name lists that already include `prod` and `prod-preview` (S5.21 edits the file for other reasons) |
@@ -1808,10 +1841,9 @@ step 13 (induced failure).
     when the installed `main` `specs/poc/poc-prod.json` exists and has
     `phase: workload`. A missing `poc-prod.json` (before XP-14) or
     `phase: registry` keeps the baseline drift for `prod` running;
-  - the runner accepts `prod` with the PROD certificate parameter (XP-15,
-    the PROD counterpart of XP-10; the TEST-analogous name is pinned as an
-    assumption that the gateway owner confirms in this PR before it merges,
-    R8-m6), the PROD topology (S4.10), the PROD registry anchor (XP-14)
+  - the runner accepts `prod` with the PROD certificate ARN pinned in
+    `poc-prod.json` (XP-15, the PROD counterpart of XP-10; no SSM
+    parameter, user decision D-15), the PROD topology (S4.10), the PROD registry anchor (XP-14)
     and `prod-recovery`; `abandon` is never admitted for PROD.
     `prod_workload_drift` runs the S4.13 drift path under the PROD preview
     role, and the PROD observation and acceptance jobs mirror
@@ -1841,40 +1873,168 @@ step 13 (induced failure).
     `batch-check-layer-availability`) are unchanged. So the PR paths (XP-11
     for TEST, S5.24 for PROD) and the scheduled path (S5.24) need
     `ecr:GetDownloadUrlForLayer` on the stack's two repositories and no
-    `ecr:GetAuthorizationToken`, and no role's token deny is narrowed.
+    `ecr:GetAuthorizationToken`, and no role's token deny or seed guard
+    is narrowed.
     - **Tests:** `tests/unit/test_poc_workload_image_config.py` rewrites
       the `_authorization` cases (lines 391-459) and the registry-hop and
       redirect cases (for example lines 124-130, 184-210 and 345) for the
-      pre-signed URL. In `tests/unit/test_poc_workload_images.py`, the
+      pre-signed URL, and the two `authorize=` tests (lines 303-334,
+      R10-n5): `test_preconditions_fail_before_token_retrieval` becomes
+      "preconditions fail before the download-URL call" (a wrong name,
+      size, platform or descriptor fails with `observation-failed`, and
+      the `get-download-url-for-layer` stand-in fails the test if it is
+      called), and `test_connection_errors_never_expose_token_or_signed_url`
+      keeps its assertion that a connection error whose text carries a
+      pre-signed URL surfaces only as exactly
+      `image-config-observation-failed`, so the pre-signed URL is never
+      exposed (the token part is dropped with the token). In
+      `tests/unit/test_poc_workload_images.py`, the
       fake's `get-authorization-token` branches (lines 312 and 345)
       become `get-download-url-for-layer`, and the refusal at line 386
       stays.
     - **Docs (NFR-10):** `docs/poc-workload-admission.md` lines 54-72
       describe the pre-signed layer-bucket read in place of registry HTTP
       authentication.
-    - **Live:** the first TEST workload `plan` is the first live call. A
-      refused config digest, or a URL outside `LAYER_HOST`, fails it with
-      `image-config-observation-failed` before any apply. That is a STOP,
-      and the token fallback needs a user decision that amends NFR-06,
-      plus the BI owner's review (AD-26).
+    - **Live (V-28, R10-n5):** the first TEST workload `plan` is the
+      first live call: S4.6 step 1 (the gate-1 PR's `plan`), confirmed
+      again by the step-4 `up-plan`. A refused config digest, or a URL
+      outside `LAYER_HOST`, fails it with `image-config-observation-failed`
+      before any apply. That is a STOP, and the token fallback needs a
+      user decision that amends NFR-06 and narrows the identity denies
+      and the seed guards, plus the BI owner's and the seed reviews
+      (AD-26).
 
     No workflow-shape test changes for this item;
-  - **receipt-certificate reader parameter (R9-m2, architecture AD-26),
-    for S4.17's use:** S4.14 is the one plan story that edits
-    `scripts/poc_workload_capabilities.py`, so it also adds the
-    keyword-only parameter `certificate` to `inspect_capabilities` (lines
-    322-346). When it is given (a receipt's certificate observation),
-    the reader validates it with `certificate_projection` (lines
-    269-292), takes the certificate ARN from it, and never calls
-    `ssm get-parameter` (`_certificate_input`, lines 295-319, is skipped
-    in both of its calls, lines 336 and 339). It still runs the role
-    reads, the execution-role pull simulation and ACM
-    `DescribeCertificate` on that ARN (`_certificate`, lines 243-266), and
-    it returns the observation unchanged. Without the parameter, the PR
-    behaviour is unchanged. So S5.24b's Drift inventory (row 50) needs no
-    SSM read without waiting for S4.17 (row 51), which only passes the
-    parameter. **Tests:** `tests/unit/test_poc_workload_capabilities.py`
-    (P5 and N8 below);
+  - **gateway certificate ARN in the contract (user decision D-15,
+    2026-09-30; architecture AD-26 point 2; R10-M1), both stacks:** S4.14
+    is the one plan story that edits `scripts/poc_workload_capabilities.py`,
+    and it holds the C-runner slot (the runner) and the C-contract slot
+    (the schemas and receipt schema) at its position, so it owns the whole
+    change:
+    - **schemas:** in `schemas/poc-test-v1.schema.json` (lines 508-527)
+      the `domain` object requires `certificate_arn` (the existing pattern,
+      TEST account) and loses the `oneOf` and the
+      `certificate_parameter_name` property, so `additionalProperties:
+      false` refuses a contract that still carries it. The PROD schema
+      `poc-prod-v1.schema.json` (this story, above) has the same shape with
+      the PROD account in the pattern. The success-receipt schema's
+      certificate observation (S1.1) is narrowed to `null`, because every
+      receipt this plan writes binds the contract ARN; a parameter-shaped
+      observation fails;
+    - **runner:** the `workload-certificate-parameter-required` check
+      (`scripts/poc_workload_runner.py` lines 170-176) becomes
+      `workload-certificate-arn-required`: the domain carries
+      `certificate_arn` and no `certificate_parameter_name`, for both
+      stacks;
+    - **capabilities:** the SSM read path is removed. `_certificate_input`
+      (lines 295-319) no longer calls `ssm get-parameter` and returns the
+      domain unchanged (and is folded into `inspect_capabilities`);
+      `("ssm", "get-parameter")` leaves the `_native` allow-list (lines
+      37-47); `CERTIFICATE_PARAMETER_NAME` and `CERTIFICATE_PARAMETER_ARN`
+      (lines 30-34) are deleted, so the pin-table row below loses them;
+      `certificate_projection` (lines 269-292) accepts only
+      `observed is None` for a domain with `certificate_arn` and refuses
+      any parameter observation. `inspect_capabilities` returns `None`,
+      so `WorkloadObservation.certificate` and the projection's
+      certificate are `None`, and `workload_certificate_arn`
+      (`scripts/poc_workload_phase_entrypoint.py` lines 226-231) returns
+      the contract ARN through its existing branch. The two ACM checks on
+      that ARN (`_certificate`, lines 243-266, called before and after the
+      pull simulation, lines 336-344) are unchanged. Revision 9's
+      `certificate=` reader parameter is withdrawn and not added: S4.17
+      passes the applied contract, which carries the ARN, so S5.24b's
+      no-SSM Drift inventory (row 50) rests on this row, not on row 51;
+    - **tests (completed by the pre-commit audit, finding 5):**
+      - `tests/unit/test_poc_workload_runner.py`: lines 316-321
+        (`test_production_runner_requires_parameter_and_cannot_use_copied_arn`)
+        are inverted (a contract ARN passes; a domain with
+        `certificate_parameter_name` or without `certificate_arn` fails
+        with `certificate-arn-required`); the `driver` fixture (lines
+        18-25 and 52-56) is built from a contract-ARN fixture instead of
+        `parameter_fixture`; and the `certificate` mutation of
+        `test_gate_rechecks_evidence_and_artifact_bytes` (lines 224-242,
+        `driver.observation.certificate["parameter_version"] += 1`)
+        becomes a change of the contract ARN, because the observation is
+        `None`;
+      - `tests/unit/test_poc_contract.py` lines 325-333 (the
+        parameter-name cases) assert that the property is refused and
+        `certificate_arn` is required;
+      - `tests/unit/test_poc_workload_capabilities.py`: the `_native`
+        allow-list case (line 320), the SSM endpoint case (line 333), the
+        `parameter_evidence` fixture (lines 371-395, with the fake's `ssm`
+        branch at 386-387), `test_fixed_parameter_is_read_twice_and_passes_existing_acm_validation`
+        (lines 396-410, with the two-read count at 405),
+        `test_parameter_identity_type_version_and_value_reject_before_acm`
+        (lines 411-438) and `test_missing_denied_or_moved_parameter_fails_closed`
+        (lines 439-459, the `missing`, `denied`, `version` and `value`
+        mutations) are removed or rewritten so that the fake fails on any
+        `ssm` call and the ACM checks run on the contract ARN;
+      - `tests/unit/test_poc_workload_phase_entrypoint.py`: the
+        `parameter_fixture` (lines 40-56) and the parameter-projection
+        tests (lines 57-101) become contract-ARN cases (a parameter
+        observation is refused), and
+        `test_explicit_internal_arn_cannot_take_an_unrelated_parameter_observation`
+        (lines 102-105) keeps passing;
+    - **docs (NFR-10):** `specs/poc-workload-runner.md` lines 8-17 (the
+      runner requires `certificate_parameter_name` and rejects the ARN
+      alternative), lines 19-21 (the projection's `parameter_arn` and
+      `parameter_version` fields, which no longer occur) and lines 110-113 (the SSM read grant and the SSM
+      publication as live prerequisites) are rewritten: the reviewed
+      contract pins the gateway-supplied ARN, no SSM grant or publication
+      is a prerequisite, and a replacement needs a USI contract PR (the
+      fail-closed window of PRD §7 XP-10). `specs/poc-api-gateway-backend.md`
+      line 30 and lines 41-60 (the SSM publication and the #219
+      `ssm:GetParameter` grant) say that the gateway owner supplies the
+      ARN for the USI contract. `docs/poc-workload-admission.md` lines
+      104-111 name the contract ARN as the only certificate input. No test
+      pins these sentences today (grep of `tests/`); the story's doc test
+      pins the new ones;
+    - **live:** the gate-1 PR (S4.6 step 1) writes the TEST `workload`
+      block with the XP-10 ARN, and S4.7's PROD contract PRs write the
+      XP-15 ARN. No role reads SSM on any path;
+  - **release-platform pins (FR-14 (a), R10-n6, pre-commit audit 2):** as
+    the one editor of the capabilities module, S4.14 widens its
+    release-platform check (lines 327-330, `workload-supported-platform`)
+    and the projection check (`scripts/poc_workload_phase_entrypoint.py`
+    line 59) from `linux/amd64` to the schema enum (`linux/amd64`,
+    `linux/arm64`; `schemas/poc-test-v1.schema.json` lines 448-452). S4.9's
+    admission check refuses ARM64 without an arm64 manifest, and S4.10
+    derives the topology `cpuArchitecture`. Fixture: an ARM64 contract
+    with arm64 image rows passes both pins; `linux/arm` or
+    `windows/amd64` still fails the schema. **The image-publisher request
+    (recheck of pre-commit audit 2):** `scripts/poc_publisher_dispatch.py`
+    line 170 sends the literal `"platform": "linux/amd64"` in every
+    publisher request, and `observe_workload` → `inspect_release`
+    requires the build-provenance platform to equal the contract
+    `release.platform` (`scripts/poc_workload_admission.py`:
+    `_evidence_values`, line 335, builds the expected provenance with
+    `release["platform"]` at line 355 and compares at lines 370-377,
+    reasons `workload-quality-evidence` and `workload-build-evidence`;
+    `inspect_release` calls it at line 448).
+    Without a change an ARM64 contract still fails there. S4.14 owns this
+    line too (the publisher dispatch is not XP-14-only for it; XP-14 keeps
+    line 89, the PROD environment). The request takes its platform from a
+    reviewed value validated against the schema enum, not from a literal:
+    the reviewed contract's `release.platform` when a release block
+    exists, otherwise a reviewed dispatch input. The committed
+    `specs/poc/poc-test.json` has no release block at dispatch time (the
+    release block records `publisher_run_id`, so it is written after
+    publication), so the input is the source for the first publication and
+    the release PR must pin the same value; the existing admission
+    equality check refuses any mismatch. Files: `scripts/poc_publisher_dispatch.py`
+    (line 170), the `dispatch` step's environment in
+    `.github/workflows/self-deploy.yml` (lines 776-781) and
+    `tests/unit/test_poc_publisher_dispatch.py` (line 128, the expected
+    request), with fixtures: an `linux/arm64` value produces an arm64
+    request; a value outside the enum fails; an `arm64` request with an
+    `amd64` release block fails admission. **Docs (NFR-10):**
+    `docs/poc-workload-admission.md` line 111 ("Only the current AMD64
+    settings bridge is supported") is replaced by the two-platform
+    statement and pinned by the story's doc test. **Ordering:** XP-12 (the
+    image publication, an external precondition of the gate-1 PR, row 43,
+    with no row of its own) runs the publisher, so an ARM64 publication
+    runs after S4.14 (row 39); an AMD64 one is unaffected. S4.14 depends on
+    no higher row, and no row below 39 needs the new publisher behavior;
   - **every TEST-only pin on the path (R6-m5)**, each with its PROD fixture
     or its owner:
 
@@ -1893,7 +2053,7 @@ step 13 (induced failure).
     | `scripts/poc_backend_observer.py` line 183 (with the constants at lines 37-43), line 363 and line 389 | TEST account, bucket, provider, URN prefix and stack name | **assigned to XP-14**: the PROD registry phase owns the observer's PROD coordinates, because the PROD registry capture needs the same ones (PRD §7). S4.14's PROD fixtures stub `backend.capture_backend` with PROD coordinates, and gate 2a refuses PROD without XP-14. Line 184 (operations `plan` and `up-plan` only) is not a TEST pin and does not change; the drift capture maps to `plan` (S4.13). |
     | `scripts/poc_backend_observer.py` lines 199-201 (R7-m3) | the target check reads `poc_contract.SCHEMA_PATH` and requires its `account_id` `const` to equal the TEST `ACCOUNT` | **assigned to XP-14** with the other observer coordinates. S4.14 keeps this read working: the PROD schema is a separate file and `poc-test-v1.schema.json`'s `account_id` stays a `const` (R7-m4). |
     | `scripts/poc_registry_runner.py` lines 266-283 (`_binding`), called by the workload gate at `scripts/poc_workload_runner.py` line 58 (R7-m3) | the provider identity must carry `backend.ACCOUNT`, `s3://{backend.BUCKET}` and `stack: "test"` | the workload gate binds with the request's stack and that stack's observer coordinates through a stack-aware binding in `poc_workload_runner.py`; the registry `_binding` itself is unchanged (the registry path stays TEST until XP-14). Fixture: a `prod` provider identity (PROD account, PROD bucket, `stack: "prod"`) passes; a TEST identity under a `prod` request fails; the TEST binding is unchanged. |
-    | `scripts/poc_workload_capabilities.py` lines 22-23 (`ROLE_NAMES` `-test-EcsExecution`, `-test-EcsTask`), 30 (`CERTIFICATE_PARAMETER_NAME` `/vilnacrm/test/user-service/gateway-certificate-arn`), 32 (SSM parameter ARN), 92 (role ARN), 111 (`policy/issue219/test/boundary/`), 130-133 (trust `aws:SourceAccount`/`aws:SourceArn`) and 286 (ACM certificate ARN pattern); reached through `scripts/poc_workload_admission.py` line 470 (R7-m3) | TEST role names, certificate parameter, account and boundary path | parameterized by the request's stack: `-{stack}-EcsExecution`/`-{stack}-EcsTask`, the PROD certificate parameter (XP-15, the PROD counterpart of XP-10), the PROD account in every ARN, and the PROD boundary path (XP-16, the PROD counterpart of XP-11). **Assumption, not a decision (R8-m6):** S4.14 pins the deterministic, TEST-analogous names `/vilnacrm/prod/user-service/gateway-certificate-arn` and `arn:aws:iam::933245420672:policy/issue219/prod/boundary/`; the gateway owner (XP-15) and the bootstrap owner (XP-16) confirm the names in this PR before it merges (a naming statement recorded here, not the row-49 deliverable, which is the parameter and path existing live), and S4.7 verifies them live. `iam:SimulatePrincipalPolicy` runs only for the execution role (`_pull`, lines 193-232, called at line 338 with `roles["execution"]`); `iam:GetRole` reads both roles (lines 333 and 341). Fixture: PROD role, certificate and boundary reads pass for a `prod` request; a TEST role name or the TEST certificate parameter under a `prod` request fails; the TEST fixtures are unchanged. |
+    | `scripts/poc_workload_capabilities.py` lines 22-23 (`ROLE_NAMES` `-test-EcsExecution`, `-test-EcsTask`), 30 (`CERTIFICATE_PARAMETER_NAME` `/vilnacrm/test/user-service/gateway-certificate-arn`), 32 (SSM parameter ARN), 92 (role ARN), 111 (`policy/issue219/test/boundary/`), 130-133 (trust `aws:SourceAccount`/`aws:SourceArn`) and 286 (ACM certificate ARN pattern); reached through `scripts/poc_workload_admission.py` line 470 (R7-m3) | TEST role names, certificate parameter, account and boundary path | parameterized by the request's stack: `-{stack}-EcsExecution`/`-{stack}-EcsTask`, the PROD account in every ARN, and the PROD boundary path (XP-16, the PROD counterpart of XP-11). Lines 30, 32 and 286 (the ACM pattern inside `certificate_projection`'s parameter branch) are deleted with that branch, not parameterized; the PROD schema's `certificate_arn` pattern carries the PROD account instead: under user decision D-15 the certificate ARN comes from the contract (XP-10, XP-15), and no SSM parameter exists for either stack. **Assumption, not a decision (R8-m6):** S4.14 pins the deterministic, TEST-analogous boundary path `arn:aws:iam::933245420672:policy/issue219/prod/boundary/`; the bootstrap owner (XP-16) confirms it in this PR before it merges (a naming statement recorded here, not the row-49 deliverable, which is the path existing live), and S4.7 verifies it live. The revision-8 assumption for a PROD parameter name is withdrawn (D-15). `iam:SimulatePrincipalPolicy` runs only for the execution role (`_pull`, lines 193-232, called at line 338 with `roles["execution"]`); `iam:GetRole` reads both roles (lines 333 and 341). Fixture: PROD role, certificate (the PROD contract ARN) and boundary reads pass for a `prod` request; a TEST role name, or a TEST-account certificate ARN, under a `prod` request fails; the TEST fixtures change only for D-15. |
     | `scripts/poc_workload_images.py` lines 44 (`REGISTRY_HOST`), 68 (`--registry-id`), 126 (`get-authorization-token --registry-ids`), 282 (`registryId` check) and 349 (image URI) (R7-m3), and the TEST registry set at lines 53, 239 and 346 (`graph.REGISTRIES`; R8-m2, pre-commit audit) | the TEST account's ECR registry | the request's stack account and the stack's registry set (the PROD registry names are XP-14's and stubbed); line 126 is removed by the token-free config read above rather than made stack-aware (R9-M1). Fixture: PROD image digests from `933245420672.dkr.ecr.eu-central-1.amazonaws.com` pass for a `prod` request; a TEST registry ID under a `prod` request fails. |
     | `scripts/poc_registry_plan.py` lines 21 (TEST `ACCOUNT`), 26-27 (`PREFIX` `urn:pulumi:test::…`, `ROOT`), 36 (`user-service-test-{kind}` registry names), 51-59 (`DEFAULT_TAGS`, `Environment: test` at line 55; R8-m2), 60-65 (`ENVIRONMENT_OUTPUTS`, `environment: test`, `stackTag` at line 63) and 69-71 (`ROOT_OUTPUTS` TEST backend URL and secrets provider) (R7-m3) | the TEST registry graph, URN prefix and root outputs | **assigned to XP-14**: the PROD registry graph is registry-phase work. The R6-m13 rule ("`poc_registry_plan.py` changes only in S4.3") scopes this plan's stories only; any XP-14 change to this file is outside that rule and outside this plan. For `prod`, S4.14 reads the PROD counterparts that XP-14 provides (the registry graph, `_ecr_inventory` coordinates and tags used by the capture, row below) and its fixtures stub them; the reconciliation row above replaces the `PREFIX`/`ROOT` imports with the stack's own. |
     | `scripts/poc_workload_runner.py` lines 40-48 (`_capture`) → `scripts/poc_registry_runner.py` lines 254-263 (`_capture`: TEST registry graph, `_ecr_inventory` at lines 240-245 with `backend.ACCOUNT`, `graph.DEFAULT_TAGS`; `ecr_read`, lines 185-199, with `--registry-id` `backend.ACCOUNT` at line 194; and `graph.mail.inspect_inventory`, with the TEST domain, zone and identity ARN of `scripts/poc_mail_prerequisite.py` lines 13-15 and the TEST zone name at lines 27 and 394; R8-m2) (audit) | the registry rows of every capture are checked against the TEST registry graph and TEST ECR | the S4.11 workload-aware capture checks the registry rows against the request stack's registry graph, ECR coordinates and tags (TEST today; PROD from XP-14). Fixture: a PROD checkpoint with PROD registry rows passes for a `prod` request with the XP-14 counterparts stubbed; TEST registry rows under a `prod` request fail. |
@@ -2086,10 +2246,11 @@ step 13 (induced failure).
   commands of the first case, and every hit maps to a row or an exclusion
   of the inventory table, including the hits that exist only at the
   story's own base (the S4.10 selector).
-- **P4 (R9-M1):** a config read through a `get-download-url-for-layer`
-  fake whose URL is on `LAYER_HOST`, with the exact digest, size and
-  platform, passes for TEST and PROD, and no `get-authorization-token`
-  call is made (the fake fails on one).
+- **P4 (R9-M1, V-28 offline part):** a config read through a
+  `get-download-url-for-layer` fake whose URL is on `LAYER_HOST`, with the
+  exact digest, size and platform, passes for TEST and PROD, and no
+  `get-authorization-token` call is made (the fake fails on one). The
+  live half of V-28 is S4.6 step 1.
 - **N1:** PROD with `admission.prod: false` is refused; a PROD `up-plan`
   under `"preview"` is refused.
 - **N2:** PROD `recovery-abandon` is refused; PROD without XP-14 is refused.
@@ -2107,14 +2268,18 @@ step 13 (induced failure).
   nor exclusion covers fails the inventory test; a PROD contract with TEST
   ECR identifiers fails `_registry_semantics`; a PROD workload contract
   fails `_mail_semantics` while the `prod` domain entry is absent.
-- **P5 (R9-m2):** `inspect_capabilities(contract, certificate=obs)`
-  with a valid observation makes no `ssm get-parameter` call (the fake
-  fails on one), reads ACM on `obs["certificate_arn"]` and returns
-  `obs`; without `certificate` the existing parameter path passes
-  unchanged.
-- **N8 (R9-m2):** an observation that fails `certificate_projection`, or
-  an ACM read of its ARN that is not issued, not currently valid or not
-  bound to the FQDN, fails.
+- **P5 (D-15, R10-M1):** a TEST or PROD contract with `certificate_arn`
+  passes `inspect_capabilities(contract)` with no `ssm` call (the fake
+  fails on one), reads ACM twice on that ARN and returns `None`; the
+  runner admits it; the projection's certificate is `None`, and
+  `workload_certificate_arn` returns the contract ARN.
+- **N8 (D-15, R10-M1):** a contract with `certificate_parameter_name`, or
+  without `certificate_arn`, fails its schema (TEST and PROD) and the
+  runner (`workload-certificate-arn-required`); a parameter-shaped
+  observation fails `certificate_projection` and the success-receipt
+  schema; `_native("ssm", "get-parameter", …)` is refused with
+  `workload-capability-operation`; an ACM read of the pinned ARN that is
+  not issued, not currently valid or not bound to the FQDN fails.
 - **N7 (R9-M1):** a pre-signed URL on another host, with a fragment or
   a redirect, a `layerDigest` other than the config digest, a body of
   another size or digest, or another platform fails with
@@ -2125,7 +2290,8 @@ step 13 (induced failure).
   account or backend fails `poc-prod-v1.schema.json`; a TEST contract with
   `environment: prod` still fails `poc-test-v1.schema.json`.
 - **B:** the TEST path is unchanged apart from the token-free config
-  read (every other TEST test passes unchanged); a `test`
+  read and the D-15 certificate change (every other TEST test passes
+  unchanged); a `test`
   request never reads `poc-prod.json`; the observer's
   `schema["account_id"]["const"]` read (lines 199-201) still passes.
 - **B2 (R7-m2):** the baseline scheduled drift keeps previewing `prod`
@@ -2266,44 +2432,66 @@ step 13 (induced failure).
   - BI applied: S5.1, S5.2, S5.17, S5.4, S5.3, S5.23, S5.7, S5.18a;
   - USI repository controls applied (admin): S5.21, S5.22;
   - decisions resolved (explicit, dated 2026-09-30, `decisions.md` and PRD
-    §6): D-1, D-2 (TEST), D-4, D-5, D-6, D-7 — all resolved;
+    §6): D-1, D-2 (TEST), D-4, D-5, D-6, D-7, D-15 — all resolved;
   - XP-6 (subscription endpoint) and XP-7 (profile) present;
-  - XP-9 (completed registry proof and receipt), XP-10 (gateway ACM
-    certificate and SSM publication), XP-11 (bootstrap #219 grants), XP-12
-    (authenticated image publication), XP-13 (SES prerequisites) present
-    (R4-M10);
-  - **XP-11's TEST workload-observation reads (R9-M1, PRD §7 XP-11,
-    architecture AD-26), applied before the gate-1 PR**, because the first
-    TEST workload `plan` (Preview role) and every `up-plan` (Apply role)
-    call `observe_workload`. For
+  - XP-9 (completed registry proof and receipt), XP-10 (the issued
+    gateway ACM certificate, whose ARN the gateway owner supplies for the
+    gate-1 PR to pin; user decision D-15, no SSM publication), XP-11
+    (bootstrap #219 grants), XP-12 (authenticated image publication),
+    XP-13 (SES prerequisites) present (R4-M10);
+  - **XP-11's TEST workload-observation reads (R9-M1, R10-M1, PRD §7
+    XP-11, architecture AD-26), applied before the gate-1 PR**, because
+    the first TEST workload `plan` (Preview role) and every `up-plan`
+    (Apply role) call `observe_workload`. For
     `GitHubCiPreview-user-service-infrastructure-test` and
-    `GitHubCiApply-user-service-infrastructure-test`:
-    - the allows: `iam:GetRole` on the TEST ECS execution and task
-      roles; for the Apply role, `iam:SimulatePrincipalPolicy` on the
-      TEST execution role only (the Preview role keeps S5.17's grant on
-      the step-3 role list); `ecr:BatchGetImage`, `ecr:BatchCheckLayerAvailability` and
+    `GitHubCiApply-user-service-infrastructure-test`, in four layers:
+    - **identity allows** (only allows that no deny or guard blocks,
+      D-15): `iam:GetRole` on the TEST ECS execution and task roles; for
+      the Apply role, `iam:SimulatePrincipalPolicy` on the TEST execution
+      role only (the Preview role keeps S5.17's grant on the step-3 role
+      list); `ecr:BatchGetImage`, `ecr:BatchCheckLayerAvailability` and
       `ecr:GetDownloadUrlForLayer` on `user-service-test-web` and
       `user-service-test-worker`; `acm:DescribeCertificate` on the XP-10
-      certificate; `ssm:GetParameter` on exactly
-      `arn:aws:ssm:eu-central-1:891377212104:parameter/vilnacrm/test/user-service/gateway-certificate-arn`;
-    - the one narrowed deny: `ssm:GetParameter` taken out of
-      `DenySecretLeakingReads` (Preview role only) and
-      `DenySecretLeakingReadsApply` (Apply role) into a Deny whose
-      `NotResource` is exactly that ARN. `ssm:GetParameters`,
-      `ssm:GetParametersByPath` and `ecr:GetAuthorizationToken` stay
-      denied, and the Drift role's deny is unchanged;
-    - each allow also added, exactly as narrow, to the roles' permissions
-      boundary `GovernanceBoundary-<project>-test` (AD-26);
-    - the XP-11 BI simulator matrix (AD-26: the Preview and Apply allows
-      and denies, and the Drift denies only; the TEST Drift allows are
-      S5.24b's, row 50);
-    - the BI security review, approved by `@Kravalg`, with the PR number
-      in the acceptance receipt.
+      ARN. No `ssm:GetParameter`. The statements render for the USI
+      identity only (R10-n3);
+    - **identity denies unchanged:** `DenySecretLeakingReads`,
+      `DenySecretLeakingReadsApply` and their renderers are not changed
+      (`ssm:GetParameter*` and `ecr:GetAuthorizationToken` stay denied
+      for Preview, Apply and Drift);
+    - **seed guards unchanged:** the Preview and Drift guards (statement
+      `ae950d73…`) and the Apply guard (statement `9f269660…`) keep their
+      statements and template hashes (BI `pulumi/seed/catalogs/test.json`
+      lines 649-663, 712-761, 3102-3118 and 3273-3299);
+    - **seed boundary amendment:** each allow added to the seed-owned
+      `GovernanceBoundary-user-service-infrastructure-test`
+      (`test.json` lines 307-319) through a seed catalog amendment with a
+      new catalog hash pin (`pulumi/seed/policy_registry.py` lines
+      18-21), a named seed owner, CloudFormation change-set evidence, a
+      recorded size within 6144 characters (or the seed-approved
+      service-family ceiling) and `@Kravalg`'s approval, in its C-BI slot
+      after S5.18a and after the S5.2, S5.17 and S5.4 amendments
+      (R10-m1, R10-m2);
+    - **attachment constraint (AD-26 layer 5):** the Preview allows go
+      into the existing inline documents and the Apply allows into the
+      TEST `-poc-prerequisites` managed policy that #219 admits. **Inline
+      size check (pre-commit recheck N1):** the aggregate rendered inline size of
+      each Preview role XP-11 touches stays within IAM's 10,240-character
+      limit, else the fallback is a new managed policy with a seed
+      `attachment_arns` amendment and seed code change in the same seed
+      review; a new
+      Apply managed policy would need the seed code, write-scope and
+      guard changes in the same seed review;
+    - the XP-11 BI simulator matrix (AD-26: the Preview and Apply
+      allows; the SSM, token, guard-layer, renderer-scope, ConfigRead
+      and attachment rows; the Drift allows are S5.24b's, row 50);
+    - the BI security review and the seed review, approved by
+      `@Kravalg`, with the PR numbers in the acceptance receipt.
 
-    STOP: the review is rejected, and a user decision follows (for the
+    STOP: a review is rejected, and a user decision follows (for the
     Apply role, adopting the fallback in which `up-plan` reuses the
-    Preview-role observation needs that decision); or the matrix
-    differs. The packaged TEST capability is `enabled` (XP-9, R9-m1): its
+    Preview-role observation needs that decision); the matrix differs;
+    or the boundary amendment does not fit and no ceiling is approved.
+    The packaged TEST capability is `enabled` (XP-9, R9-m1): its
     `PocBackendVersioning` statement serves the capture's
     `s3:GetBucketVersioning`, and `withdrawn` or `disabled` while stack
     `test` has `phase: workload` is a STOP;
@@ -2336,7 +2524,18 @@ step 13 (induced failure).
      `governance-evidence` equals the evidence payload (reviewer-less,
      main-only; USI `scripts/_github_evidence_environment.py`); the ruleset
      requires `abandon-manifest-approval` with its pinned issuer (S5.22).
-     STOP: not approved, or any environment or the ruleset differs.
+     **Certificate (user decision D-15):** the PR's `workload` block pins
+     `external.domain.certificate_arn` to the XP-10 ARN that the gateway
+     owner supplied, and carries no `certificate_parameter_name`.
+     **V-28 (live, R10-n5):** the PR's `plan` is the first TEST workload
+     `plan` (Preview role, read-only). It must read both image configs
+     through `ecr get-download-url-for-layer` on `LAYER_HOST` with no
+     `get-authorization-token` call, and the certificate through ACM
+     `DescribeCertificate` only, with no SSM call (the worker diagnostics
+     name the operations, S4.1). STOP: not approved, or any environment or
+     the ruleset differs; `image-config-observation-failed` (V-28: no
+     automatic fallback, AD-26); or a failed ACM certificate check (the
+     contract ARN is corrected by a reviewed contract PR before a retry).
   2. **R-02 re-observation** (read-only), runtime-guard refusal for `prod`
      observed (FR-23), and the S4.14 PROD path refused (FR-35). STOP: any
      workload URN present → AD-09; PROD not refused → fix before step 3.
@@ -2347,12 +2546,23 @@ step 13 (induced failure).
      restore-operator, restore-reader and exercise roles, with the key and
      secret resource policies as `ResourcePolicy` inputs (FR-27, FR-33,
      NFR-06, V-6, V-15, V-21 and V-22 simulate parts), plus the XP-11
-     workload-observation matrix (R9-M1, AD-26). In that matrix:
-     - `ssm:GetParameter` on the XP-10 parameter is allowed for Preview
-       and Apply and denied for Drift;
-     - any other parameter, and `ssm:GetParameters` and
-       `ssm:GetParametersByPath`, are denied for all three roles;
+     workload-observation matrix (R9-M1, R10-M1, AD-26). In that matrix:
+     - `ssm:GetParameter` is denied for Preview, Apply and Drift on every
+       parameter, the former certificate parameter
+       `/vilnacrm/test/user-service/gateway-certificate-arn` included, and
+       `ssm:GetParameters` and `ssm:GetParametersByPath` are denied on any
+       parameter (D-15);
      - `ecr:GetAuthorizationToken` is denied for all three (not needed);
+     - each SSM and token denial lists the role's unchanged seed guard
+       among its `MatchedStatements` (guard layer, R10-M1); the matched
+       position in the guard document maps, through the guard's catalog
+       `statement_ids` order, to `ae950d73…` for Preview and Drift and
+       `9f269660…` for Apply;
+     - the boundary-sharing ConfigRead roles' decisions for the new
+       allows are unchanged, and `verify_active_enrollment` passes on
+       the amended catalog (AD-26 layers 3 and 5);
+     - `acm:DescribeCertificate` is allowed for Preview and Apply on the
+       XP-10 ARN only;
      - the three ECR reads are allowed for Preview and Apply on the two
        TEST repositories only;
      - `iam:SimulatePrincipalPolicy` is allowed for Apply on the
@@ -2589,14 +2799,15 @@ measured value or change the design); a default never relaxes D-14.
   row 51, and S4.7 (row 52) follows it in C-runner (R8-m7).
 - **Depends on:** S4.11 (the receipt library, including the projection
   inputs of a success receipt), S4.14's token-free image config read
-  and receipt-certificate reader parameter (R9-M1, R9-m2), S4.13 (the drift gate and
+  and its removal of the SSM read path (R9-M1, R9-m2, user decision
+  D-15), S4.13 (the drift gate and
   `validate_drift`), S4.14 (the stack → contract mapping, the PROD schema,
   the PROD path and its stack-aware provider-identity binding), S4.15
   (the scheduled-drift result schema and the gate-2b rule), S5.17 and
   S5.24 (the Drift-role read set), XP-14 (the observer's PROD coordinates
   and the committed `specs/poc/poc-prod.json`), and XP-15 and XP-16 (the
-  PROD certificate parameter and boundary path that the PROD capability
-  reads use).
+  PROD certificate, whose ARN the PROD contract pins, and the boundary
+  path that the PROD capability reads use).
 - **First case (R7-m9, R8-m3):** the story checks that the S5.24 read
   inventory (row 50) covers every AWS call the scheduled path makes,
   derived from the code, not from a summary: the state bucket, KMS key
@@ -2635,7 +2846,7 @@ measured value or change the design); a default never relaxes D-14.
   `phase: workload` is a STOP for the TEST campaign and for S4.17's TEST
   job: the job fails closed on the denied read (N7), and a user decision
   follows. S5.24 is unconditional because the Drift role holds none of the
-  IAM, ECR image or ACM reads (it needs no SSM read, R9-m2; the round-7 request for a conditional
+  IAM, ECR image or ACM reads (it needs no SSM read, R9-m2, D-15; the round-7 request for a conditional
   row "like S5.6" is kept in position, before this story, but its
   condition is always true, and an inventory that lived here would be a
   forward trigger from row 51 to row 50). A call missing from the
@@ -2783,19 +2994,24 @@ measured value or change the design); a default never relaxes D-14.
     `SourceAdmission` facts, the applied contract (read and bound as
     above), the full image rows (`uri`, `manifest_media_type`,
     `config_digest`, `config_size`, `platform`; entrypoint lines 52-93)
-    and the certificate observation
-    `{parameter_arn, parameter_version, certificate_arn}` (capabilities
-    line 277), or `null`. Fresh Drift-role reads are **comparisons, never
-    projection inputs**: `images.inspect_images(contract)` must return rows
-    equal to the receipt's rows;
-    `capabilities.inspect_capabilities(contract, certificate=…)` (role
-    reads, the execution-role pull simulation and the ACM read of the
-    receipt's certificate ARN) must pass and return the receipt's
-    observation unchanged. There is no fresh parameter read (R9-m2): the
-    projection's certificate comes from the receipt, and the refresh plan
-    observes the deployed listener. A gateway-side re-pointing of the
-    parameter after the last apply is seen by the next PR `plan`, not by
-    this job (AD-26); the checkpoint captured with
+    and the certificate observation, which is `null` for every receipt
+    this plan writes (user decision D-15; S4.14 narrows the schema), so
+    the certificate ARN is the applied contract's
+    `workload.external.domain.certificate_arn`. Fresh Drift-role reads
+    are **comparisons, never projection inputs**:
+    `images.inspect_images(contract)` must return rows equal to the
+    receipt's rows; `capabilities.inspect_capabilities(contract)` on the
+    applied contract (role reads, the execution-role pull simulation and
+    the ACM read of the contract's certificate ARN) must pass and return
+    `None`, equal to the receipt's `null` observation. There is no
+    parameter read on any path (R9-m2, D-15): the projection's
+    certificate ARN comes from the contract the receipt applied, and the
+    refresh plan observes the deployed listener. A certificate
+    replacement (a new ARN) changes the contract only through a reviewed
+    USI contract PR, and this job keeps checking the applied contract's
+    ARN until an apply of the new ARN writes a new success receipt; it
+    fails closed once the old certificate is no longer issued or valid
+    (PRD §7 XP-10 operating residual, AD-26); the checkpoint captured with
     `capture_scheduled_backend` must equal the latest success receipt's;
     and the refresh plan is the drift observation itself. A difference in
     an image row, the certificate observation or the checkpoint fails
@@ -2823,17 +3039,13 @@ measured value or change the design); a default never relaxes D-14.
     gate's `stack == "test"`, line 138), and runs `validate_drift` against
     that receipt's checkpoint. It calls `images.inspect_images(contract)`
     (S4.14's token-free config read, so no `ecr get-authorization-token`)
-    and `capabilities.inspect_capabilities(contract, certificate=…)`
-    directly. Here `certificate` is the latest success receipt's
-    certificate observation (R9-m2, AD-26), passed through the
-    keyword-only parameter that S4.14 adds. With it, the reader
-    validates the observation with `certificate_projection` (lines
-    269-292), takes the certificate ARN from it and never calls
-    `ssm get-parameter` (`_certificate_input`, line 299, is skipped). It
-    still runs the role reads, the execution-role pull simulation and ACM
-    `DescribeCertificate` on that ARN (issued, currently valid, bound to
-    the FQDN; `_certificate`, lines 243-266). This story does not edit
-    the capabilities or images modules. It calls none of `_review`, `observe_workload`,
+    and `capabilities.inspect_capabilities(contract)` directly, on the
+    contract the receipt applied (R9-m2, D-15, AD-26). After S4.14 the
+    reader has no SSM path: it runs the role reads, the execution-role
+    pull simulation and ACM `DescribeCertificate` on the contract's
+    certificate ARN (issued, currently valid, bound to the FQDN;
+    `_certificate`, lines 243-266). This story does not edit the
+    capabilities or images modules. It calls none of `_review`, `observe_workload`,
     `revalidate_requester`, `capture_backend` or `_trusted_root`. It
     reuses the materializer, `run_pulumi_command._dispatch_command("plan", …)`
     and `validate_drift` unchanged. The saved plan stays in the worker's
@@ -2976,18 +3188,17 @@ measured value or change the design); a default never relaxes D-14.
 - **N5 (R7-m1):** a receipt lookup that fails, or whose deployment or
   status listing is incomplete, exits non-zero and writes no record.
 - **N6 (R7-M2, R8-m4, R9-m2):** an image row that differs from the
-  latest success receipt's, a failed capability read, or a receipt
-  certificate whose ACM read is not issued, not currently valid or not
-  bound to the FQDN fails with the item named; a projection digest that differs from the receipt's
+  latest success receipt's, a failed capability read, or an applied
+  contract certificate ARN whose ACM read is not issued, not currently
+  valid or not bound to the FQDN fails with the item named (D-15); a projection digest that differs from the receipt's
   fails with `workload-drift-projection-binding`.
 - **N7 (R7-m9):** a denied Drift-role read fails the job; no read is
   skipped.
-- **N10 (R9-m2, AD-26):** the scheduled capability and image reads make
-  no `ssm get-parameter` and no `ecr get-authorization-token` call (the
-  fakes fail on either); a receipt certificate observation that fails
-  `certificate_projection` fails the job; without `certificate=` the PR
-  reader still reads the parameter (the existing capabilities tests,
-  `tests/unit/test_poc_workload_capabilities.py`, pass unchanged).
+- **N10 (R9-m2, D-15, AD-26):** the scheduled capability and image reads
+  make no `ssm get-parameter` and no `ecr get-authorization-token` call
+  (the fakes fail on either); a success receipt whose certificate
+  observation is not `null`, or whose applied contract carries no
+  `certificate_arn`, fails the job.
 - **N9 (R8-M1):** a workflow fixture whose workload job lacks the upload,
   has a step after it, has an `if` or `continue-on-error` on it, uses
   another action SHA, or sets `if-no-files-found` to anything but
@@ -3041,8 +3252,11 @@ measured value or change the design); a default never relaxes D-14.
   workload contract PR: the `specs/poc/poc-prod.json` change from the
   XP-14 `phase: registry` file to `phase: workload`, its `workload_step`,
   `workload_operation`, `scaling`, `documentdb_secret_policy`,
-  `drift.out_of_band_fields` and PROD `central` fields, each validated by
-  the S4.14 PROD schema and each Kravalg-approved. The S4.15 hard-stop test
+  `drift.out_of_band_fields` and PROD `central` fields, and the PROD
+  gateway certificate ARN (`workload.external.domain.certificate_arn`,
+  the XP-15 ARN the gateway owner supplies; user decision D-15; a later
+  certificate replacement is another such PR), each validated by the
+  S4.14 PROD schema and each Kravalg-approved. The S4.15 hard-stop test
   refuses a `phase: workload` `poc-prod.json` unless `poc-test.json`
   satisfies gate 2a or 2b. The `admission.prod` PRs stay in
   `poc-test.json`. The S4.17 jobs are data-driven (R8-m1): the PROD job
@@ -3064,24 +3278,30 @@ measured value or change the design); a default never relaxes D-14.
   - S4.6, S4.8, S4.14, S5.6 (if triggered), S5.19, S5.20 merged and
     published (with S3.5-A already merged; D-2 PROD), D-3 resolved, S5.16
     with S4.6 step 17 evidence if PROD is publicly exposed, XP-14 (PROD
-    registry), XP-15 (the PROD gateway certificate parameter, the PROD
-    counterpart of XP-10) and XP-16 (the PROD permissions-boundary path,
-    the PROD counterpart of XP-11, which
+    registry), XP-15 (the issued PROD gateway certificate, whose ARN the
+    gateway owner supplies and the gate-2a contract PR pins; the PROD
+    counterpart of XP-10; user decision D-15) and XP-16 (the PROD
+    permissions-boundary path, the PROD counterpart of XP-11, which
     `scripts/poc_workload_capabilities.py` line 111 pins for TEST), both
-    gate-2a prerequisites (ordered row 49; R8-m6); S4.14 pins their
-    TEST-analogous names as an assumption the owners confirm in the S4.14
-    PR, row 49 makes them exist live under those names, and this story
-    verifies them live (the PROD capability
-    reads of `prod_preview` pass with the pinned names; a difference is a
-    STOP before gate 2a); S5.24a applied: the PROD Preview and Apply
-    workload-observation reads, their boundary additions and their
-    narrowed `ssm:GetParameter` denies (ordered row 50, R9-M1, AD-26).
-    Without it `prod_preview` fails with `AccessDenied`. Also a PROD
-    live simulator run before gate 2a. It repeats the S5.24a matrix: the
-    exact XP-15 parameter allowed for Preview and Apply, any other
-    parameter denied, and `ecr:GetAuthorizationToken` denied as not
-    needed. It repeats the PROD part of the S5.24b matrix too: the Drift
-    allows, and every parameter and the token denied;
+    gate-2a prerequisites (ordered row 49; R8-m6); S4.14 pins the
+    TEST-analogous boundary path as an assumption the bootstrap owner
+    confirms in the S4.14 PR, row 49 makes it exist live under that name
+    and the certificate issued, and this story verifies both live (the
+    PROD capability reads of `prod_preview` pass with the pinned path and
+    the contract ARN; a difference is a STOP before gate 2a); S5.24a
+    applied: the PROD Preview and Apply workload-observation reads and
+    their PROD seed boundary amendment, with no deny or seed guard
+    narrowed (ordered row 50, R9-M1, R10-M1, D-15, AD-26). Without it
+    `prod_preview` fails with `AccessDenied`. Also a PROD live simulator
+    run before gate 2a. It repeats the S5.24a matrix: the allows on the
+    PROD roles, repositories and XP-15 ARN; `ssm:GetParameter` denied for
+    every role on every parameter; `ecr:GetAuthorizationToken` denied;
+    the guard-layer rows (the PROD guards unchanged, `prod.json` lines
+    649-663, 712-725 and 747-760), the renderer-scope, ConfigRead and
+    attachment rows, and the PROD Preview role's `iam:SimulatePrincipalPolicy`
+    on the PROD execution role only. It repeats
+    the PROD part of the S5.24b matrix too: the Drift allows, and every
+    parameter and the token denied;
   - **S4.17 (R6-m11), before gate 2b:** merged, with two linked result
     records in the receipt, each with its run link, `artifact_id` and
     `artifact_sha256` (R8-M1): a clean scheduled TEST workload drift run
@@ -3129,34 +3349,103 @@ measured value or change the design); a default never relaxes D-14.
 
 ## Epic 5: Cross-repo prerequisites
 
-**Service permissions boundary (found by the revision-9 pre-commit
-audit; architecture AD-26).** The service roles
-`GitHubCiPreview-…-{env}`, `GitHubCiApply-…-{env}` and
-`GitHubCiDrift-…-{env}` each carry the permissions boundary
-`GovernanceBoundary-<project>-<env>` (BI `origin/main`
-`pulumi/infra/governance.py` lines 486-497, ARN at lines 98-109). That
-boundary (`pulumi/infra/governance_automation.py`
-`service_boundary_policy`, lines 422-455) allows only these:
+**Service permissions boundary: seed-owned (found by the revision-9
+pre-commit audit; corrected by round 10, R10-M1, R10-m1, R10-m2;
+architecture AD-26).** The service roles `GitHubCiPreview-…-{env}`,
+`GitHubCiApply-…-{env}` and `GitHubCiDrift-…-{env}` each carry the
+permissions boundary `GovernanceBoundary-user-service-infrastructure-{env}`
+(BI `origin/main` `pulumi/infra/governance.py` lines 486-497, ARN at
+lines 98-109). BI renders its content in
+`pulumi/infra/governance_automation.py` `service_boundary_policy`
+(lines 422-455), which allows only these:
 - the caller identity;
 - the state bucket;
 - the Pulumi KMS alias;
 - the repository's CI secret reads;
 - the TEST PoC statements.
 
-So every BI story in this table that gives one of those three roles a
-new allow also adds exactly that allow to the boundary, in the same PR
-and review. These are S5.2, S5.17, the S5.4 identity statements, S5.24a
-and S5.24b, and the TEST XP-11 reads. The story's simulator matrix
-proves it, because `iam:SimulatePrincipalPolicy` evaluates the boundary.
-No boundary addition is wider than its allow.
+The installed boundary is seed-owned, not governance-owned: an
+`existing_capability_boundary` in the BI seed catalog
+(`pulumi/seed/catalogs/test.json` lines 307-319, template `4a170a1c…`;
+`prod.json` lines 307-319, template `b331c0c6…`), whose catalog hashes
+are pinned in `pulumi/seed/policy_registry.py` lines 18-21. #219 needed a
+dedicated seed amendment for its boundary change
+(`pulumi/seed/test_poc_prerequisite_amendment.py` lines 1-5, 20-40 and
+58-72), with a CloudFormation owner and a size limit. So every BI story
+in this table that gives one of those three roles a new allow also adds
+that allow to the boundary **through a seed catalog amendment**, with:
+- a new catalog hash pin in `policy_registry.py`;
+- a named seed owner;
+- CloudFormation change-set evidence;
+- `@Kravalg`'s approval (the seed review, in addition to the BI
+  security review of the identity change);
+- **a size check (R10-m1):** the boundary is one managed policy of at
+  most 6144 characters (`governance_automation.py` lines 185-194; the
+  amendment's check at `test_poc_prerequisite_amendment.py` lines
+  69-72), shared by Preview, Apply, Drift and the ConfigRead roles
+  (`GitHubCiConfigRead-user-service-infrastructure-{env}` and its
+  `-test-pr` or `-prod-preview` variant; pre-commit audit 4), so copying every allow
+  exactly will not fit. Each story records the rendered boundary size in
+  its amendment. The fallback form is a service or resource-family
+  ceiling in the boundary, as in BI's `platform_control_boundary`
+  (`pulumi/infra/platform_iam.py` lines 642-645), approved in the seed
+  review, with the exact allows kept in the identity policies. S5.2
+  already anticipates several managed policies for the Apply role's
+  identity capability (its attachment quota below); the boundary stays
+  one policy.
+
+These stories are S5.2, S5.17, the S5.4 identity statements, S5.24a and
+S5.24b, the TEST XP-11 reads and XP-14's PROD `s3:GetBucketVersioning`.
+S5.5 adds no boundary content: S5.2's amendment already covers the Apply
+role's `secretsmanager:PutResourcePolicy` and `GetResourcePolicy` on the
+`secret:rds!cluster-*` pattern, so S5.5's later exact-ARN grant on the
+XP-8 secret is an identity change only (pre-commit audit 3).
+**Seed attachment constraint (pre-commit audit 1; AD-26 layer 5):** the
+seed's `verify_active_enrollment` (`pulumi/seed/policy_registry.py` lines
+554-591) lets the Apply role hold only its guard and the managed
+policies of `_mutable_attachment_sets` (lines 532-551: `-pulumi-backend`,
+`-secret-read-deny`, and the TEST `-poc-prerequisites` that #219 adds);
+every other role keeps its exact attachment set. New Preview and Drift
+allows go into their existing inline documents. **Inline size check
+(pre-commit recheck N1):** IAM limits a role's aggregate inline policy size to
+10,240 characters (whitespace not counted), so S5.17, S5.4, XP-11,
+S5.24a and S5.24b each record the aggregate rendered inline size of
+every Preview and Drift role they touch (current documents plus the
+new allows) and fail an offline check above the limit. The fallback is a
+new managed policy for that role, which needs a seed catalog
+`attachment_arns` amendment and a seed code change under the same seed
+review and serialization order. A story that adds a new
+Apply managed policy (S5.2's capability documents, S5.24a's PROD reads,
+or XP-11 if its reads do not fit in `-poc-prerequisites`) also changes
+the seed code (`_mutable_attachment_sets`), the governance-apply write
+scope (`pulumi/infra/governance_automation.py` `_managed_policy_resources`,
+lines 480-489) and, by catalog amendment, the Apply guard's policy-write
+`NotResource` list (as #219 does, `test_poc_prerequisite_amendment.py`
+lines 135-144), in the same seed review and serialization order; its
+matrix has a `verify_active_enrollment` row.
+**Serialization (R10-m2):** every amendment pins its baseline policy
+hashes and its result catalog hash (`test_poc_prerequisite_amendment.py`
+lines 32-40), and every amendment edits `pulumi/seed/policy_registry.py`
+(`CATALOG_HASHES`: TEST line 19, PROD line 20, adjacent; some also
+`_mutable_attachment_sets`), so a TEST and a PROD amendment conflict
+too (pre-commit recheck N2). Only one amendment is open at a time across both
+catalogs, in C-BI order: #219's own amendment (bootstrap PRs #284 and #285, as round
+10 reports; an external precondition of row 9, with no ordered row of
+its own, pre-commit audit 8) → S5.2 → S5.17 → S5.4 (rows 9-11) → XP-11 (row 42, after
+S5.18a) → XP-14's PROD addition (row 48) → S5.24a → S5.24b (row 50);
+each takes its predecessor's result hash as its baseline (architecture
+§4, C-BI). The story's simulator matrix proves each addition, because
+`iam:SimulatePrincipalPolicy` evaluates the boundary. No boundary
+addition or ceiling adds an action outside its allows' services, and no
+deny or seed guard is widened or narrowed by it (D-15).
 
 | Story | Repo | Deliverable | Key acceptance (P / N / B) |
 | --- | --- | --- | --- |
 | S5.8 | US | Merge #501 | Merged / the image command differs from the USI contract command → refused (FR-25) / healthcheck grace period covers supervisor start |
 | S5.1 | BI | **Every central role, created first (M-3):** ECS execution and task roles, app-rotation, redeploy and bootstrap-job roles, the restore-operator and restore-reader roles (trust policy only; their grants land in S5.18a), and the TEST exercise role (trust only; grants in S5.23). Their ARNs are published in central metadata, which the S3.3 endpoint policy reads. Secret patterns `name-??????`, deterministic ARNs; task role SQS, SES, `elasticache:Connect` on the exact replication-group and user ARNs (D-1). **No KMS statements** (they land in S5.4 after the keys exist) and no bootstrap-job grant on the DocumentDB-managed secret (it lands in S5.5 after XP-8). XP-1: recover or re-author `d41c019`. | Simulator allows / out-of-scope and `GetSecretValue` on the task role denied / `iam:PassedToService` present |
-| S5.2 | BI | Apply-role workload capability (N-11): ecs, ec2 (including `CreateFlowLogs` and endpoints; no `DeleteFlowLogs`), elasticache (including users and groups), docdb/rds, logs (`CreateLogDelivery`; `DeleteLogDelivery` belongs to the TEST recovery role), cloudwatch, application-autoscaling (`RegisterScalableTarget` including `SuspendedState`, `PutScalingPolicy`, `PutScheduledAction` on the two service resource IDs; no `DeleteScheduledAction`), elbv2, s3, secretsmanager (`CreateSecret`, `PutResourcePolicy`, `GetResourcePolicy`, `RotateSecret` with `secretsmanager:RotationLambdaARN` limited to the BI functions, tagging; **no delete action** — `DeleteResourcePolicy`, `CancelRotateSecret`, `DeleteSecret` stay with the TEST recovery role, because no admitted apply mode deletes), `lambda:InvokeFunction` on BI functions, events, sns. **Managed password (R4-M9, V-21, A-27):** `rds:CreateDBCluster` with `rds:ManageMasterUserPassword` = true; `secretsmanager:CreateSecret` and `TagResource` on `secret:rds!cluster-*`; `kms:DescribeKey` on `alias/aws/secretsmanager` (`kms:ResourceAliases`); `secretsmanager:DescribeSecret` on `secret:rds!cluster-*` (metadata only). The managed-secret `PutResourcePolicy`/`GetResourcePolicy` is granted on the exact XP-8 ARN in S5.5. **Runtime-CMK describe:** `kms:DescribeKey` with the AD-15a `kms:ViaService` set (added in S5.4 once the key ARN exists). **SLRs:** `iam:CreateServiceLinkedRole` only with `iam:AWSServiceName` ∈ {ecs, ecs.application-autoscaling, elasticache, rds, elasticloadbalancing}, or BI pre-creates them. **Attachment quota:** the capability fits within the role's managed-policy attachment quota and the 6144-character managed-policy size; the story records the count and sizes. `PassRole` limited to the ECS roles. `GetSecretValue`, `PutSecretValue`, `UpdateSecretVersionStage` and `GetFunction` denies stay. The Apply role's `up-plan` workload-observation reads and its narrowed `ssm:GetParameter` deny are XP-11 (TEST) and S5.24a (PROD), not this story (R9-M1, architecture AD-26). V-15, V-21 (docs). | Matrix allows / denies stay; `RotateSecret` with another function ARN denied; `CreateDBCluster` with `ManageMasterUserPassword` false denied; `CreateSecret` on a declared-name pattern other than the listed names denied / attachment count and sizes within quota |
-| S5.17 | BI | **Preview and drift read capability (FR-33, B-2):** read-only grants for `GitHubCiPreview-…-{env}` and `GitHubCiDrift-…-{env}` on every workload resource type (ec2, ecs, docdb/rds describe, elasticache, logs, cloudwatch, application-autoscaling including scheduled actions, elbv2, wafv2, apigateway, events, sns, s3 configuration, secretsmanager metadata). **No KMS statement here** (m7): the KMS read lands in S5.4 on the exact key ARNs. **Simulation grant (m6):** the preview role gets `iam:SimulatePrincipalPolicy` and `iam:GetContextKeysForPrincipalPolicy` on the exact ARNs of the S4.6 step-3 role list only, and `iam:SimulateCustomPolicy` (read-only, no resource scope) for the step-11 resource-policy proof. Simulator-matrix regression for both roles. **Not here (R9-M1):** the workload-observation reads of the PR `plan` and `up-plan` paths (`iam:GetRole`, the ECR image reads, `acm:DescribeCertificate`, `ssm:GetParameter` on the exact certificate parameter) and the narrowed `ssm:GetParameter` deny are XP-11 for TEST (gate 1) and S5.24a for PROD (gate 2a); architecture AD-26. | Every workload read allowed / `GetSecretValue`, `GetFunction`, `kms:Decrypt`, every write, and `SimulatePrincipalPolicy` on a role outside the list denied / the existing registry-phase matrix is unchanged |
-| S5.4 | BI | CMKs per D-4 (decided 2026-09-30): the runtime CMK (secrets, every workload log group, flow-log bucket, SNS topic), the JWT signing CMK (RSA_4096) and the 2FA CMK. Key policies follow the **per-key table architecture AD-15a** (principal, action, condition): no `root` `kms:*` statement; `logs.<region>.amazonaws.com` with `kms:EncryptionContext:aws:logs:arn`; `delivery.logs.amazonaws.com` with `aws:SourceAccount`/`aws:SourceArn`; cloudwatch and events for SNS; the ECS execution role `kms:Decrypt` with `kms:ViaService=secretsmanager.<region>.amazonaws.com`; the app-rotation role; the task role on the JWT and 2FA keys; the preview and drift roles' read (m7); the apply role's `DescribeKey` via logs, secretsmanager, sns and s3. Every named role already exists (S5.1, or the pre-existing preview, drift and apply roles). Then, in the same story and after the keys exist, the matching identity statements. CloudTrail read management events. | Grants only the AD-15a rows / no broad `kms:*`; a key policy naming a role absent from the role inventory fails the offline check; an execution-role `Decrypt` without `kms:ViaService` fails / JWT key-change procedure |
+| S5.2 | BI | Apply-role workload capability (N-11): ecs, ec2 (including `CreateFlowLogs` and endpoints; no `DeleteFlowLogs`), elasticache (including users and groups), docdb/rds, logs (`CreateLogDelivery`; `DeleteLogDelivery` belongs to the TEST recovery role), cloudwatch, application-autoscaling (`RegisterScalableTarget` including `SuspendedState`, `PutScalingPolicy`, `PutScheduledAction` on the two service resource IDs; no `DeleteScheduledAction`), elbv2, s3, secretsmanager (`CreateSecret`, `PutResourcePolicy`, `GetResourcePolicy`, `RotateSecret` with `secretsmanager:RotationLambdaARN` limited to the BI functions, tagging; **no delete action** — `DeleteResourcePolicy`, `CancelRotateSecret`, `DeleteSecret` stay with the TEST recovery role, because no admitted apply mode deletes), `lambda:InvokeFunction` on BI functions, events, sns. **Managed password (R4-M9, V-21, A-27):** `rds:CreateDBCluster` with `rds:ManageMasterUserPassword` = true; `secretsmanager:CreateSecret` and `TagResource` on `secret:rds!cluster-*`; `kms:DescribeKey` on `alias/aws/secretsmanager` (`kms:ResourceAliases`); `secretsmanager:DescribeSecret` on `secret:rds!cluster-*` (metadata only). The managed-secret `PutResourcePolicy`/`GetResourcePolicy` is granted on the exact XP-8 ARN in S5.5. **Runtime-CMK describe:** `kms:DescribeKey` with the AD-15a `kms:ViaService` set (added in S5.4 once the key ARN exists). **SLRs:** `iam:CreateServiceLinkedRole` only with `iam:AWSServiceName` ∈ {ecs, ecs.application-autoscaling, elasticache, rds, elasticloadbalancing}, or BI pre-creates them. **Attachment quota:** the capability fits within the role's managed-policy attachment quota and the 6144-character managed-policy size; the story records the count and sizes. `PassRole` limited to the ECS roles. `GetSecretValue`, `PutSecretValue`, `UpdateSecretVersionStage` and `GetFunction` denies stay. The Apply role's `up-plan` workload-observation reads are XP-11 (TEST) and S5.24a (PROD), not this story; no `ssm:GetParameter` and no narrowed deny or seed guard anywhere (R9-M1, user decision D-15, architecture AD-26). Its boundary additions go through a TEST and a PROD seed catalog amendment with the Epic 5 size check, and its extra Apply managed policies carry the Epic 5 attachment changes (seed code, write scope and guard amendment) (R10-M1, R10-m1, pre-commit audit 1). The amendment also covers `secretsmanager:PutResourcePolicy` and `GetResourcePolicy` on `secret:rds!cluster-*` for S5.5's later exact-ARN grant (pre-commit audit 3). V-15, V-21 (docs). | Matrix allows / denies stay; `RotateSecret` with another function ARN denied; `CreateDBCluster` with `ManageMasterUserPassword` false denied; `CreateSecret` on a declared-name pattern other than the listed names denied / attachment count and sizes within quota |
+| S5.17 | BI | **Preview and drift read capability (FR-33, B-2):** read-only grants for `GitHubCiPreview-…-{env}` and `GitHubCiDrift-…-{env}` on every workload resource type (ec2, ecs, docdb/rds describe, elasticache, logs, cloudwatch, application-autoscaling including scheduled actions, elbv2, wafv2, apigateway, events, sns, s3 configuration, secretsmanager metadata). **No KMS statement here** (m7): the KMS read lands in S5.4 on the exact key ARNs. **Simulation grant (m6):** the preview role gets `iam:SimulatePrincipalPolicy` and `iam:GetContextKeysForPrincipalPolicy` on the exact ARNs of the S4.6 step-3 role list only, and `iam:SimulateCustomPolicy` (read-only, no resource scope) for the step-11 resource-policy proof. Simulator-matrix regression for both roles. **Not here (R9-M1):** the workload-observation reads of the PR `plan` and `up-plan` paths (`iam:GetRole`, the ECR image reads, `acm:DescribeCertificate`) are XP-11 for TEST (gate 1) and S5.24a for PROD (gate 2a); no role gets `ssm:GetParameter` (user decision D-15); architecture AD-26. Its boundary additions go through a seed catalog amendment with the Epic 5 size check (R10-M1, R10-m1). **Inline size (pre-commit recheck N1):** the story records the aggregate rendered inline size of each of the two roles and fails above IAM's 10,240 characters; fallback a new managed policy (seed `attachment_arns` amendment plus seed code change, same seed review). | Every workload read allowed / `GetSecretValue`, `GetFunction`, `kms:Decrypt`, every write, and `SimulatePrincipalPolicy` on a role outside the list denied / the existing registry-phase matrix is unchanged |
+| S5.4 | BI | CMKs per D-4 (decided 2026-09-30): the runtime CMK (secrets, every workload log group, flow-log bucket, SNS topic), the JWT signing CMK (RSA_4096) and the 2FA CMK. Key policies follow the **per-key table architecture AD-15a** (principal, action, condition): no `root` `kms:*` statement; `logs.<region>.amazonaws.com` with `kms:EncryptionContext:aws:logs:arn`; `delivery.logs.amazonaws.com` with `aws:SourceAccount`/`aws:SourceArn`; cloudwatch and events for SNS; the ECS execution role `kms:Decrypt` with `kms:ViaService=secretsmanager.<region>.amazonaws.com`; the app-rotation role; the task role on the JWT and 2FA keys; the preview and drift roles' read (m7); the apply role's `DescribeKey` via logs, secretsmanager, sns and s3. The Preview and Drift reads go into their inline documents, whose aggregate rendered size the story records against IAM's 10,240-character limit (pre-commit recheck N1; fallback a new managed policy with a seed `attachment_arns` amendment and seed code change). Every named role already exists (S5.1, or the pre-existing preview, drift and apply roles). Then, in the same story and after the keys exist, the matching identity statements. CloudTrail read management events. | Grants only the AD-15a rows / no broad `kms:*`; a key policy naming a role absent from the role inventory fails the offline check; an execution-role `Decrypt` without `kms:ViaService` fails / JWT key-change procedure |
 | S5.3 | BI | Functions using the S5.1 roles: app rotation + idempotent seed (no VPC), redeploy (no VPC, deterministic service ARNs), bootstrap-job function package (VPC attachment deferred to S5.5), their log groups created explicitly with `kms_key_id` = the runtime CMK (D-4), Lambda permissions (`aws:SourceAccount`), `RotationSucceeded` rule, allow-listed secret patterns (NFR-06). V-4 (docs). | Step unit tests / `testSecret` failure means no stage move; a function log group without the runtime CMK fails / seed on a secret with AWSCURRENT returns `noop`; seed output has no material |
 | S5.7 | BI | **TEST recovery (D-7, decided 2026-09-30; unconditional):** the role `GitHubCiRecovery-user-service-infrastructure-test`, trusted only for OIDC `sub` `repo:VilnaCRM-Org/user-service-infrastructure:environment:test-recovery` on `main` (the `test-recovery` environment itself is configured by the USI repository controls, S5.21: Kravalg sole reviewer). Grants per architecture AD-16: state read and write, `s3:DeleteObject` on the state lock prefix (`.pulumi/locks/*`) only, state secrets-provider key use; `rds:ModifyDBCluster` on `cluster:user-service-infrastructure-test-docdb`; the per-type delete-action map `recovery/delete-actions.json` from S4.10 (pinned provider delete paths, drain and detach calls included; V-26), scoped to the TEST name patterns or `aws:ResourceTag/Project=user-service-infrastructure` + `Environment=test`; no S3 bucket delete, no object delete outside the lock prefix, no KMS key management; `secretsmanager:DeleteSecret` (`secretsmanager:RecoveryWindowInDays` ≥ 7, `secretsmanager:ForceDeleteWithoutRecovery` = false — **V-15**), `RestoreSecret`, `DescribeSecret`, `CancelRotateSecret`, `DeleteResourcePolicy` on the workload patterns and `rds!cluster-*`; the import read set (S5.17). TEST only. | Exactly the recovery set; each graph type's delete allowed on the TEST pattern / PR-head assumption denied; force delete denied; `s3:DeleteBucket` and a log-bucket `s3:DeleteObject` denied; the PROD account denied / recovery window 7 allowed, 6 denied |
 | S5.18a | BI | **Restore-rehearsal grants (FR-30, M-9), before step 1:** on the S5.1 operator role, the architecture §2.1 grants (`RestoreDBClusterToPointInTime` with `UseLatestRestorableTime` on the source `cluster:user-service-infrastructure-test-docdb` and the rehearsal target, with the subnet-group and parameter-group resources, R6-m10; the achieved recovery point is the RPO evidence; `CreateDBInstance`; `ModifyDBCluster` with `rds:ManageMasterUserPassword`; `secretsmanager:CreateSecret`/`TagResource` on `rds!cluster-*`; `kms:DescribeKey` on `alias/aws/secretsmanager`; `kms:CreateGrant`/`Decrypt`/`DescribeKey` on the DocumentDB storage key via `rds.<region>.amazonaws.com`; describe and delete on `<stack>-docdb-restore-rehearsal` only; V-22 docs); on the S5.1 reader role, `GetSecretValue` on the temporary cluster's managed secret by tag condition (V-19) or a reviewed ephemeral exact-ARN grant; the reader package **without** VPC attachment. | Restore and read allowed for the rehearsal name / restore to any other name, a point-in-time restore from any other source cluster, delete of the real cluster, and the reader on the real cluster's secret denied / `ManageMasterUserPassword` false denied |
@@ -3166,7 +3455,7 @@ No boundary addition is wider than its allow.
 | S5.22 | USI (repository controls; admin apply by Kravalg) | **Required manifest approval check (R4-M4, m2, m3), after S4.3:** USI's own ruleset requires the status check `abandon-manifest-approval` (created by S4.3): it joins `REQUIRED_STATUS_CHECKS` (USI `scripts/_github_repository_controls.py` line 13). The ruleset's checks are branch-wide (only a `ref_name` condition), so the check succeeds on PRs that do not change `recovery/abandon-manifest.json` and enforces Kravalg's approval on PRs that do. **Own issuer-pinning code (m2):** today `required_status_checks_rule` (lines 46-60) and `_harden_status_check` (lines 64-78) pin only `Governance Promotion`; this story adds a pinned-context map so `abandon-manifest-approval` is emitted with `integration_id` = the GitHub Actions App ID, `_harden_status_check` sets it and refuses an existing entry with another issuer, and `ruleset_verification_blockers` (line 385) reports a missing or different issuer. | Required check present with the pinned issuer / a ruleset without it, or an entry without `integration_id` or with another App's ID (spoofing test), fails verification / other contexts and paths unaffected; the `Governance Promotion` pin is unchanged |
 | S5.23 | BI | **TEST exercise role (R4 audit, live-action identities):** grants on the S5.1 role `GitHubCiExercise-user-service-infrastructure-test`, trusted only for OIDC `sub` `repo:VilnaCRM-Org/user-service-infrastructure:environment:test-exercise` on `main`: `secretsmanager:RotateSecret` on the declared patterns and `rds!cluster-*` (TEST), with `lambda:InvokeFunction` on the BI rotation function ARNs (V-6); `sqs:SendMessage` on the three DLQs only; `cloudwatch:SetAlarmState` on the workload alarms and the Application Auto Scaling policy alarms of the two services; `s3:GetObject`/`ListBucket` on the flow-log bucket plus the AD-15a runtime-key row (`kms:Decrypt` via S3); `cloudtrail:LookupEvents`; `logs:StartQuery`/`GetQueryResults` on the workload log groups. No `GetSecretValue`, `PutSecretValue` or write outside this list, so `denied-read` is refused. TEST account only. | Matrix allows exactly the list / `GetSecretValue`, `PutSecretValue` and PROD denied / PR-head assumption denied |
 | S5.6 | BI (conditional) | `MaxSessionDuration` plus `role-duration-seconds` | Covers the measured time plus the 300 s margin / below-margin value refused / exactly at the margin accepted |
-| S5.24 | BI (R7-m9, R8-m3, R9-M1, R9-m1, R9-m2; after XP-14, XP-15 and XP-16, before S4.17 and gate 2a) | **Drift-role read inventory and grants for scheduled workload drift, plus the PROD Preview and Apply workload-observation reads (R9-M1 (c)).** **Two separately reviewed and approved BI PRs (pre-commit audit):** **S5.24a**, the PROD Preview and Apply reads (needed for gate 2a), and **S5.24b**, the Drift reads for TEST and PROD (needed for S4.17 and gate 2b). The split separates the two reviews and their records, not their gate effects: a rejected S5.24b also stops gate 2a, because S4.7 (the gate-2a story) follows S4.17 in C-runner and its live PROD simulator run repeats the PROD part of the S5.24b matrix (revision-9 recheck N1). **Service boundary (pre-commit audit, AD-26):** the preview, apply and drift roles carry `GovernanceBoundary-<project>-<env>` (BI `origin/main` `pulumi/infra/governance.py` lines 486-497; `pulumi/infra/governance_automation.py` `service_boundary_policy`, lines 422-455). Each PR adds every one of its allows to that boundary, exactly as narrow; otherwise the allows stay implicitly denied. **Why the PROD Preview and Apply reads are here (R9-M1 (c)):** every PR `plan` and `up-plan` calls `observe_workload` (`scripts/poc_workload_runner.py` lines 55 and 178; `scripts/poc_workload_admission.py` lines 464-475) under the Preview and Apply roles (`scripts/poc_backend_observer.py` lines 173-174), so `prod_preview` (gate 2a) needs them. This story already follows XP-14, XP-15 and XP-16, whose PROD repositories, parameter and boundary path the grants name. It sits at row 50, before S4.7 (row 52), and goes through the same BI review. Extending XP-16 (a boundary path outside this plan) or adding an XP-17 row would split one IAM review across two owners and renumber the list, so neither is chosen. The TEST counterparts are XP-11 (gate 1). **Drift inventory.** The story derives, from the existing modules that the S4.17 path calls, every AWS call the Drift role `GitHubCiDrift-user-service-infrastructure-{env}` makes beyond the S5.17 set, and grants exactly those reads. Those modules are the observer, `poc_registry_runner.py` `ecr_read`, `poc_mail_prerequisite.py`, `poc_workload_images.py`, `poc_workload_capabilities.py` and the program refresh. **Registry rows and refresh (R8-m3):** the refresh also reads the eleven registry resources, and S4.17 runs the capture's registry-row checks: `ecr:DescribeRepositories` (`scripts/poc_registry_runner.py` lines 185-199), `ses:GetEmailIdentity`, `route53:GetHostedZone` and `route53:ListResourceRecordSets` (`scripts/poc_mail_prerequisite.py` lines 301-310 and 389-424; the calls `scripts/poc_scheduled_registry_drift.py` lines 122-129 already makes under the Drift identity), plus the refresh reads of those three resource types from the pinned `pulumi-aws` provider source (derived as S4.10 derives delete paths). **State bucket (R9-m1):** `s3:GetBucketVersioning` on each stack's state bucket (`pulumi-user-service-infrastructure-{env}-state`), because every capture calls `s3api get-bucket-versioning` twice (`scripts/poc_backend_observer.py` lines 443 and 476). The BI read-role backend policy grants only `s3:ListBucket`, `s3:GetObject` and `s3:GetObjectVersion` (`pulumi/infra/governance.py` lines 156-164). **TEST grants cited, and their lifecycle (R9-m1).** Checked read-only against BI at the fetched `origin/main` (`bea5252`) of the local bootstrap-infrastructure clone. There, `_test_poc_capability_statements` (line 289 on) grants every purpose the following, attached at lines 457-461: `ecr:DescribeRepositories`/`ecr:ListTagsForResource` on `user-service-test-{web,worker}` (`PocRegistryMetadata`, line 347); `ses:GetEmailIdentity`/`ses:ListTagsForResource` on `user.vilnacrmtest.com` (`PocMailIdentityMetadata`, line 356); `route53:GetHostedZone`/`route53:ListResourceRecordSets` on the TEST zone (`PocDkimZoneMetadata`, line 364); and `s3:GetBucketVersioning` on the TEST state bucket (`PocBackendVersioning`, lines 369-374). None of these is present at the clone's checked-out `debd88b`. They are rendered only while the packaged identity is enabled (line 329), and at `origin/main` it is not (`pulumi/infra/test-poc-identity.json` line 11, `"enabled": false`). The unmerged #219 lifecycle (`wt-boot-219` `54e9e2f`: `"state": "enabled"` at line 11; `pulumi/infra/governance.py` lines 279-290) turns them into explicit Deny tombstones for every purpose when `withdrawn` (lines 436-457, attached at lines 503-510), and a tombstone Deny also overrides this story's Allows. So the TEST reads require the capability to stay `enabled`, which XP-9 already needs. `withdrawn` (or `disabled`) while stack `test` has `phase: workload` is a STOP. The story adds any refresh read those grants miss, and adds the PROD equivalents on XP-14's PROD repositories, identity, zone and state bucket, which no BI grant covers. **Workload reads (S5.24b: Drift, both stacks):** `iam:GetRole` on the stack's ECS execution and task roles (`_role`, `scripts/poc_workload_capabilities.py` line 89 on, with the native read set at lines 37-48; called at lines 333 and 341); `iam:SimulatePrincipalPolicy` on the stack's **execution role only** (`_pull`, lines 193-232, called at line 338 with the execution role; R8-m3); `ecr:BatchGetImage`, `ecr:BatchCheckLayerAvailability` and `ecr:GetDownloadUrlForLayer` on the stack's two workload repositories (`scripts/poc_workload_images.py` `_native`, lines 51-74, and S4.14's token-free config read; the same pull set as `PULL_ACTIONS`, capabilities lines 25-29); `acm:DescribeCertificate` on the stack's gateway certificate. **No `ecr:GetAuthorizationToken` and no `ssm:GetParameter` for the Drift role, and the Drift role's deny is not narrowed (R9-m2, AD-26):** S4.14 removes the token from the image path, and S4.17 takes the certificate ARN from the success receipt, so the scheduled path reads no parameter. The read-only policy's `DenySecretLeakingReads` (`pulumi/infra/governance.py` lines 266-271, at both `debd88b` and `bea5252`, over `_READ_ONLY_SECRET_DENY_ACTIONS`, `pulumi/infra/ci_bootstrap.py` lines 132-145) stays as it is for the Drift role. Revision 8's rationale for narrowing the token deny (the token grants nothing without the repository-scoped pull grants) is withdrawn as unproven, because a same-account repository policy that allows `*` would let any token holder pull. **PROD Preview and Apply workload-observation reads (S5.24a, R9-M1):** for `GitHubCiPreview-user-service-infrastructure-prod` and `GitHubCiApply-user-service-infrastructure-prod`, the AD-26 table. The allows are the workload reads above, plus `ssm:GetParameter` on exactly the XP-15 parameter ARN `arn:aws:ssm:eu-central-1:933245420672:parameter/vilnacrm/prod/user-service/gateway-certificate-arn` (the name S4.14 pinned and its owner confirmed). The Preview role's simulate grant stays S5.17's. The PROD capture's `s3:GetBucketVersioning` for these two roles is XP-14's (PRD §7). One narrowed deny per role: `ssm:GetParameter` taken out of `DenySecretLeakingReads` (Preview only; the document is shared with Drift, so it becomes purpose-aware) and `DenySecretLeakingReadsApply` (`pulumi/infra/ci_bootstrap.py` lines 634-663) into a Deny whose `NotResource` is exactly that ARN. `ssm:GetParameters`, `ssm:GetParametersByPath`, `ecr:GetAuthorizationToken` and every other listed action stay denied. No `kms:Decrypt` (the parameter is a `String`). **Review record (R9-m2, R9-M1 (d)).** The BI owner's security review, approved by `@Kravalg`, records: (1) the principal → action → reachable-privilege table of AD-26 for the Drift role, and the PROD Preview and Apply rows; (2) every ECR repository policy of the stack's two repositories, read read-only (a statement that allows a pull action to `*` is a STOP); (3) the non-weakening alternatives evaluated (AD-26: the token path removed, and the Drift SSM read dropped, both adopted; the contract-carried certificate ARN, a user decision, not chosen). The approving BI PR numbers (S5.24a and S5.24b) are recorded in the acceptance receipt. Without its approval a PR does not merge. A rejected review is a STOP: at gate 2a for S5.24a, and for S5.24b at S4.17 and therefore at gate 2a as well (through C-runner and the S4.7 live matrix). Each needs a user decision, which this plan does not take; if only the Apply-role narrowing is rejected, adopting the fallback design (`up-plan` reuses the Preview-role observation) needs that decision. It is unconditional, because the Drift role holds none of the IAM, ECR image or ACM reads and neither PROD PR role holds the observation reads. The round-7 request for a conditional row is kept in position (row 50, like S5.6), but its condition is always true. | Each listed read allowed for its role, including `ssm:GetParameter` on the exact XP-15 parameter for the PROD Preview and Apply roles through the narrowed deny / any write, `GetSecretValue`, `kms:Decrypt`, `ssm:GetParameter` on any other parameter (all three roles) and on the exact parameter for the Drift role, `ssm:GetParameters` and `ssm:GetParametersByPath` on any parameter, `ecr:GetAuthorizationToken` (all three roles, not needed), `iam:SimulatePrincipalPolicy` on the task role or any other role (Apply and Drift; the Preview role keeps S5.17's unchanged step-3 list), and the same reads on other roles, repositories, identities, zones, buckets or parameters denied / the existing registry and baseline drift matrices, and the Drift role's `DenySecretLeakingReads`, are unchanged; the S5.24a matrix (PROD Preview and Apply) and the S5.24b matrix (TEST and PROD Drift) are attached, and each allow row passes the permissions boundary (AD-26) |
+| S5.24 | BI (R7-m9, R8-m3, R9-M1, R9-m1, R9-m2, R10-M1, R10-m1, R10-m2, D-15; after XP-14, XP-15 and XP-16, before S4.17 and gate 2a) | **Drift-role read inventory and grants for scheduled workload drift, plus the PROD Preview and Apply workload-observation reads (R9-M1 (c)).** **Two separately reviewed and approved BI PRs (pre-commit audit):** **S5.24a**, the PROD Preview and Apply reads (needed for gate 2a), and **S5.24b**, the Drift reads for TEST and PROD (needed for S4.17 and gate 2b). The split separates the two reviews and their records, not their gate effects: a rejected S5.24b also stops gate 2a, because S4.7 (the gate-2a story) follows S4.17 in C-runner and its live PROD simulator run repeats the PROD part of the S5.24b matrix (revision-9 recheck N1). **Service boundary (pre-commit audit, AD-26; seed-owned, R10-M1):** the preview, apply and drift roles carry `GovernanceBoundary-user-service-infrastructure-<env>` (BI `origin/main` `pulumi/infra/governance.py` lines 486-497; content rendered by `pulumi/infra/governance_automation.py` `service_boundary_policy`, lines 422-455; installed as the seed-owned `existing_capability_boundary` of `pulumi/seed/catalogs/{test,prod}.json` lines 307-319, catalog hashes pinned in `pulumi/seed/policy_registry.py` lines 18-21). Each PR adds every one of its allows to that boundary through a seed catalog amendment (new catalog hash pin, named seed owner, CloudFormation change-set evidence, `@Kravalg`'s approval), exactly as narrow or by the seed-approved service or resource-family ceiling if the 6144-character size check fails (R10-m1; Epic 5); otherwise the allows stay implicitly denied. **Inline size (pre-commit recheck N1):** S5.24a's PROD Preview reads and S5.24b's Drift reads each record the aggregate rendered inline size of the role they touch and fail above IAM's 10,240 characters; the fallback is a new managed policy with a seed `attachment_arns` amendment and seed code change in the same seed review. S5.24a's amendment follows XP-14's PROD amendment, and S5.24b's follows S5.24a's (one open amendment across both catalogs, R10-m2, recheck N2). **Seed guards unchanged (R10-M1):** the Preview, Apply and Drift `immutable_managed_guard` entries (TEST `test.json` lines 649-663 and 712-761; PROD `prod.json` lines 649-663, 712-725 and 747-760) keep their statements and hashes; they still deny `ssm:GetParameter*` and `ecr:GetAuthorizationToken`, and no allow of this story needs anything they deny. **Why the PROD Preview and Apply reads are here (R9-M1 (c)):** every PR `plan` and `up-plan` calls `observe_workload` (`scripts/poc_workload_runner.py` lines 55 and 178; `scripts/poc_workload_admission.py` lines 464-475) under the Preview and Apply roles (`scripts/poc_backend_observer.py` lines 173-174), so `prod_preview` (gate 2a) needs them. This story already follows XP-14, XP-15 and XP-16, whose PROD repositories, certificate ARN and boundary path the grants name. It sits at row 50, before S4.7 (row 52), and goes through the same BI review. Extending XP-16 (a boundary path outside this plan) or adding an XP-17 row would split one IAM review across two owners and renumber the list, so neither is chosen. The TEST counterparts are XP-11 (gate 1). **Drift inventory.** The story derives, from the existing modules that the S4.17 path calls, every AWS call the Drift role `GitHubCiDrift-user-service-infrastructure-{env}` makes beyond the S5.17 set, and grants exactly those reads. Those modules are the observer, `poc_registry_runner.py` `ecr_read`, `poc_mail_prerequisite.py`, `poc_workload_images.py`, `poc_workload_capabilities.py` and the program refresh. **Registry rows and refresh (R8-m3):** the refresh also reads the eleven registry resources, and S4.17 runs the capture's registry-row checks: `ecr:DescribeRepositories` (`scripts/poc_registry_runner.py` lines 185-199), `ses:GetEmailIdentity`, `route53:GetHostedZone` and `route53:ListResourceRecordSets` (`scripts/poc_mail_prerequisite.py` lines 301-310 and 389-424; the calls `scripts/poc_scheduled_registry_drift.py` lines 122-129 already makes under the Drift identity), plus the refresh reads of those three resource types from the pinned `pulumi-aws` provider source (derived as S4.10 derives delete paths). **State bucket (R9-m1):** `s3:GetBucketVersioning` on each stack's state bucket (`pulumi-user-service-infrastructure-{env}-state`), because every capture calls `s3api get-bucket-versioning` twice (`scripts/poc_backend_observer.py` lines 443 and 476). The BI read-role backend policy grants only `s3:ListBucket`, `s3:GetObject` and `s3:GetObjectVersion` (`pulumi/infra/governance.py` lines 156-164). **TEST grants cited, and their lifecycle (R9-m1).** Checked read-only against BI at the fetched `origin/main` (`bea5252`) of the local bootstrap-infrastructure clone. There, `_test_poc_capability_statements` (line 289 on) grants every purpose the following, attached at lines 457-461: `ecr:DescribeRepositories`/`ecr:ListTagsForResource` on `user-service-test-{web,worker}` (`PocRegistryMetadata`, line 347); `ses:GetEmailIdentity`/`ses:ListTagsForResource` on `user.vilnacrmtest.com` (`PocMailIdentityMetadata`, line 356); `route53:GetHostedZone`/`route53:ListResourceRecordSets` on the TEST zone (`PocDkimZoneMetadata`, line 364); and `s3:GetBucketVersioning` on the TEST state bucket (`PocBackendVersioning`, lines 369-374). None of these is present at the clone's checked-out `debd88b`. They are rendered only while the packaged identity is enabled (line 329), and at `origin/main` it is not (`pulumi/infra/test-poc-identity.json` line 11, `"enabled": false`). The unmerged #219 lifecycle (`wt-boot-219` `54e9e2f`: `"state": "enabled"` at line 11; `pulumi/infra/governance.py` lines 279-290) turns them into explicit Deny tombstones for every purpose when `withdrawn` (lines 436-457, attached at lines 503-510), and a tombstone Deny also overrides this story's Allows. So the TEST reads require the capability to stay `enabled`, which XP-9 already needs. `withdrawn` (or `disabled`) while stack `test` has `phase: workload` is a STOP. The story adds any refresh read those grants miss, and adds the PROD equivalents on XP-14's PROD repositories, identity, zone and state bucket, which no BI grant covers. **Workload reads (S5.24b: Drift, both stacks):** `iam:GetRole` on the stack's ECS execution and task roles (`_role`, `scripts/poc_workload_capabilities.py` line 89 on, with the native read set at lines 37-48; called at lines 333 and 341); `iam:SimulatePrincipalPolicy` on the stack's **execution role only** (`_pull`, lines 193-232, called at line 338 with the execution role; R8-m3); `ecr:BatchGetImage`, `ecr:BatchCheckLayerAvailability` and `ecr:GetDownloadUrlForLayer` on the stack's two workload repositories (`scripts/poc_workload_images.py` `_native`, lines 51-74, and S4.14's token-free config read; the same pull set as `PULL_ACTIONS`, capabilities lines 25-29); `acm:DescribeCertificate` on the stack's gateway certificate. **No `ecr:GetAuthorizationToken` and no `ssm:GetParameter` for the Drift role, and neither the Drift role's deny nor its seed guard is narrowed (R9-m2, D-15, AD-26):** S4.14 removes the token from the image path and the SSM read path from the capabilities reader, and S4.17 takes the certificate ARN from the contract its success receipt applied, so the scheduled path reads no parameter. The read-only policy's `DenySecretLeakingReads` (`pulumi/infra/governance.py` lines 266-271, at both `debd88b` and `bea5252`, over `_READ_ONLY_SECRET_DENY_ACTIONS`, `pulumi/infra/ci_bootstrap.py` lines 132-145) stays as it is for the Drift role. Revision 8's rationale for narrowing the token deny (the token grants nothing without the repository-scoped pull grants) is withdrawn as unproven, because a same-account repository policy that allows `*` would let any token holder pull. **PROD Preview and Apply workload-observation reads (S5.24a, R9-M1, D-15):** for `GitHubCiPreview-user-service-infrastructure-prod` and `GitHubCiApply-user-service-infrastructure-prod`, the AD-26 table: the workload reads above, with `acm:DescribeCertificate` on the XP-15 certificate ARN that the PROD contract pins. **No `ssm:GetParameter`** and no narrowed deny or guard: `DenySecretLeakingReads`, `DenySecretLeakingReadsApply` (`pulumi/infra/ci_bootstrap.py` lines 634-663) and the PROD guards stay as they are, so `ssm:GetParameter`, `ssm:GetParameters`, `ssm:GetParametersByPath`, `ecr:GetAuthorizationToken` and every other listed action stay denied. The PROD Preview role also gets `iam:SimulatePrincipalPolicy` on the PROD execution role only, because S5.17's step-3 list names only TEST roles (pre-commit audit 12). The PROD Apply reads need a new PROD Apply managed policy, with the Epic 5 attachment changes in S5.24a's seed review (pre-commit audit 1). The PROD capture's `s3:GetBucketVersioning` for these two roles is XP-14's (PRD §7). **Renderer scope (R10-n3):** the new identity statements render for the USI identity only (`_governance_policy_documents`, `pulumi/infra/governance.py` lines 414-475, renders every enrolled repository); the deny renderers, including `_apply_secret_deny_document`, which also renders the platform apply role's document (`pulumi/infra/ci_bootstrap.py` line 700), do not change. **Review record (R9-m2, R9-M1 (d)).** The BI owner's security review, approved by `@Kravalg`, records: (1) the principal → action → reachable-privilege table of AD-26 for the Drift role, and the PROD Preview and Apply rows; (2) every ECR repository policy of the stack's two repositories, read read-only (a statement that allows a pull action to `*` is a STOP); (3) the non-weakening alternatives evaluated (AD-26: the token path removed, and the certificate parameter dropped for every role by user decision D-15, both adopted); (4) the seed guards and the deny documents unchanged, and the seed amendment's size and hashes. The approving BI PR numbers (S5.24a and S5.24b) are recorded in the acceptance receipt. Without its approval a PR does not merge. A rejected review is a STOP: at gate 2a for S5.24a, and for S5.24b at S4.17 and therefore at gate 2a as well (through C-runner and the S4.7 live matrix). Each needs a user decision, which this plan does not take; if only the Apply-role reads are rejected, adopting the fallback design (`up-plan` reuses the Preview-role observation) needs that decision. It is unconditional, because the Drift role holds none of the IAM, ECR image or ACM reads and neither PROD PR role holds the observation reads. The round-7 request for a conditional row is kept in position (row 50, like S5.6), but its condition is always true. | Each listed read allowed for its role / any write, `GetSecretValue`, `kms:Decrypt`, `ssm:GetParameter` on every parameter for every role (the former `/vilnacrm/{env}/user-service/gateway-certificate-arn` included; D-15), `ssm:GetParameters` and `ssm:GetParametersByPath` on any parameter, `ecr:GetAuthorizationToken` (all three roles, not needed), each of these SSM and token denials matching the role's unchanged seed guard statement (guard layer, R10-M1), `iam:SimulatePrincipalPolicy` on the task role or any other role (Apply and Drift, and the PROD Preview role outside the PROD execution role; the TEST Preview role keeps S5.17's unchanged step-3 list), and the same reads on other roles, repositories, identities, zones, buckets or certificates denied / the existing registry and baseline drift matrices, the `DenySecretLeakingReads` and `DenySecretLeakingReadsApply` documents, the seed guard entries and hashes, and the rendered documents of every other enrolled repository and of the platform roles are unchanged (renderer-scope rows, R10-n3); the ConfigRead roles' decisions are unchanged (ConfigRead rows) and `verify_active_enrollment` passes (attachment rows); the S5.24a matrix (PROD Preview and Apply) and the S5.24b matrix (TEST and PROD Drift) are attached, each allow row passes the permissions boundary (AD-26), and each seed amendment records its size (≤ 6144) and its baseline and result hashes |
 | S5.19 | BI | **PROD recovery (M-9):** the role `GitHubCiRecovery-user-service-infrastructure-prod`, trusted only for the USI `prod-recovery` environment on `main` (the environment itself is USI S5.21), with grants mirroring S5.7 **without** any delete, abandon or `DeleteSecret` grant. | Exactly the recovery set / delete actions denied / PR-head assumption denied |
 | S5.9 | US | Non-root images (UID ≥1000, :8080, supervisor socket under `/srv/app/var/run`) | Non-root `User` / bind to :80 fails / healthchecks pass |
 | S5.20 | US | **In-container TLS for PROD (D-2):** Caddy internal certificate on :8443, HTTPS health endpoint | HTTPS responds on 8443 / plain HTTP on 8443 refused / certificate renewal before expiry |
@@ -3219,7 +3508,7 @@ No boundary addition is wider than its allow.
 
 | # | Story | Repo | Kind |
 | --- | --- | --- | --- |
-| 0 | D-1 … D-7 and D-14 (recovery targets RPO ≤ 1 hour, RTO ≤ 24 hours) recorded as explicit user decisions dated 2026-09-30 (`decisions.md`; D-4, D-5 clarified the same day), and the derived details D-8 … D-13 confirmed the same day | user | done; `@Kravalg` approval of the README PR is still S4.6 step 1 |
+| 0 | D-1 … D-7, D-14 (recovery targets RPO ≤ 1 hour, RTO ≤ 24 hours) and D-15 (the gateway certificate ARN pinned in the reviewed USI contract, checked only with ACM; no `ssm:GetParameter` for any CI role) recorded as explicit user decisions dated 2026-09-30 (`decisions.md`; D-4, D-5 clarified the same day), and the derived details D-8 … D-13 confirmed the same day | user | done; `@Kravalg` approval of the README PR is still S4.6 step 1 |
 | 1 | S5.8 #501 | US | independent |
 | 2 | S1.1 generation out of state (hardened branch) + contract (per-action `scaling`, receipt schemas) + central fields (+ transition rule) | USI | C-contract, C-runtime, C-composition head |
 | 3 | S1.7 AWSCURRENT refs | USI | C-contract, C-runtime |
@@ -3258,24 +3547,24 @@ No boundary addition is wider than its allow.
 | 36 | S5.22 ruleset: `abandon-manifest-approval` required with a pinned issuer | USI (repository controls) | C-controls |
 | 37 | S4.12 runner mode routing | USI | C-runner, C-contract |
 | 38 | S4.13 accepted-workload receipt (observation job with pre-credential admission, lock-tolerant checkpoint capture, start and stop; same-run receipt binding); separate `test_workload_drift` job with the FR-32 plan-plus-gate reducer; lineage-derived `workload_route`; TEST scheduled-drift exclusion; releases (reviewed README/spec/log-health/test amendment); workflow-shape test rewrites | USI | C-runner, C-contract |
-| 39 | S4.14 PROD path (worker, workflow, gate 2a/2b; every TEST-only pin with a PROD fixture or XP-14; stack → contract mapping; PROD contract schema; PROD scheduled-drift exclusion) | USI | C-runner, C-contract |
+| 39 | S4.14 PROD path (worker, workflow, gate 2a/2b; every TEST-only pin with a PROD fixture or XP-14; stack → contract mapping; PROD contract schema; PROD scheduled-drift exclusion; token-free image config read; D-15 certificate ARN in both contract schemas, no runner parameter rule, no SSM read path; release platform in the publisher request, line 170) | USI | C-runner, C-contract |
 | 40 | S4.15 acceptance-receipt validator (+ scheduled-drift result schema; gate-2b items: TEST `checked` only, PROD `before-acceptance` with `null` success-receipt fields plus the S5.24a/S5.24b simulator links, R9-n1) + two-gate hard-stop test (both contracts) | USI | C-contract |
 | 41 | S4.16 TEST exercise workflow | USI | independent |
-| 42 | S5.18a restore-rehearsal grants (no VPC) | BI | C-BI |
+| 42 | S5.18a restore-rehearsal grants (no VPC), then XP-11's BI identity change and TEST seed boundary amendment (the TEST Preview and Apply observation reads, no SSM, denies and guards unchanged; an external gate-1 prerequisite that takes this C-BI slot and needs the XP-10 ARN, R10-m2) | BI | C-BI; XP-11 before gate 1 |
 | 43 | S4.6 gate 1 + live TEST campaign (steps 1–21, including S5.5 and S5.18b) | USI (+BI live) | final TEST, live |
 | 44 | S5.6 if the timing is over the bound | BI | conditional |
 | 45 | S4.8 point-in-time restore rehearsal (D-14 targets) | USI (+BI live) | live TEST |
 | 46 | S5.20 in-container TLS merged and published | US | before gate 2 |
 | 47 | S5.19 prod-recovery role and grants (environment from S5.21) | BI | C-BI |
-| 48 | XP-14 PROD registry proof (registry-phase work outside this plan; includes the observer's PROD coordinates, `_caller`, `_key` and `LOCKS`; the TEST registry constants of `poc_registry_plan.py` and `_REGISTRIES`; the PROD registry completion; the PROD mail domain for `_mail_semantics`; and the committed `poc-prod.json` under the S4.14 PROD schema) | USI registry | prerequisite |
-| 49 | XP-15 PROD gateway certificate parameter (gateway owner) and XP-16 PROD permissions-boundary path (bootstrap owner), each existing live under the TEST-analogous name its owner confirmed in the S4.14 PR (R8-m6) | gateway, BI | gate-2a prerequisite |
-| 50 | S5.24 as two separately approved BI PRs, each with its service-boundary additions: S5.24b Drift-role read inventory and grants for the S4.17 path (registry rows and refresh reads; `s3:GetBucketVersioning` (TEST from the enabled capability, PROD here); IAM `GetRole`, `SimulatePrincipalPolicy` on the execution role only; ECR incl. `GetDownloadUrlForLayer`; ACM; no SSM, no ECR token, the Drift-role deny unchanged), and S5.24a PROD Preview and Apply workload-observation reads with the one narrowed `ssm:GetParameter` deny (R7-m9, R8-m3, R9-M1, R9-m1, R9-m2) | BI | C-BI; S5.24a before gate 2a, S5.24b before S4.17 |
+| 48 | XP-14 PROD registry proof (registry-phase work outside this plan; includes the observer's PROD coordinates, `_caller`, `_key` and `LOCKS`; the TEST registry constants of `poc_registry_plan.py` and `_REGISTRIES`; the PROD registry completion; the PROD mail domain for `_mail_semantics`; and the committed `poc-prod.json` under the S4.14 PROD schema); its PROD `s3:GetBucketVersioning` boundary addition is a PROD seed amendment, before S5.24a's (R10-m2) | USI registry | prerequisite |
+| 49 | XP-15 PROD gateway certificate issued and its ARN supplied by the gateway owner for the S4.7 contract PR (D-15), and XP-16 PROD permissions-boundary path (bootstrap owner) existing live under the TEST-analogous name the owner confirmed in the S4.14 PR (R8-m6) | gateway, BI | gate-2a prerequisite |
+| 50 | S5.24 as two separately approved BI PRs, each with its seed boundary amendment (S5.24a's first, then S5.24b's): S5.24b Drift-role read inventory and grants for the S4.17 path (registry rows and refresh reads; `s3:GetBucketVersioning` (TEST from the enabled capability, PROD here); IAM `GetRole`, `SimulatePrincipalPolicy` on the execution role only; ECR incl. `GetDownloadUrlForLayer`; ACM; no SSM, no ECR token, the Drift-role deny and guard unchanged), and S5.24a PROD Preview and Apply workload-observation reads (no SSM, denies and guards unchanged, D-15) (R7-m9, R8-m3, R9-M1, R9-m1, R9-m2, R10-M1) | BI | C-BI; S5.24a before gate 2a, S5.24b before S4.17 |
 | 51 | S4.17 scheduled workload drift for the TEST and PROD workload stacks (isolated scheduled launch through the host and worker; data-driven per stack; result record copied out and uploaded) | USI | C-runner; gate-2b precondition |
 | 52 | S4.7 gate 2a (P-1 PROD preview), then gate 2b + PROD plan; PROD workload contract PRs (the first one starts the S4.17 PROD checks and removes `prod` from the baseline); the unstubbed PROD host seam test after XP-14 (Kravalg-approved) | USI | C-runner tail; PROD gate |
 
 **No forward dependencies (re-verified over all 53 rows, rows 0-52, in
-revision 9 after the round-9 changes, as in revision 8, including test-level and ownership-level dependencies; R6-M2,
-R7-m4, R7-m6, R8-m6).** Every story depends only on lower-numbered rows. S4.9
+revision 10 after the round-10 changes and D-15, as in revisions 8 and 9, including test-level, ownership-level and seed-amendment dependencies; R6-M2,
+R7-m4, R7-m6, R8-m6, R10-m2).** Every story depends only on lower-numbered rows. S4.9
 (row 30) depends only on S4.10 (row 28), S4.11 (row 29) and S2.6 (row 24);
 its `hold` rule reads the observation record through the S4.11 library,
 and its N8 fixtures are S4.11-written records, so neither the code nor the
@@ -3292,22 +3581,41 @@ XP-14 (row 48) uses for its committed `phase: registry` file, and S4.7
 (row 52) uses for the PROD workload contract PRs. S4.14's XP-14 rows
 (including the PROD mail domain, which its code leaves absent so a PROD
 workload contract fails closed) use stubs and checking stand-ins, never
-row-48 data. S4.14 pins the TEST-analogous XP-15 and XP-16 names as an
-assumption that the owners confirm in the S4.14 PR before it merges: a
-naming statement recorded in row 39 itself, not the row-49 deliverable
-(pre-commit audit). XP-15 and XP-16 (row 49) are the parameter and the
-boundary path existing live under those names; S5.24 (row 50) grants
-`ssm:GetParameter` on the XP-15 parameter to the PROD Preview and Apply
-roles only (S5.24a, R9-M1), and S4.7 (row 52) verifies both live. The
+row-48 data. S4.14 pins the TEST-analogous XP-16 boundary path as an
+assumption that the bootstrap owner confirms in the S4.14 PR before it
+merges: a naming statement recorded in row 39 itself, not the row-49
+deliverable (pre-commit audit). Under D-15 there is no XP-15 name to pin.
+XP-15 and XP-16 (row 49) are the issued PROD certificate with its
+supplied ARN and the boundary path existing live; S5.24a (row 50)
+grants `acm:DescribeCertificate` on that ARN (no SSM), S4.7's PROD
+contract PR (row 52) pins the ARN, and S4.7 verifies both live. The TEST
+certificate ARN is pinned by the gate-1 PR (row 43, S4.6 step 1), after
+S4.14 (row 39) makes both schemas require `certificate_arn`. The
 PROD Preview and Apply workload-observation reads that `prod_preview`
 (gate 2a, row 52) needs are S5.24a's (row 50), so their owner precedes their
-first use; the TEST ones are XP-11, a gate-1 prerequisite that S4.6 (row
-43) checks. S4.14 (row 39) removes the ECR token from the image path
-and adds the receipt-certificate reader parameter to
-`scripts/poc_workload_capabilities.py`, before any row that needs them
-(S4.6 row 43, S5.24 row 50, S4.17 row 51). So S5.24b's no-SSM Drift
-inventory rests on row 39, not on row 51, and S4.17 edits neither
-module (R9-M1, R9-m2, pre-commit audit). S5.24a and S5.24b are two PRs
+first use; the TEST ones are XP-11, whose BI identity change and seed
+boundary amendment take the C-BI slot of row 42 (after S5.18a) and which
+S4.6 (row 43) checks before the gate-1 PR. XP-11 needs nothing above row
+42: its matrix asserts only Drift denies, and it reads the seed catalog
+left by the S5.2, S5.17 and S5.4 amendments (rows 9-11). **Seed
+amendments (R10-m2)** run in C-BI row order, one open across both
+catalogs (every amendment edits `policy_registry.py`, recheck N2):
+#219's own amendment, then rows 9, 10, 11, 42 (XP-11), 48 (XP-14's PROD
+addition) and 50 (S5.24a, then S5.24b), so no amendment's baseline hash
+comes from a higher row. **External preconditions without a row
+(pre-commit audit 8):** #219's own TEST seed amendment is merged and
+applied before row 9's TEST amendment (and so before rows 10, 11 and
+42); XP-10 (the TEST certificate issued and its ARN supplied by the
+gateway owner) exists before row 42 (XP-11's exact-ARN
+`acm:DescribeCertificate` grant) and row 43 (the gate-1 PR that pins
+it). Both are external prerequisites, like XP-14 and XP-15, so neither
+is a forward dependency; a missing one stops the row that needs it.
+S4.14 (row 39) removes the ECR token from the
+image path and the SSM read path from
+`scripts/poc_workload_capabilities.py` (D-15), before any row that
+relies on either (S4.6 row 43, S5.24 row 50, S4.17 row 51). So S5.24b's
+no-SSM Drift inventory rests on row 39, not on row 51, and S4.17 edits
+neither module (R9-M1, R9-m2, D-15, pre-commit audit). S5.24a and S5.24b are two PRs
 of row 50; a rejected Drift part stops S4.17 and, through C-runner and
 S4.7's live PROD matrix, gate 2a as well (recheck N1). S4.15 (row 40)
 owns the scheduled-drift result schema, including `registry-phase`, and

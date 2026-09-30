@@ -263,7 +263,6 @@ def test_generators_are_pinned_secret_protected_and_release_independent(tmp_path
 
 def test_partial_and_duplicate_derived_inventory_fail_closed():
     resource = object.__new__(module.RuntimeSecrets)
-    resource.descriptor = SimpleNamespace(hardened=False)
     resource.secret_arns = {}
     resource.references = {
         purpose: {}

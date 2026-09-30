@@ -141,6 +141,8 @@ class RuntimeSecrets(pulumi.ComponentResource):
     """Declare named AWS secrets; only the pre-hardening shape generates values."""
 
     values: dict[str, pulumi.Output[str]]
+    # Detached partial instances keep the pre-hardening completeness rule.
+    _hardened = False
 
     def __init__(
         self,
@@ -159,7 +161,8 @@ class RuntimeSecrets(pulumi.ComponentResource):
         super().__init__(
             "user-service-infrastructure:secrets:Runtime", name, None, opts
         )
-        if self.descriptor.hardened:
+        self._hardened = self.descriptor.hardened
+        if self._hardened:
             # Values arrive from the reviewed seed outside Pulumi state.
             self.values = {}
             for purpose in self.references:
@@ -284,7 +287,7 @@ class RuntimeSecrets(pulumi.ComponentResource):
 
     def complete(self) -> None:
         """Export only metadata; the pre-hardening shape needs both derived secrets."""
-        if not self.descriptor.hardened:
+        if not self._hardened:
             self.ecs_secrets()
         self.register_outputs(
             {"secretArns": self.secret_arns, "versionIds": self.version_ids}

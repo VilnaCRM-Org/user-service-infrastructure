@@ -1101,9 +1101,7 @@ def test_secret_wrapped_checkpoint_container_definitions_fail_closed(data, kind)
     secrets = _observed_secrets(data)
     resources = _first_checkpoint(data)
     row = next(
-        row
-        for row in resources
-        if row["urn"].endswith(f"::user-service-{kind}-task")
+        row for row in resources if row["urn"].endswith(f"::user-service-{kind}-task")
     )
     row["inputs"]["containerDefinitions"] = {
         "4dabf18193072939515e22adb298388d": "1b47061264138c4ac30d75fd1eb44270",

@@ -1,9 +1,10 @@
 """Internal workload composition that retains the complete registry baseline.
 
 This is an ownership prerequisite, not phase admission. Its caller must supply
-admitted settings and registry data. No CLI or config dispatches to this class;
-verified releases, secrets, capabilities and native transition acceptance remain
-separate prerequisites before wiring it into the trusted controller.
+admitted settings and registry data. Only the protected workload runner reaches
+this class, and only for a ``workload`` phase contract; verified releases,
+secrets, capabilities and native transition acceptance remain separate
+prerequisites of that path.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ TAGGABLE_TYPES = frozenset(
         "aws:cloudwatch/logGroup:LogGroup",
         "aws:docdb/cluster:Cluster",
         "aws:docdb/clusterInstance:ClusterInstance",
+        "aws:docdb/clusterParameterGroup:ClusterParameterGroup",
         "aws:docdb/subnetGroup:SubnetGroup",
         "aws:ec2/eip:Eip",
         "aws:ec2/internetGateway:InternetGateway",
@@ -94,7 +96,9 @@ class WorkloadPhaseStack(RegistryPhaseStack):
         self.runtime_secrets = RuntimeSecrets(
             "runtime-secrets", descriptor=secrets, opts=opts
         )
-        self.network = NetworkPlane("network", settings=settings, opts=opts)
+        self.network = NetworkPlane(
+            "network", settings=settings, private_gateway=True, opts=opts
+        )
         self.data = DataPlane(
             "data",
             settings=settings,

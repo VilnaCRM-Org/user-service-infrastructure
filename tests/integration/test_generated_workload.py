@@ -216,6 +216,13 @@ def test_native_generated_workload_preserves_registry_and_registers_secret_versi
     baseline = {row.urn: row for row in resources(events)}
     assert len(baseline) == 11
     events.clear()
+    contract = json.loads((work / "contract.json").read_text())
+    stack.set_config(
+        "certificateArn",
+        auto.ConfigValue(
+            value=contract["workload"]["external"]["domain"]["certificate_arn"]
+        ),
+    )
     (work / "scenario.json").write_text('{"mode":"workload"}')
     result = stack.preview(on_event=events.append)
     assert result.change_summary
@@ -249,7 +256,9 @@ def test_native_legacy_workload_program_registers_managed_planes(native_stack):
     assert "user-service-infrastructure:messaging:Plane" in types
     assert "user-service-infrastructure:compute:Plane" in types
     assert types.count("aws:ec2/vpc:Vpc") == 1
-    assert types.count("aws:sqs/queue:Queue") == 6
+    # Four work/health queues plus three dead-letter queues.
+    assert types.count("aws:sqs/queue:Queue") == 7
+    assert types.count("aws:docdb/clusterParameterGroup:ClusterParameterGroup") == 1
     assert types.count("aws:ecs/service:Service") == 2
     assert not any(kind.startswith("aws:iam/") for kind in types)
 

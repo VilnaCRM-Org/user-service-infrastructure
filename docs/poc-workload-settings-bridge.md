@@ -2,8 +2,9 @@
 
 `scripts/poc_workload_phase_entrypoint.py` connects the existing typed contract and
 closed native image/config projection to the existing generated-secret settings
-resolver and `WorkloadPhaseStack`. It does not enable workload execution. The
-worker's capability/plan stop and fallback execution stop remain unchanged.
+resolver and `WorkloadPhaseStack`. It grants no execution permission itself: the
+worker routes TEST `plan` and `up-plan` for a `workload` phase contract to the
+protected runner, which calls this bridge after its own admission checks.
 
 The internal caller supplies exact `SourceAdmission` facts, their matching full
 workload contract and the web/worker projection from `inspect_images`. The bridge
@@ -27,7 +28,7 @@ unit introduces no config/CLI phase switch, file writer or local state backend.
 
 `encode_workload_projection` and `decode_workload_projection` define a bounded,
 canonical JSON wire format with exactly `schema_version`, `source`, `contract`
-and `images`. They reject duplicate keys, nonfinite numbers, malformed source
+`images` and `certificate`. They reject duplicate keys, nonfinite numbers, malformed source
 hashes, alternate contract paths, extra fields, noncanonical bytes and changed
 contract/image bindings. Decoding reuses the same full projection validation;
 serialization does not authenticate evidence or grant phase authority.
@@ -41,16 +42,16 @@ composition/settings path. There is no contract filename, environment variable,
 config phase selector or public CLI that selects this graph. Direct execution of
 the bridge module rejects.
 
-The current registry runner uses a plain Python `PULUMI_PYTHON_CMD`; it **cannot
-run this generated child**. `workload_python_wrapper_source` supplies source for
-a future root-owned executable with a fixed `/opt/service-runtime/bin/python -I`
+The registry runner alone uses a plain Python `PULUMI_PYTHON_CMD` and cannot run
+this generated child. `workload_python_wrapper_source` supplies source for
+a root-owned executable with a fixed `/opt/service-runtime/bin/python -I`
 shebang. That wrapper uses `os.execv` to execute the same fixed interpreter with
 `-I`, preserving native Pulumi arguments without shell expansion. The trusted
-materializer must install/protect this wrapper, select it as `PULUMI_PYTHON_CMD`,
+materializer installs/protects this wrapper, selects it as `PULUMI_PYTHON_CMD`,
 protect the generated program/config, and bind all resulting bytes to the saved
 plan. No caller, PR config or environment override may select its interpreter.
-These helpers generate source only; no wrapper or project is installed here.
-The separate [protected materializer](poc-workload-materializer.md) now writes
+The bridge helpers generate source only. The separate
+[protected materializer](poc-workload-materializer.md) now writes
 these inputs when called by the trusted root worker. Its native launcher test
 requires a Python project without `runtime.options.virtualenv`, because that
 option bypasses `PULUMI_PYTHON_CMD` in Pulumi 3.223.0.
@@ -93,14 +94,13 @@ declaration remains attached to the descriptor.
 - `ComputePlane` now maps the declared `runtime.worker_health_command` to an ECS
   `CMD` health check. The command must exist in the admitted image; actual worker
   health remains a native acceptance check.
-- The exact next integration blocker is the trusted root dispatcher: authenticate
-  the complete native prerequisites and baseline, call the protected materializer,
-  select its wrapper without rewriting the project runtime, and bind the generated
-  input digests to the same-run source/checkpoint and saved plan. The worker
-  currently has no dispatcher for this path.
-  Full authenticated capability acceptance, native saved-plan graph/replay bindings,
-  phase-aware result/drift and actual workload health/release/rollback remain
-  unconnected. Do not remove either existing execution stop based on this unit.
+- A sealed trusted runner connects prerequisite observation, the protected
+  materializer and saved-plan dispatch, and the installed worker routes TEST
+  `plan` and `up-plan` for a `workload` phase contract to it; workload drift is
+  still rejected. Complete capability/input admission, accepted-result
+  observation, phase-aware drift and actual health/release/rollback remain
+  acceptance prerequisites, and the committed phase stays `registry` (see
+  `specs/poc/README.md`).
 
 Focused tests use synthetic facts and isolated Pulumi mock registrations. They
 verify exact images, generated-secret references, no IAM registration, unchanged
@@ -114,8 +114,8 @@ The generated workload contract now requires `workload.runtime.trusted_proxy_cid
 a nonempty list of canonical CIDR strings. There is no default. Validation rejects
 aliases, bare addresses, catchall networks, duplicates, overlapping networks, and
 host bits. Before registering workload resources, the descriptor requires this
-list to contain exactly the configured `network.public_subnet_cidrs` used by the
-ALB. Missing subnets, extra subnets, and broader VPC/private ranges fail closed.
+list to contain exactly the configured `network.app_subnet_cidrs` used by the
+internal ALB. Missing subnets, extra subnets, and broader VPC ranges fail closed.
 The synthetic fixture values are test data, not evidence of live ALB topology.
 
 `ComputePlane` injects this single canonical list only into the web container:

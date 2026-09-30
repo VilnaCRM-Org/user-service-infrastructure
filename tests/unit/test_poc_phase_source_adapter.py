@@ -27,6 +27,7 @@ FIXTURE = (
     Path(__file__).resolve().parents[1]
     / "fixtures/poc-contract/registry.synthetic.json"
 )
+WORKLOAD_FIXTURE = FIXTURE.with_name("workload.synthetic.json")
 
 
 def request() -> dict[str, str]:
@@ -163,9 +164,14 @@ def current_comment(*, fetched: bool, change: str | None) -> dict[str, Any]:
     return comment
 
 
-def transport(*, revoked: bool = False, comment_change: str | None = None):
+def transport(
+    *,
+    revoked: bool = False,
+    comment_change: str | None = None,
+    fixture: Path = FIXTURE,
+):
     """Return a fake GitHub API that exposes only fixed endpoint responses."""
-    contract = FIXTURE.read_bytes()
+    contract = fixture.read_bytes()
     blob = admission._git_blob_sha(contract)
     fetched = False
 
@@ -241,6 +247,31 @@ def test_source_adapter_binds_fixed_blob_after_fresh_review_rechecks() -> None:
     assert result.source.path == admission.CONTRACT_PATH
     assert "phase" not in result.__dict__
     assert "prior" not in result.__dict__
+    assert adapter.observe_phase(result.source, transport()) == "registry"
+
+
+def test_phase_hint_selects_the_bound_workload_contract() -> None:
+    observed = transport(fixture=WORKLOAD_FIXTURE)
+    result = adapter.prepare_authenticated_source(
+        request(), intake=intake(), gh=observed, collect_evidence=collect
+    )
+    assert adapter.observe_phase(result.source, observed) == "workload"
+
+
+def test_phase_hint_rejects_a_changed_contract_blob() -> None:
+    result = adapter.prepare_authenticated_source(
+        request(), intake=intake(), gh=transport(), collect_evidence=collect
+    )
+    current = transport()
+
+    def changed(endpoint: str, *arguments: str) -> Any:
+        value = current(endpoint, *arguments)
+        if "/contents/" in endpoint:
+            value = {**value, "sha": "f" * 40}
+        return value
+
+    with pytest.raises(ValueError, match="Contract blob differs"):
+        adapter.observe_phase(result.source, changed)
 
 
 @pytest.mark.parametrize("field", ["phase", "initial_registry", "approved"])
@@ -361,20 +392,30 @@ def test_source_adapter_rejects_invalid_base64_contract_content() -> None:
         )
 
 
+@pytest.mark.parametrize("github_output", [True, False])
 def test_source_adapter_cli_uses_only_fake_trusted_transport(
-    monkeypatch, capsys
+    github_output: bool, monkeypatch, capsys, tmp_path: Path
 ) -> None:
     """The CLI serializes source facts and no deployment or accepted-prior state."""
     monkeypatch.setattr(preflight, "read_request", request)
     monkeypatch.setattr(preflight, "collect_intake_evidence", lambda _: intake())
     monkeypatch.setattr(preflight, "collect_evidence", collect)
     monkeypatch.setattr(preflight, "gh", transport())
+    output = tmp_path / "github-output"
+    if github_output:
+        monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    else:
+        monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
 
     assert adapter.main([]) == 0
 
     result = json.loads(capsys.readouterr().out)
     assert result["kind"] == "poc-phase-source/v1"
     assert "phase" not in result and "prior" not in result
+    if github_output:
+        assert output.read_text() == "phase=registry\n"
+    else:
+        assert not output.exists()
 
 
 def test_source_adapter_cli_redacts_transport_failure(monkeypatch, capsys) -> None:

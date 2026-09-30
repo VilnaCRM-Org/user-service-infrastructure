@@ -33,12 +33,16 @@ POSITIVE_PUBLIC_ACCESS_OPERATORS = frozenset(
     {"ArnEquals", "ArnLike", "IpAddress", "StringEquals", "StringLike"}
 )
 AWS_PROVIDER_TYPE_SUFFIX = "pulumi:providers:aws"
-S3_BUCKET_TYPE_SUFFIX = "s3/bucket:Bucket"
+# Pulumi AWS v7 still registers the deprecated BucketV2 token separately.
+S3_BUCKET_TYPE_SUFFIXES = ("s3/bucket:Bucket", "s3/bucketV2:BucketV2")
 S3_BUCKET_ENCRYPTION_TYPE_SUFFIXES = (
     "s3/bucketServerSideEncryptionConfiguration:BucketServerSideEncryptionConfiguration",
     "s3/bucketServerSideEncryptionConfigurationV2:BucketServerSideEncryptionConfigurationV2",
 )
-S3_BUCKET_LOGGING_TYPE_SUFFIXES = ("s3/bucketLogging:BucketLogging",)
+S3_BUCKET_LOGGING_TYPE_SUFFIXES = (
+    "s3/bucketLogging:BucketLogging",
+    "s3/bucketLoggingV2:BucketLoggingV2",
+)
 S3_BUCKET_ACL_TYPE_SUFFIX = "s3/bucketAcl:BucketAcl"
 S3_BUCKET_ACL_V2_TYPE_SUFFIX = "s3/bucketAclV2:BucketAclV2"
 S3_BUCKET_POLICY_TYPE_SUFFIX = "s3/bucketPolicy:BucketPolicy"
@@ -46,6 +50,17 @@ EBS_VOLUME_TYPE_SUFFIX = "ec2/volume:Volume"
 EFS_FILE_SYSTEM_TYPE_SUFFIX = "efs/fileSystem:FileSystem"
 RDS_CLUSTER_TYPE_SUFFIX = "rds/cluster:Cluster"
 RDS_INSTANCE_TYPE_SUFFIX = "rds/instance:Instance"
+DOCDB_CLUSTER_TYPE_SUFFIX = "docdb/cluster:Cluster"
+DOCDB_CLUSTER_INSTANCE_TYPE_SUFFIX = "docdb/clusterInstance:ClusterInstance"
+ELASTICACHE_REPLICATION_GROUP_TYPE_SUFFIX = (
+    "elasticache/replicationGroup:ReplicationGroup"
+)
+DOCDB_TYPE_SUFFIXES = (DOCDB_CLUSTER_TYPE_SUFFIX, DOCDB_CLUSTER_INSTANCE_TYPE_SUFFIX)
+PRODUCTION_DATABASE_TYPE_SUFFIXES = (
+    RDS_CLUSTER_TYPE_SUFFIX,
+    RDS_INSTANCE_TYPE_SUFFIX,
+    *DOCDB_TYPE_SUFFIXES,
+)
 LOAD_BALANCER_TYPE_SUFFIX = "lb/loadBalancer:LoadBalancer"
 SECURITY_GROUP_RULE_TYPE_SUFFIX = "ec2/securityGroupRule:SecurityGroupRule"
 SECURITY_GROUP_TYPE_SUFFIX = "ec2/securityGroup:SecurityGroup"
@@ -100,7 +115,7 @@ def has_public_s3_acl(resource_type: str, props: Mapping[str, Any]) -> bool:
     return _matches_any_resource_type(
         resource_type,
         (
-            S3_BUCKET_TYPE_SUFFIX,
+            *S3_BUCKET_TYPE_SUFFIXES,
             S3_BUCKET_ACL_TYPE_SUFFIX,
             S3_BUCKET_ACL_V2_TYPE_SUFFIX,
         ),
@@ -110,7 +125,7 @@ def has_public_s3_acl(resource_type: str, props: Mapping[str, Any]) -> bool:
 def has_public_s3_bucket_policy(resource_type: str, props: Mapping[str, Any]) -> bool:
     """Detect bucket policies that allow public access."""
     if not _matches_any_resource_type(
-        resource_type, (S3_BUCKET_POLICY_TYPE_SUFFIX, S3_BUCKET_TYPE_SUFFIX)
+        resource_type, (S3_BUCKET_POLICY_TYPE_SUFFIX, *S3_BUCKET_TYPE_SUFFIXES)
     ):
         return False
 
@@ -158,12 +173,10 @@ def storage_encryption_violations(
     """Return storage encryption issues for critical persistent resources."""
     violations: list[str] = []
 
-    if _matches_resource_type(resource_type, S3_BUCKET_TYPE_SUFFIX):
-        encryption = props.get("serverSideEncryptionConfiguration")
-        if not isinstance(encryption, Mapping) or not _has_default_s3_encryption_rule(
-            encryption
-        ):
-            violations.append("S3 buckets must enable default server-side encryption.")
+    if _matches_any_resource_type(
+        resource_type, S3_BUCKET_TYPE_SUFFIXES
+    ) and not _has_inline_s3_encryption(props):
+        violations.append("S3 buckets must enable default server-side encryption.")
 
     if _matches_resource_type(resource_type, EBS_VOLUME_TYPE_SUFFIX) and not _truthy(
         props.get("encrypted")
@@ -179,6 +192,29 @@ def storage_encryption_violations(
         resource_type, (RDS_CLUSTER_TYPE_SUFFIX, RDS_INSTANCE_TYPE_SUFFIX)
     ) and not _truthy(props.get("storageEncrypted")):
         violations.append("RDS databases must enable storage encryption.")
+
+    violations.extend(_data_store_encryption_violations(resource_type, props))
+
+    return violations
+
+
+def _data_store_encryption_violations(
+    resource_type: str, props: Mapping[str, Any]
+) -> list[str]:
+    """Return encryption issues for DocumentDB clusters and Redis groups."""
+    violations: list[str] = []
+
+    if _matches_resource_type(resource_type, DOCDB_CLUSTER_TYPE_SUFFIX) and not (
+        _truthy(props.get("storageEncrypted"))
+    ):
+        violations.append("DocumentDB clusters must enable storage encryption.")
+
+    if _matches_resource_type(
+        resource_type, ELASTICACHE_REPLICATION_GROUP_TYPE_SUFFIX
+    ) and not _truthy(props.get("atRestEncryptionEnabled")):
+        violations.append(
+            "ElastiCache replication groups must enable at-rest encryption."
+        )
 
     return violations
 
@@ -214,13 +250,10 @@ def logging_violations(resource_type: str, props: Mapping[str, Any]) -> list[str
     """Return logging configuration issues for supported resource types."""
     violations: list[str] = []
 
-    if _matches_resource_type(resource_type, S3_BUCKET_TYPE_SUFFIX):
+    if _matches_any_resource_type(resource_type, S3_BUCKET_TYPE_SUFFIXES):
         if _bucket_logging_exempt(props):
             return violations
-        logging_config = props.get("logging")
-        if not isinstance(logging_config, Mapping) or not _s3_concrete_bucket_name(
-            logging_config.get("targetBucket")
-        ):
+        if not _has_inline_s3_logging(props):
             violations.append("S3 buckets must send access logs to a target bucket.")
 
     if _matches_resource_type(resource_type, LOAD_BALANCER_TYPE_SUFFIX):
@@ -284,20 +317,56 @@ def _s3_encryption_rule_items(props: Mapping[str, Any]) -> list[Mapping[str, Any
     return rule_items
 
 
+def _singular_and_plural(
+    props: Mapping[str, Any], singular: str, plural: str
+) -> list[object]:
+    """Return a V1 singular block followed by the V2 list-shaped blocks."""
+    values = props.get(plural)
+    if isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
+        return [props.get(singular), *values]
+    return [props.get(singular)]
+
+
 def _has_default_s3_encryption_rule(props: Mapping[str, Any]) -> bool:
     """Require a supported concrete SSE algorithm, never an RPC unknown value."""
     for candidate in _s3_encryption_rule_items(props):
-        default_encryption = candidate.get("applyServerSideEncryptionByDefault")
-        if not isinstance(default_encryption, Mapping):
-            continue
-        if _string_value(default_encryption.get("sseAlgorithm")) in {
-            "AES256",
-            "aws:fsx",
-            "aws:kms",
-            "aws:kms:dsse",
-        }:
-            return True
+        for default_encryption in _singular_and_plural(
+            candidate,
+            "applyServerSideEncryptionByDefault",
+            "applyServerSideEncryptionByDefaults",
+        ):
+            if not isinstance(default_encryption, Mapping):
+                continue
+            if _string_value(default_encryption.get("sseAlgorithm")) in {
+                "AES256",
+                "aws:fsx",
+                "aws:kms",
+                "aws:kms:dsse",
+            }:
+                return True
     return False
+
+
+def _has_inline_s3_encryption(props: Mapping[str, Any]) -> bool:
+    """Accept Bucket's mapping and BucketV2's list-shaped inline encryption."""
+    return any(
+        isinstance(configuration, Mapping)
+        and _has_default_s3_encryption_rule(configuration)
+        for configuration in _singular_and_plural(
+            props,
+            "serverSideEncryptionConfiguration",
+            "serverSideEncryptionConfigurations",
+        )
+    )
+
+
+def _has_inline_s3_logging(props: Mapping[str, Any]) -> bool:
+    """Accept Bucket's mapping and BucketV2's list-shaped inline access logging."""
+    return any(
+        isinstance(configuration, Mapping)
+        and bool(_s3_concrete_bucket_name(configuration.get("targetBucket")))
+        for configuration in _singular_and_plural(props, "logging", "loggings")
+    )
 
 
 def _s3_concrete_bucket_name(value: object) -> str | None:
@@ -329,7 +398,7 @@ def _s3_encryption_targets(resources: Sequence[Any]) -> tuple[set[str], set[str]
 
         for dependency in _resource_dependencies(resource, "bucket"):
             dependency_type = getattr(dependency, "resource_type", "")
-            if _matches_resource_type(dependency_type, S3_BUCKET_TYPE_SUFFIX):
+            if _matches_any_resource_type(dependency_type, S3_BUCKET_TYPE_SUFFIXES):
                 dependency_urn = getattr(dependency, "urn", "")
                 encrypted_bucket_urns.update(filter(None, (dependency_urn,)))
 
@@ -344,11 +413,10 @@ def _s3_bucket_is_covered(
     encrypted_bucket_urns: set[str],
 ) -> bool:
     """Return True when an S3 bucket is protected by inline or split encryption."""
-    if not _matches_resource_type(resource_type, S3_BUCKET_TYPE_SUFFIX):
+    if not _matches_any_resource_type(resource_type, S3_BUCKET_TYPE_SUFFIXES):
         return False
 
-    encryption = props.get("serverSideEncryptionConfiguration")
-    if isinstance(encryption, Mapping) and _has_default_s3_encryption_rule(encryption):
+    if _has_inline_s3_encryption(props):
         return True
 
     bucket_name = _s3_concrete_bucket_name(props.get("bucket"))
@@ -380,7 +448,7 @@ def _s3_logging_targets(resources: Sequence[Any]) -> tuple[set[str], set[str]]:
 
         for dependency in _resource_dependencies(resource, "bucket"):
             dependency_type = getattr(dependency, "resource_type", "")
-            if _matches_resource_type(dependency_type, S3_BUCKET_TYPE_SUFFIX):
+            if _matches_any_resource_type(dependency_type, S3_BUCKET_TYPE_SUFFIXES):
                 dependency_urn = getattr(dependency, "urn", "")
                 logged_bucket_urns.update(filter(None, (dependency_urn,)))
 
@@ -395,16 +463,10 @@ def _s3_bucket_logging_is_covered(
     logged_bucket_urns: set[str],
 ) -> bool:
     """Return True when an S3 bucket has inline or split access logging."""
-    if not _matches_resource_type(resource_type, S3_BUCKET_TYPE_SUFFIX):
+    if not _matches_any_resource_type(resource_type, S3_BUCKET_TYPE_SUFFIXES):
         return False
 
-    if _bucket_logging_exempt(props):
-        return True
-
-    logging_config = props.get("logging")
-    if isinstance(logging_config, Mapping) and _s3_concrete_bucket_name(
-        logging_config.get("targetBucket")
-    ):
+    if _bucket_logging_exempt(props) or _has_inline_s3_logging(props):
         return True
 
     bucket_name = _s3_concrete_bucket_name(props.get("bucket"))
@@ -462,17 +524,48 @@ def production_database_violations(
     resource_type: str,
     props: Mapping[str, Any],
     config: PolicyConfig = CONFIG,
+    *,
+    protect: bool | None = None,
 ) -> list[str]:
-    """Enforce safer database defaults for production-like environments."""
+    """Enforce safer database defaults for production-like environments.
+
+    ``protect`` is the Pulumi resource option when the engine supplies it.
+    DocumentDB instances have no deletion-protection or final-snapshot fields;
+    their cluster owns those settings, so instances only require protection.
+    An engine that does not report ``protect`` (``None``) fails closed.
+    """
     if not _matches_any_resource_type(
-        resource_type, (RDS_CLUSTER_TYPE_SUFFIX, RDS_INSTANCE_TYPE_SUFFIX)
-    ):
+        resource_type, PRODUCTION_DATABASE_TYPE_SUFFIXES
+    ) or not _is_production_resource(props, config):
         return []
 
+    violations = _documentdb_protection_violations(resource_type, protect)
+    if _matches_resource_type(resource_type, DOCDB_CLUSTER_INSTANCE_TYPE_SUFFIX):
+        return violations
+    return violations + _database_retention_violations(props)
+
+
+def _is_production_resource(props: Mapping[str, Any], config: PolicyConfig) -> bool:
+    """Return True when the resource's Environment tag is production-like."""
     environment = _string_value((extract_tags(props) or {}).get("Environment"))
-    if environment is None or environment.lower() not in config.production_environments:
-        return []
+    return environment is not None and (
+        environment.lower() in config.production_environments
+    )
 
+
+def _documentdb_protection_violations(
+    resource_type: str, protect: bool | None
+) -> list[str]:
+    """Require explicit Pulumi protection; an unreported option fails closed."""
+    if protect is not True and _matches_any_resource_type(
+        resource_type, DOCDB_TYPE_SUFFIXES
+    ):
+        return ["Production DocumentDB resources must be Pulumi-protected."]
+    return []
+
+
+def _database_retention_violations(props: Mapping[str, Any]) -> list[str]:
+    """Return deletion, final-snapshot and public-access issues for a database."""
     violations: list[str] = []
     if not _truthy(props.get("deletionProtection")):
         violations.append("Production databases must enable deletion protection.")

@@ -206,18 +206,45 @@ class RecordingMocks(SimpleMocks):
         return super().new_resource(args)
 
 
+class OptionRecordingMonitor(mocks.MockMonitor):
+    """Mock monitor that also retains resource options sent by the SDK."""
+
+    def __init__(self, test_mocks: mocks.Mocks) -> None:
+        """Initialize the option log for the supplied mocks."""
+        super().__init__(test_mocks)
+        self.options: dict[str, dict[str, object]] = {}
+        self.urns: dict[str, str] = {}
+
+    def RegisterResource(self, request):  # noqa: N802 - gRPC method name.
+        """Record protection, dependencies and custom timeouts per resource."""
+        result = super().RegisterResource(request)
+        timeouts = request.customTimeouts
+        self.urns[request.name] = result.urn
+        self.options[request.name] = {
+            "protect": request.protect,
+            "dependencies": list(request.dependencies),
+            "customTimeouts": {
+                "create": timeouts.create,
+                "update": timeouts.update,
+                "delete": timeouts.delete,
+            },
+        }
+        return result
+
+
 def _run_pulumi_program(
     program: Callable[[], None],
     *,
     test_mocks: mocks.Mocks | None = None,
     captured_urns: list[str] | None = None,
+    monitor: mocks.MockMonitor | None = None,
 ) -> None:
     """Execute a Pulumi program with mocks."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
         test_mocks = test_mocks or SimpleMocks()
-        monitor = mocks.MockMonitor(test_mocks)
+        monitor = monitor or mocks.MockMonitor(test_mocks)
         mocks.set_mocks(
             test_mocks,
             project="user-service-infrastructure",
@@ -1581,7 +1608,7 @@ def test_registry_full_stack_owner_and_images() -> None:
         "healthcheck-secret" in str(row["name"]) for row in recorder.resources
     )
     queues = [row for row in recorder.resources if row["type"] == "aws:sqs/queue:Queue"]
-    assert len(queues) == 6
+    assert len(queues) == 7
     assert "health-check-queue" in {row["inputs"]["name"] for row in queues}
     for resource in tasks:
         container = json.loads(resource["inputs"]["containerDefinitions"])[0]
@@ -1826,3 +1853,400 @@ def test_offline_preview_keeps_local_app_and_queue_configuration():
     ):
         _run_pulumi_program(program, test_mocks=recorder)
     assert not any(str(row["type"]).startswith("aws:") for row in recorder.resources)
+
+
+MANAGED_STACK_CONFIG = {
+    "deploymentMode": "managed",
+    "executionRoleArn": CENTRAL_EXECUTION_ROLE,
+    "taskRoleArn": CENTRAL_TASK_ROLE,
+    "serviceName": "user-service",
+    "accessLogsBucketName": "shared-alb-access-logs",
+    "documentDbPassword": "mongo-secret",
+    "redisAuthToken": "redis-secret",
+    "appSecret": "app-secret",
+    "mailerDsn": "smtp://mail.example.com:587",
+    "oauthEncryptionKey": "oauth-encryption-key",
+    "oauthPassphrase": "oauth-passphrase",
+    "twoFactorEncryptionKey": "two-factor-key",
+    "oauthPrivateKeyPem": "private-key",
+    "oauthPublicKeyPem": "public-key",
+}
+
+
+def _managed_registrations(
+    config: dict[str, object] | None = None,
+) -> tuple[dict[str, dict[str, object]], OptionRecordingMonitor]:
+    """Register a managed stack and return inputs and options by logical name."""
+    recorder = RecordingMocks()
+    monitor = OptionRecordingMonitor(recorder)
+
+    def program() -> None:
+        UserServiceStack("managed-stack")
+
+    with mocked_pulumi_context(
+        {**MANAGED_STACK_CONFIG, **(config or {})},
+        aws_config_values={
+            "region": "eu-central-1",
+            "allowedAccountIds": ["123456789012"],
+        },
+    ):
+        _run_pulumi_program(program, test_mocks=recorder, monitor=monitor)
+    resources = {str(row["name"]): row for row in recorder.resources}
+    assert len(resources) == len(recorder.resources)
+    return resources, monitor
+
+
+def test_documentdb_parameter_family_follows_engine_major_minor() -> None:
+    from app.data import _documentdb_parameter_family
+
+    assert _documentdb_parameter_family("5.0.0") == "docdb5.0"
+    assert _documentdb_parameter_family("4.0.0") == "docdb4.0"
+    assert _documentdb_parameter_family("8.0") == "docdb8.0"
+
+
+def test_managed_documentdb_is_protected_retained_and_audited() -> None:
+    """DocumentDB keeps its data, TLS, audit/profiler events and log retention."""
+    resources, monitor = _managed_registrations()
+    parameters = resources["user-service-documentdb-parameters"]
+    assert parameters["type"] == "aws:docdb/clusterParameterGroup:ClusterParameterGroup"
+    assert parameters["inputs"] == {
+        "name": "user-service-dev-docdb-params",
+        "family": "docdb5.0",
+        "description": "User service DocumentDB TLS, audit and profiler settings.",
+        "parameters": [
+            {"name": "tls", "value": "enabled", "applyMethod": "pending-reboot"},
+            {"name": "audit_logs", "value": "enabled", "applyMethod": "pending-reboot"},
+            {"name": "profiler", "value": "enabled", "applyMethod": "pending-reboot"},
+            {
+                "name": "profiler_threshold_ms",
+                "value": "100",
+                "applyMethod": "pending-reboot",
+            },
+        ],
+    }
+    log_groups = {}
+    for export in ("audit", "profiler"):
+        group = resources[f"user-service-documentdb-{export}-logs"]
+        assert group["type"] == "aws:cloudwatch/logGroup:LogGroup"
+        assert group["inputs"] == {
+            "name": f"/aws/docdb/user-service-dev-docdb/{export}",
+            "retentionInDays": 30,
+        }
+        log_groups[export] = monitor.urns[f"user-service-documentdb-{export}-logs"]
+    cluster = resources["user-service-documentdb-cluster"]["inputs"]
+    assert cluster["clusterIdentifier"] == "user-service-dev-docdb"
+    assert cluster["dbClusterParameterGroupName"] == "user-service-dev-docdb-params"
+    assert cluster["enabledCloudwatchLogsExports"] == ["audit", "profiler"]
+    assert cluster["storageEncrypted"] is True
+    assert cluster["deletionProtection"] is True
+    assert cluster["skipFinalSnapshot"] is False
+    assert cluster["finalSnapshotIdentifier"] == "user-service-dev-docdb-final"
+    options = monitor.options["user-service-documentdb-cluster"]
+    assert options["protect"] is True
+    assert {
+        monitor.urns["user-service-documentdb-parameters"],
+        *log_groups.values(),
+    } <= set(options["dependencies"])
+    for index in (1, 2):
+        assert (
+            monitor.options[f"user-service-documentdb-instance-{index}"]["protect"]
+            is True
+        )
+    instance_urns = {
+        monitor.urns[f"user-service-documentdb-instance-{index}"] for index in (1, 2)
+    }
+    for service in ("web", "worker"):
+        assert instance_urns <= set(
+            monitor.options[f"user-service-{service}-service"]["dependencies"]
+        )
+    assert monitor.options["user-service-documentdb-parameters"]["protect"] is False
+    assert all(
+        monitor.options[f"user-service-documentdb-{export}-logs"]["protect"] is False
+        for export in ("audit", "profiler")
+    )
+
+
+def test_documentdb_identifiers_respect_the_63_character_limit() -> None:
+    """A 58-character stack tag puts the cluster name exactly one over its limit."""
+    service, environment = "s" * 32, "e" * 25
+    role = f"arn:aws:iam::123456789012:role/user-service-infrastructure-{environment}"
+    resources, _ = _managed_registrations(
+        {
+            "serviceName": service,
+            "environment": environment,
+            "executionRoleArn": role + "-EcsExecution",
+            "taskRoleArn": role + "-EcsTask",
+        }
+    )
+    tag = f"{service}-{environment}"
+    cluster = resources["user-service-documentdb-cluster"]["inputs"]
+    assert len(f"{tag}-docdb") == 64
+    assert cluster["clusterIdentifier"] == build_resource_name(
+        tag, "docdb", max_length=63
+    )
+    assert len(cluster["clusterIdentifier"]) == 63
+    assert len(cluster["finalSnapshotIdentifier"]) == 63
+    assert cluster["finalSnapshotIdentifier"] == build_resource_name(
+        tag, "docdb-final", max_length=63
+    )
+    assert resources["user-service-documentdb-audit-logs"]["inputs"]["name"] == (
+        f"/aws/docdb/{cluster['clusterIdentifier']}/audit"
+    )
+
+
+@pytest.mark.parametrize("environment", ["dev", "test", "prod"])
+def test_documentdb_retention_does_not_depend_on_environment(environment) -> None:
+    role = "arn:aws:iam::123456789012:role/user-service-infrastructure-{}-Ecs{}"
+    resources, monitor = _managed_registrations(
+        {
+            "environment": environment,
+            "executionRoleArn": role.format(environment, "Execution"),
+            "taskRoleArn": role.format(environment, "Task"),
+        }
+    )
+    cluster = resources["user-service-documentdb-cluster"]["inputs"]
+    assert cluster["deletionProtection"] is True
+    assert cluster["skipFinalSnapshot"] is False
+    assert cluster["finalSnapshotIdentifier"] == (
+        f"user-service-{environment}-docdb-final"
+    )
+    assert monitor.options["user-service-documentdb-cluster"]["protect"] is True
+
+
+def test_managed_queues_redrive_every_work_queue_to_a_dead_letter_queue() -> None:
+    resources, monitor = _managed_registrations(
+        {"failedInsertUserBatchQueueName": "custom-failed-batch"}
+    )
+    queues = {
+        name: row["inputs"]
+        for name, row in resources.items()
+        if row["type"] == "aws:sqs/queue:Queue"
+    }
+    assert len(queues) == 7
+    dead_letter = queues["user-service-failed-insert-user-batch"]
+    assert dead_letter["name"] == "custom-failed-batch"
+    assert dead_letter["messageRetentionSeconds"] == 1_209_600
+    assert "redrivePolicy" not in dead_letter
+    for source, target in (
+        ("send-email", "failed-send-email"),
+        ("insert-user-batch", "failed-insert-user-batch"),
+        ("domain-events", "failed-domain-events"),
+    ):
+        inputs = queues[f"user-service-{source}"]
+        assert inputs["messageRetentionSeconds"] == 345_600
+        assert json.loads(inputs["redrivePolicy"]) == {
+            "deadLetterTargetArn": (
+                "arn:aws:sqs:eu-central-1:123456789012:"
+                + queues[f"user-service-{target}"]["name"]
+            ),
+            "maxReceiveCount": 3,
+        }
+        assert (
+            monitor.urns[f"user-service-{target}"]
+            in (monitor.options[f"user-service-{source}"]["dependencies"])
+        )
+    assert "redrivePolicy" not in queues["user-service-health-check"]
+    for name, inputs in queues.items():
+        assert inputs["receiveWaitTimeSeconds"] == 20
+        assert inputs["visibilityTimeoutSeconds"] == 120
+        assert inputs["kmsMasterKeyId"] == "alias/aws/sqs"
+        if name.startswith("user-service-failed-"):
+            assert inputs["messageRetentionSeconds"] == 1_209_600
+
+
+QUEUE_LOGICAL_NAMES = {
+    "sendEmail": "send-email",
+    "failedSendEmail": "failed-send-email",
+    "insertUserBatch": "insert-user-batch",
+    "failedInsertUserBatch": "failed-insert-user-batch",
+    "domainEvents": "domain-events",
+    "failedDomainEvents": "failed-domain-events",
+    "healthCheck": "health-check-queue",
+}
+
+
+def test_managed_messaging_exports_every_queue_by_logical_key() -> None:
+    def program() -> None:
+        stack_component = UserServiceStack("managed-queues")
+        outputs = stack_component.messaging.outputs
+        _assert_output_value(
+            pulumi.Output.all(**outputs.queue_urls),
+            {
+                key: f"https://sqs.eu-central-1.amazonaws.com/123456789012/{name}"
+                for key, name in QUEUE_LOGICAL_NAMES.items()
+            },
+        )
+        _assert_output_value(
+            pulumi.Output.all(**outputs.queue_arns),
+            {
+                key: f"arn:aws:sqs:eu-central-1:123456789012:{name}"
+                for key, name in QUEUE_LOGICAL_NAMES.items()
+            },
+        )
+
+    with mocked_pulumi_context(
+        MANAGED_STACK_CONFIG,
+        aws_config_values={
+            "region": "eu-central-1",
+            "allowedAccountIds": ["123456789012"],
+        },
+    ):
+        _run_pulumi_program(program)
+
+
+def test_offline_preview_exports_the_insert_batch_dead_letter_queue() -> None:
+    def program() -> None:
+        stack_component = UserServiceStack("offline-dlq")
+        outputs = stack_component.messaging.outputs
+        _assert_output_value(
+            pulumi.Output.all(**outputs.queue_urls),
+            {
+                key: f"https://sqs.eu-central-1.amazonaws.com/preview/{name}"
+                for key, name in QUEUE_LOGICAL_NAMES.items()
+            },
+        )
+        _assert_output_value(
+            pulumi.Output.all(**outputs.queue_arns),
+            {
+                key: f"arn:aws:sqs:eu-central-1:preview:{name}"
+                for key, name in QUEUE_LOGICAL_NAMES.items()
+            },
+        )
+
+    with mocked_pulumi_context({"deploymentMode": "preview"}):
+        _run_pulumi_program(program)
+
+
+def test_ecr_lifecycle_expires_only_untagged_images() -> None:
+    resources, _ = _managed_registrations()
+    for kind in ("web", "worker"):
+        lifecycle = resources[f"user-service-{kind}-repository-lifecycle"]
+        assert json.loads(lifecycle["inputs"]["policy"]) == {
+            "rules": [
+                {
+                    "rulePriority": 1,
+                    "description": (
+                        "Expire untagged images; tagged sha- release images are "
+                        "retained."
+                    ),
+                    "selection": {
+                        "tagStatus": "untagged",
+                        "countType": "sinceImagePushed",
+                        "countUnit": "days",
+                        "countNumber": 14,
+                    },
+                    "action": {"type": "expire"},
+                }
+            ]
+        }
+
+
+def test_managed_services_wait_for_steady_state_with_bounded_timeouts() -> None:
+    resources, monitor = _managed_registrations()
+    for kind in ("web", "worker"):
+        name = f"user-service-{kind}-service"
+        assert resources[name]["inputs"]["waitForSteadyState"] is True
+        assert monitor.options[name]["customTimeouts"] == {
+            "create": "10m",
+            "update": "10m",
+            "delete": "",
+        }
+    assert all(
+        options["customTimeouts"] == {"create": "", "update": "", "delete": ""}
+        for name, options in monitor.options.items()
+        if name not in {"user-service-web-service", "user-service-worker-service"}
+    )
+
+
+def test_managed_containers_run_read_only_with_dropped_capabilities() -> None:
+    resources, _ = _managed_registrations()
+    expected = {
+        "web": (
+            [
+                ("app-var", "/srv/app/var"),
+                ("caddy-data", "/data"),
+                ("caddy-config", "/config"),
+            ],
+            [
+                "AUDIT_WRITE",
+                "CHOWN",
+                "DAC_OVERRIDE",
+                "FOWNER",
+                "FSETID",
+                "KILL",
+                "MKNOD",
+                "NET_RAW",
+                "SETFCAP",
+                "SETPCAP",
+                "SYS_CHROOT",
+            ],
+            "frankenphp run --config /etc/caddy/Caddyfile",
+        ),
+        "worker": (
+            [("app-var", "/srv/app/var"), ("run", "/run")],
+            ["ALL"],
+            "/usr/bin/supervisord -c /etc/supervisor/supervisord.conf "
+            "-l /srv/app/var/log/supervisord.log -j /srv/app/var/run/supervisord.pid",
+        ),
+    }
+    for kind, (paths, dropped, runtime) in expected.items():
+        task = resources[f"user-service-{kind}-task"]["inputs"]
+        assert task["volumes"] == [{"name": name} for name, _ in paths]
+        container = json.loads(task["containerDefinitions"])[0]
+        assert container["readonlyRootFilesystem"] is True
+        assert container["mountPoints"] == [
+            {"sourceVolume": name, "containerPath": path, "readOnly": False}
+            for name, path in paths
+        ]
+        assert container["linuxParameters"] == {"capabilities": {"drop": dropped}}
+        assert container["command"] == [
+            "/bin/sh",
+            "-ec",
+            "set -eu; install -d -m 700 /srv/app/var/run/secrets; "
+            "install -d -m 1777 /srv/app/var/tmp; "
+            "install -d -m 755 /srv/app/var/log /srv/app/var/run; "
+            'printf "%s" "$OAUTH_PRIVATE_KEY_PEM"'
+            " > /srv/app/var/run/secrets/oauth-private.pem; "
+            'printf "%s" "$OAUTH_PUBLIC_KEY_PEM"'
+            " > /srv/app/var/run/secrets/oauth-public.pem; "
+            "chmod 600 /srv/app/var/run/secrets/oauth-private.pem; "
+            "chmod 644 /srv/app/var/run/secrets/oauth-public.pem; "
+            f"exec {runtime}",
+        ]
+        environment = {row["name"]: row["value"] for row in container["environment"]}
+        assert environment["TMPDIR"] == "/srv/app/var/tmp"
+        _assert_runtime_paths_precreated(container["command"][-1])
+    from app.compute import DEFAULT_CAPABILITIES
+
+    assert len(DEFAULT_CAPABILITIES) == len(set(DEFAULT_CAPABILITIES)) == 14
+    assert set(expected["web"][1]) == set(DEFAULT_CAPABILITIES) - {
+        "NET_BIND_SERVICE",
+        "SETGID",
+        "SETUID",
+    }
+
+
+def _assert_runtime_paths_precreated(script: str) -> None:
+    """Every supervisord -l/-j parent directory exists before the final exec."""
+    prelude, _, runtime = script.partition("; exec ")
+    assert runtime
+    tokens = runtime.split()
+    created = {
+        directory
+        for step in prelude.split("; ")
+        if step.startswith("install -d ")
+        for directory in step.split()[2:]
+        if directory.startswith("/")
+    }
+    for flag in ("-l", "-j"):
+        if flag in tokens:
+            parent = tokens[tokens.index(flag) + 1].rsplit("/", 1)[0]
+            assert parent in created, (flag, parent)
+
+
+def test_runtime_path_check_rejects_missing_parent_directory():
+    script = "set -eu; install -d /srv/app/var/run; exec x -l /srv/app/var/log/a.log"
+    with pytest.raises(AssertionError):
+        _assert_runtime_paths_precreated(script)
+    with pytest.raises(AssertionError):
+        _assert_runtime_paths_precreated("set -eu")

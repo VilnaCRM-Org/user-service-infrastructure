@@ -114,7 +114,16 @@ def _stop_children():
         time.sleep(0.01)
 
 
-def run(command, *, env, cwd, child=False, timeout=1200, check=True):
+# Ordering that must hold: APPLY_TIMEOUT_SECONDS <= STS session (3600 s, the
+# configure-aws-credentials default session duration when the OIDC step sets no
+# role-duration-seconds; APPLY_TIMEOUT_SECONDS applies to every service-transport
+# `pulumi up`, registry and workload) <= test_apply job
+# timeout in self-deploy.yml. tests/unit/test_apply_timeout_budget.py asserts it.
+DEFAULT_TIMEOUT_SECONDS = 1200
+APPLY_TIMEOUT_SECONDS = 3300
+
+
+def run(command, *, env, cwd, child=False, timeout=DEFAULT_TIMEOUT_SECONDS, check=True):
     """Execute trusted absolute binaries without a shell or unbounded output."""
     require(Path(command[0]).is_absolute(), "absolute-executable-required")
     try:

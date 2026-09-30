@@ -19,6 +19,22 @@ from app.runtime_secrets import RuntimeSecrets, RuntimeSecretsDescriptor
 
 __all__ = ["DataPlane"]
 
+DOCUMENTDB_LOG_EXPORTS = ("audit", "profiler")
+DOCUMENTDB_LOG_RETENTION_DAYS = 30
+# TLS must not rely on the engine default; audit and profiler exports only emit
+# events when the cluster parameter group enables them.
+DOCUMENTDB_CLUSTER_PARAMETERS = {
+    "tls": "enabled",
+    "audit_logs": "enabled",
+    "profiler": "enabled",
+    "profiler_threshold_ms": "100",
+}
+
+
+def _documentdb_parameter_family(engine_version: str) -> str:
+    """Map an engine version such as ``5.0.0`` to its ``docdb5.0`` family."""
+    return "docdb" + ".".join(engine_version.split(".")[:2])
+
 
 def _documentdb_url(
     username: str,
@@ -54,6 +70,9 @@ class DataOutputs:
     redis_endpoint: pulumi.Input[str]
     redis_port: pulumi.Input[int]
     redis_url_secret_arn: pulumi.Input[str]
+    # Resources ECS services must wait for: the cluster endpoint resolves before
+    # any DocumentDB instance exists, so the endpoint alone is not an edge.
+    documentdb_instances: tuple[pulumi.Resource, ...] = ()
 
 
 class DataPlane(pulumi.ComponentResource):
@@ -137,37 +156,64 @@ class DataPlane(pulumi.ComponentResource):
             opts=pulumi.ResourceOptions(parent=self),
         )
 
+        cluster_identifier = build_resource_name(
+            settings.stack_tag,
+            "docdb",
+            max_length=63,
+        )
+        # Stack tags are at most 65 characters, far below the 255-character limit.
+        parameter_group_name = build_resource_name(settings.stack_tag, "docdb-params")
+        parameter_group = aws.docdb.ClusterParameterGroup(
+            "user-service-documentdb-parameters",
+            name=parameter_group_name,
+            family=_documentdb_parameter_family(settings.documentdb.engine_version),
+            description="User service DocumentDB TLS, audit and profiler settings.",
+            parameters=[
+                aws.docdb.ClusterParameterGroupParameterArgs(
+                    name=name, value=value, apply_method="pending-reboot"
+                )
+                for name, value in DOCUMENTDB_CLUSTER_PARAMETERS.items()
+            ],
+            opts=pulumi.ResourceOptions(parent=self),
+        )
+        # DocumentDB creates missing export groups without retention; own them first.
+        log_groups = [
+            aws.cloudwatch.LogGroup(
+                f"user-service-documentdb-{export}-logs",
+                name=f"/aws/docdb/{cluster_identifier}/{export}",
+                retention_in_days=DOCUMENTDB_LOG_RETENTION_DAYS,
+                opts=pulumi.ResourceOptions(parent=self),
+            )
+            for export in DOCUMENTDB_LOG_EXPORTS
+        ]
+
+        # Every managed environment retains the cluster and a final snapshot.
         documentdb_cluster = aws.docdb.Cluster(
             "user-service-documentdb-cluster",
-            cluster_identifier=build_resource_name(
-                settings.stack_tag,
-                "docdb",
-                max_length=63,
-            ),
+            cluster_identifier=cluster_identifier,
             engine="docdb",
             engine_version=settings.documentdb.engine_version,
             master_username=settings.documentdb.username,
             master_password=password,
             db_subnet_group_name=documentdb_subnet_group.name,
+            db_cluster_parameter_group_name=parameter_group_name,
             vpc_security_group_ids=[network.outputs.documentdb_security_group_id],
             storage_encrypted=True,
-            enabled_cloudwatch_logs_exports=["audit", "profiler"],
+            enabled_cloudwatch_logs_exports=list(DOCUMENTDB_LOG_EXPORTS),
             port=settings.documentdb.port,
             backup_retention_period=settings.documentdb.backup_retention_days,
             preferred_backup_window=settings.documentdb.preferred_backup_window,
             preferred_maintenance_window=(
                 settings.documentdb.preferred_maintenance_window
             ),
-            deletion_protection=settings.documentdb.deletion_protection,
-            skip_final_snapshot=settings.documentdb.skip_final_snapshot,
-            final_snapshot_identifier=(
-                None
-                if settings.documentdb.skip_final_snapshot
-                else build_resource_name(
-                    settings.stack_tag, "docdb-final", max_length=63
-                )
+            deletion_protection=True,
+            skip_final_snapshot=False,
+            final_snapshot_identifier=build_resource_name(
+                settings.stack_tag, "docdb-final", max_length=63
             ),
-            opts=pulumi.ResourceOptions(parent=self),
+            opts=pulumi.ResourceOptions(
+                parent=self, protect=True, depends_on=[parameter_group, *log_groups]
+            ),
         )
 
         if settings.documentdb.instance_count < 1:
@@ -175,8 +221,9 @@ class DataPlane(pulumi.ComponentResource):
                 "documentDbInstanceCount must be at least 1 for managed deployments."
             )
 
+        documentdb_instances: list[pulumi.Resource] = []
         for index in range(settings.documentdb.instance_count):
-            aws.docdb.ClusterInstance(
+            instance = aws.docdb.ClusterInstance(
                 f"user-service-documentdb-instance-{index + 1}",
                 identifier=build_resource_name(
                     settings.stack_tag,
@@ -187,8 +234,9 @@ class DataPlane(pulumi.ComponentResource):
                 instance_class=settings.documentdb.instance_class,
                 apply_immediately=True,
                 enable_performance_insights=True,
-                opts=pulumi.ResourceOptions(parent=self),
+                opts=pulumi.ResourceOptions(parent=self, protect=True),
             )
+            documentdb_instances.append(instance)
 
         documentdb_url_secret_arn = self._persist_url(
             "document_db_url",
@@ -266,6 +314,7 @@ class DataPlane(pulumi.ComponentResource):
             redis_endpoint=redis_replication_group.primary_endpoint_address,
             redis_port=pulumi.Output.from_input(settings.redis.port),
             redis_url_secret_arn=redis_url_secret_arn,
+            documentdb_instances=tuple(documentdb_instances),
         )
 
     def _persist_url(

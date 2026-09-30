@@ -314,7 +314,11 @@ def test_native_adapter_closed_environment_and_operation_allowlist(monkeypatch):
     monkeypatch.setattr(
         module, "run", lambda command, **kw: calls.append((command, kw)) or b"{}"
     )
-    for service, op in (("iam", "get-role"), ("acm", "describe-certificate")):
+    for service, op in (
+        ("iam", "get-role"),
+        ("acm", "describe-certificate"),
+        ("ssm", "get-parameter"),
+    ):
         assert module._native(service, op, []) == {}
     assert (
         calls[0][0][calls[0][0].index("--endpoint-url") + 1]
@@ -324,6 +328,11 @@ def test_native_adapter_closed_environment_and_operation_allowlist(monkeypatch):
         calls[1][0][calls[1][0].index("--endpoint-url") + 1]
         == "https://acm.eu-central-1.amazonaws.com"
     )
+    assert (
+        calls[2][0][calls[2][0].index("--endpoint-url") + 1]
+        == "https://ssm.eu-central-1.amazonaws.com"
+    )
+    assert "--with-decryption" not in calls[2][0]
     for command, kw in calls:
         assert command[0] == module.AWS and "--no-paginate" in command
         assert set(kw["env"]) == {
@@ -357,3 +366,95 @@ def test_wrong_phase_or_unsupported_platform_rejects_before_reads(native_evidenc
     with pytest.raises(ValueError, match="supported-platform"):
         module.inspect_capabilities(contract, native=native)
     assert calls == []
+
+
+@pytest.fixture
+def parameter_evidence(native_evidence):
+    contract, roles, certificate, original, calls = native_evidence
+    domain = contract["workload"]["external"]["domain"]
+    parameter = {
+        "Name": module.CERTIFICATE_PARAMETER_NAME,
+        "ARN": module.CERTIFICATE_PARAMETER_ARN,
+        "Type": "String",
+        "DataType": "text",
+        "Version": 1,
+        "Value": domain.pop("certificate_arn"),
+    }
+    domain["certificate_parameter_name"] = module.CERTIFICATE_PARAMETER_NAME
+
+    def native(service, operation, arguments):
+        if service == "ssm":
+            assert operation == "get-parameter"
+            assert arguments == ["--name", module.CERTIFICATE_PARAMETER_NAME]
+            calls.append((service, operation, arguments))
+            return {"Parameter": copy.deepcopy(parameter)}
+        return original(service, operation, arguments)
+
+    return contract, parameter, certificate, native, calls
+
+
+def test_fixed_parameter_is_read_twice_and_passes_existing_acm_validation(
+    parameter_evidence,
+):
+    contract, parameter, certificate, native, calls = parameter_evidence
+    assert module.inspect_capabilities(contract, native=native) == {
+        "parameter_arn": parameter["ARN"],
+        "parameter_version": 1,
+        "certificate_arn": parameter["Value"],
+    }
+    assert len([op for _, op, _ in calls if op == "get-parameter"]) == 2
+    certificate["Status"] = "PENDING_VALIDATION"
+    with pytest.raises(ValueError, match="certificate-binding"):
+        module.inspect_capabilities(contract, native=native)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("Name", "/foreign"),
+        ("ARN", "foreign"),
+        ("Type", "SecureString"),
+        ("Type", "StringList"),
+        ("DataType", "aws:ec2:image"),
+        ("Version", True),
+        ("Version", 0),
+        ("Version", "1"),
+        (
+            "Value",
+            "arn:aws:acm:eu-central-1:933245420672:certificate/00000000-0000-4000-8000-000000000002",
+        ),
+        ("Selector", ":alias"),
+    ],
+)
+def test_parameter_identity_type_version_and_value_reject_before_acm(
+    parameter_evidence, field, value
+):
+    contract, parameter, _, native, calls = parameter_evidence
+    parameter[field] = value
+    with pytest.raises(ValueError, match="certificate-parameter"):
+        module.inspect_capabilities(contract, native=native)
+    assert not any(op == "describe-certificate" for _, op, _ in calls)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "denied", "version", "value"])
+def test_missing_denied_or_moved_parameter_fails_closed(parameter_evidence, mutation):
+    contract, parameter, _, original, _ = parameter_evidence
+
+    def native(service, operation, arguments):
+        if service == "ssm" and mutation == "denied":
+            raise ValueError("private-process-failed")
+        if service == "ssm" and mutation == "missing":
+            return {}
+        result = original(service, operation, arguments)
+        if operation == "simulate-principal-policy":
+            if mutation == "version":
+                parameter["Version"] += 1
+            if mutation == "value":
+                parameter["Value"] = parameter["Value"][:-1] + "3"
+        return result
+
+    with pytest.raises(
+        ValueError,
+        match="private-process-failed|certificate-parameter|native-inputs-changed",
+    ):
+        module.inspect_capabilities(contract, native=native)

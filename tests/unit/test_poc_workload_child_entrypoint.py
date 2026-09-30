@@ -33,8 +33,14 @@ def test_child_wire_round_trip_is_closed_canonical_and_detached():
     decoded = module.decode_workload_projection(raw)
     assert decoded == original
     assert module.encode_workload_projection(decoded) == raw
-    assert set(json.loads(raw)) == {"schema_version", "source", "contract", "images"}
-    assert json.loads(raw)["schema_version"] == "poc-workload-child-v1"
+    assert set(json.loads(raw)) == {
+        "schema_version",
+        "source",
+        "contract",
+        "images",
+        "certificate",
+    }
+    assert json.loads(raw)["schema_version"] == "poc-workload-child-v2"
     original.images["web"]["uri"] = "foreign"
     assert decoded.images["web"]["uri"] != "foreign"
 

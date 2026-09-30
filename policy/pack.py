@@ -146,8 +146,12 @@ def require_production_database_safety(
     args: ResourceValidationArgs, report_violation: ReportViolation
 ) -> None:
     """Require safer defaults for production-like database resources."""
+    options = getattr(args, "opts", None)
     for violation in production_database_violations(
-        args.resource_type, args.props, CONFIG
+        args.resource_type,
+        args.props,
+        CONFIG,
+        protect=getattr(options, "protect", None),
     ):
         report_violation(violation)
 

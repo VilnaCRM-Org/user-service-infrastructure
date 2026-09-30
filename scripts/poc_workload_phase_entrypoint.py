@@ -1,7 +1,8 @@
 """Internal workload settings bridge; no CLI, admission or execution permission.
 
 The trusted caller must authenticate source, images, capabilities and prior state.
-The existing worker remains disabled until native plan/replay gates are connected.
+The worker reaches this bridge only through the protected runner, which routes TEST
+``plan`` and ``up-plan`` for a workload-phase contract.
 """
 
 from __future__ import annotations
@@ -16,11 +17,12 @@ from typing import Any, cast
 import poc_contract
 from poc_phase_admission import CONTRACT_PATH, SourceAdmission
 from poc_registry_phase_entrypoint import _stable_registries
+from poc_workload_capabilities import certificate_projection
 from poc_workload_images import MAX_CONFIG_BYTES, MEDIA
 from service_execution_process import require
 
 MAX_PROJECTION_BYTES = poc_contract.MAX_BYTES + 16384
-PROJECTION_VERSION = "poc-workload-child-v1"
+PROJECTION_VERSION = "poc-workload-child-v2"
 
 
 @dataclass(frozen=True)
@@ -30,6 +32,7 @@ class WorkloadPhaseProjection:
     source: SourceAdmission
     contract: dict[str, Any]
     images: dict[str, Any]
+    certificate: dict[str, Any] | None = None
 
 
 def _source(source):
@@ -90,7 +93,7 @@ def _images(contract, observed):
         )
 
 
-def project_workload_phase(source, contract, images):
+def project_workload_phase(source, contract, images, certificate=None):
     """Bind already-authenticated facts without contacting AWS or resolving secrets."""
     _source(source)
     require(type(contract) is dict, "workload-contract-object")
@@ -114,18 +117,24 @@ def project_workload_phase(source, contract, images):
     )
     observed = copy.deepcopy(images)
     _images(document, observed)
-    return WorkloadPhaseProjection(source, document, observed)
+    observed_certificate = certificate_projection(
+        document["workload"]["external"]["domain"], certificate
+    )
+    return WorkloadPhaseProjection(source, document, observed, observed_certificate)
 
 
 def _checked(projection):
     require(type(projection) is WorkloadPhaseProjection, "workload-projection")
     return project_workload_phase(
-        projection.source, projection.contract, projection.images
+        projection.source,
+        projection.contract,
+        projection.images,
+        projection.certificate,
     )
 
 
 def encode_workload_projection(projection):
-    """Encode detached nonsecret data for a future root-owned generated program."""
+    """Encode detached nonsecret data for the root-owned generated program."""
     checked = _checked(projection)
     raw = json.dumps(
         {
@@ -133,6 +142,7 @@ def encode_workload_projection(projection):
             "source": asdict(checked.source),
             "contract": checked.contract,
             "images": checked.images,
+            "certificate": checked.certificate,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -158,7 +168,8 @@ def decode_workload_projection(raw):
         raise ValueError("workload-projection-json") from None
     require(
         type(document) is dict
-        and set(document) == {"schema_version", "source", "contract", "images"}
+        and set(document)
+        == {"schema_version", "source", "contract", "images", "certificate"}
         and document["schema_version"] == PROJECTION_VERSION,
         "workload-projection-fields",
     )
@@ -169,7 +180,10 @@ def decode_workload_projection(raw):
         "workload-source-fields",
     )
     projection = project_workload_phase(
-        SourceAdmission(**source), document["contract"], document["images"]
+        SourceAdmission(**source),
+        document["contract"],
+        document["images"],
+        document["certificate"],
     )
     require(
         raw == encode_workload_projection(projection), "workload-projection-canonical"
@@ -180,7 +194,7 @@ def decode_workload_projection(raw):
 def workload_program_source(projection):
     """Generate only a fixed installed import and literal data, never caller code.
 
-    The future root materializer must protect this program, its config and the
+    The root materializer must protect this program, its config and the
     installed runtime. This function neither writes files nor launches a child.
     """
     raw = encode_workload_projection(projection)
@@ -195,7 +209,7 @@ def workload_program_source(projection):
 
 
 def workload_python_wrapper_source():
-    """Return the future protected launcher; never execute or install it here."""
+    """Return the protected launcher; never execute or install it here."""
     return (
         "#!/opt/service-runtime/bin/python -I\n"
         "import os, sys\n"
@@ -207,6 +221,14 @@ def workload_python_wrapper_source():
 def run_workload_program(raw):
     """Execute the sole graph from embedded data; no path/config/CLI phase input."""
     return run_workload_phase(decode_workload_projection(raw))
+
+
+def workload_certificate_arn(projection):
+    """Return only the checked resolved ARN; explicit input is for internal callers."""
+    checked = _checked(projection)
+    if checked.certificate is not None:
+        return checked.certificate["certificate_arn"]
+    return checked.contract["workload"]["external"]["domain"]["certificate_arn"]
 
 
 def workload_configuration(projection):
@@ -234,8 +256,11 @@ def workload_configuration(projection):
         "apiBaseUrl": base_url,
         "apiUrl": base_url,
         "corsAllowOrigin": "^" + re.escape(base_url) + "$",
-        "certificateArn": domain["certificate_arn"],
+        "certificateArn": workload_certificate_arn(checked),
         "mailSender": workload["external"]["mail"]["sender"],
+        "jwtIssuer": "vilnacrm-user-service",
+        "jwtAudience": "vilnacrm-api",
+        "awsEmfNamespace": "UserService/BusinessMetrics",
         "healthCheckPath": workload["runtime"]["health_path"],
         "healthCheckQueueName": "health-check-queue",
         "awsSqsEndpointBase": f"https://sqs.{checked.contract['region']}.amazonaws.com",

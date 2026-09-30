@@ -128,10 +128,11 @@ publisher run; it does not prove image publication or activate workloads.
 
 ## Isolated service execution
 
-The TEST controller admits only authenticated registry-phase plan/apply/drift
-jobs after source, requester, review and environment checks. Its TEST registry
-jobs use the installed-main `service_execution_host.py` launcher.
-PROD and workload routes remain absent. Registry completion can publish only
+The TEST controller admits authenticated registry-phase plan/apply/drift jobs
+and, when the committed contract phase is `workload`, workload `plan` and
+`up-plan` (workload drift is rejected), after source, requester, review and
+environment checks. Its TEST jobs use the installed-main
+`service_execution_host.py` launcher. PROD routes are not implemented. Registry completion can publish only
 the distinct TEST proof after apply, drift and observation, then dispatch the
 protected application publisher. Scheduled drift retains the
 existing main-only `make start` / `make test-drift` path; it does not call the
@@ -157,10 +158,16 @@ The trusted parent retains the existing requester/review, provider/checkpoint,
 saved-plan hash/age, destructive-change and TEST registry graph checks. Admission
 is refreshed immediately before each preview or apply program and after execution.
 Only the existing plan, preview and manifest artifacts leave the private worker.
-The registry completion observer/publisher helpers remain unconnected.
+The protected workload runner is connected for TEST `plan` and `up-plan` when
+the committed contract phase is `workload`; only the registry completion
+observer/publisher helpers are not yet installed.
 
-The TEST-only source prerequisite still blocks PROD promotion, and no workload
-phase is admitted by this change. Network-disabled Docker tests prove the local
+The TEST-only source prerequisite still blocks PROD promotion. The committed
+contract phase stays `registry` (see the hard stop in `specs/poc/README.md`), and
+the hard stop is a merge gate only: the phase is read from the PR-head contract
+and admission checks review, not CI, so it is not a runtime block. A runtime guard
+that refuses workload apply independent of the PR-head phase is tracked in
+issue #57. Network-disabled Docker tests prove the local
 UID/filesystem/process boundary with synthetic state; they do not establish
 hosted OIDC, cloud deployment or workload acceptance. Installation and current-head
 TEST registry evidence remain required before this route is accepted; issue 185

@@ -239,6 +239,11 @@ def _plan_manifest_entry(
             if context.provider_identity is not None
             else {}
         ),
+        **(
+            {"executionIdentity": context.execution_identity}
+            if context.execution_identity is not None
+            else {}
+        ),
     }
 
 
@@ -795,6 +800,8 @@ def _replay_prepared_plan(
 ) -> int | None:
     """Verify provider and optional registry graph immediately before replay."""
     entry = _manifest_stack_entry(manifest or {}, stack)
+    if (entry or {}).get("executionIdentity") != prepared.execution_identity:
+        raise ValueError("Saved-plan generated execution identity changed.")
     verify_provider_identity(prepared, entry or {})
     if prepared.registry_plan_gate is not None:
         preview = _manifest_path(

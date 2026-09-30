@@ -1,8 +1,9 @@
 # Internal no-change workload reconciliation
 
 `scripts/poc_workload_reconciliation.py` provides a supplementary pure validator
-for Pulumi 3.223.0 saved plans. It does not enable the workload worker. Both existing
-execution stops remain, and this module publishes no receipt or plan artifact.
+for Pulumi 3.223.0 saved plans. It is not wired into the worker: workload drift and
+later no-change releases remain rejected by both the worker and the runner, and this
+module publishes no receipt or plan artifact.
 
 The caller must independently authenticate an accepted workload receipt, its
 complete native checkpoint, current capabilities, reviewed source, and original

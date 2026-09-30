@@ -126,8 +126,9 @@ def test_post_apply_drift_uses_closed_driver_with_preview_identity():
     job = workflow()["test_post_apply_drift"]
     assert "test_apply" in job["needs"]
     assert job["if"] == (
-        "${{ needs.preflight.outputs.command == 'up' && "
-        "needs.preflight.outputs.target_environment == 'test' }}"
+        "needs.preflight.outputs.command == 'up' && "
+        "needs.preflight.outputs.target_environment == 'test' && "
+        "needs.poc_prepare_source.outputs.phase == 'registry'"
     )
     assert job["environment"] == "test-preview"
     config = next(s for s in job["steps"] if s.get("id") == "ci_config")

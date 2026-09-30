@@ -1,17 +1,21 @@
 """First-workload topology prerequisite, not complete input or IAM admission.
 
-Only the installed two-AZ ECS/Fargate composition is covered. Unknown computed
-inputs still need semantic validation. No capability object or caller boolean can
-turn this source-only validator into execution authority.
+The installed two-AZ ECS/Fargate composition and bounded known native inputs are
+covered. Unknown computed inputs and baseline configuration still need semantic
+binding. No capability object or caller boolean can turn this source-only validator
+into execution authority.
 """
 
 import base64
+import json
+import re
 
+import poc_contract
 import poc_registry_plan as registry
 import poc_workload_reconciliation as unchanged
 from poc_registry_phase_entrypoint import RegistryPhaseProjection
 from poc_workload_aliases import state_aliases, structured_aliases
-from poc_workload_phase_entrypoint import _checked
+from poc_workload_phase_entrypoint import _checked, workload_certificate_arn
 from service_execution_process import require
 
 SECRET_VERSION_OUTPUTS = [
@@ -20,6 +24,111 @@ SECRET_VERSION_OUTPUTS = [
     "secretString",
     "secretStringWo",
 ]
+ALLOWED_HTTPS_RULE_FIELDS = frozenset(
+    {
+        "protocol",
+        "fromPort",
+        "toPort",
+        "securityGroups",
+        "cidrBlocks",
+        "ipv6CidrBlocks",
+        "prefixListIds",
+        "self",
+        "description",
+    }
+)
+CONTAINER_SECRET_NAMES = {
+    "MONGODB_URL": "document_db_url",
+    "REDIS_URL": "redis_url",
+    # These are environment-variable and secret-purpose identifiers, not values.
+    "APP_SECRET": "app_secret",  # nosec B105
+    "OAUTH_ENCRYPTION_KEY": "oauth_encryption_key",
+    "OAUTH_PASSPHRASE": "oauth_passphrase",  # nosec B105
+    "TWO_FACTOR_ENCRYPTION_KEY": "two_factor_encryption_key",
+    "OAUTH_PRIVATE_KEY_PEM": "oauth_private_key",
+    "OAUTH_PUBLIC_KEY_PEM": "oauth_public_key",
+    "REDIS_LOCKOUT_URL": "redis_url",
+}
+QUEUE_NAMES = {
+    "send-email": "send-email",
+    "failed-send-email": "failed-send-email",
+    "insert-user-batch": "insert-user-batch",
+    "failed-insert-user-batch": "failed-insert-user-batch",
+    "domain-events": "domain-events",
+    "failed-domain-events": "failed-domain-events",
+    "health-check": "health-check-queue",
+}
+DOCUMENTDB_CLUSTER = f"{registry.PROJECT}-test-docdb"
+DOCUMENTDB_PARAMETERS = [
+    {"name": name, "value": value, "applyMethod": "pending-reboot"}
+    for name, value in (
+        ("audit_logs", "enabled"),
+        ("profiler", "enabled"),
+        ("profiler_threshold_ms", "100"),
+        ("tls", "enabled"),
+    )
+]
+# Every consumed work queue redrives to its own retained dead-letter queue.
+QUEUE_DEAD_LETTERS = {
+    "send-email": "failed-send-email",
+    "insert-user-batch": "failed-insert-user-batch",
+    "domain-events": "failed-domain-events",
+}
+DEAD_LETTER_RETENTION_SECONDS = 1_209_600
+QUEUE_MAX_RECEIVE_COUNT = 3
+# Tagged sha- release images stay available for rollback; only untagged expire.
+REPOSITORY_LIFECYCLE_POLICY = {
+    "rules": [
+        {
+            "rulePriority": 1,
+            "description": (
+                "Expire untagged images; tagged sha- release images are retained."
+            ),
+            "selection": {
+                "tagStatus": "untagged",
+                "countType": "sinceImagePushed",
+                "countUnit": "days",
+                "countNumber": 14,
+            },
+            "action": {"type": "expire"},
+        }
+    ]
+}
+# Read-only containers write only to per-task ephemeral volumes.
+CONTAINER_WRITABLE_PATHS = {
+    "web": (
+        ("app-var", "/srv/app/var"),
+        ("caddy-data", "/data"),
+        ("caddy-config", "/config"),
+    ),
+    "worker": (("app-var", "/srv/app/var"), ("run", "/run")),
+}
+# Web keeps only NET_BIND_SERVICE, SETUID and SETGID from Docker's defaults.
+CONTAINER_DROPPED_CAPABILITIES = {
+    "web": [
+        "AUDIT_WRITE",
+        "CHOWN",
+        "DAC_OVERRIDE",
+        "FOWNER",
+        "FSETID",
+        "KILL",
+        "MKNOD",
+        "NET_RAW",
+        "SETFCAP",
+        "SETPCAP",
+        "SYS_CHROOT",
+    ],
+    "worker": ["ALL"],
+}
+# Native saved plans record custom timeouts in seconds.
+SERVICE_CUSTOM_TIMEOUTS = {"create": 600, "update": 600}
+QUEUE_ENVIRONMENT_NAMES = {
+    "SEND_EMAIL_TRANSPORT_DSN": "send-email",
+    "FAILED_EMAIL_TRANSPORT_DSN": "failed-send-email",
+    "INSERT_USER_BATCH_TRANSPORT_DSN": "insert-user-batch",
+    "DOMAIN_EVENTS_TRANSPORT_DSN": "domain-events",
+    "FAILED_DOMAIN_EVENTS_TRANSPORT_DSN": "failed-domain-events",
+}
 
 
 def _sdk_aliases(kind):
@@ -127,7 +236,7 @@ def _network_graph(add, planes):
             network[f"{prefix}-rt-{index}"] = "routeTable:RouteTable"
         network[f"nat-eip-{index}"] = "eip:Eip"
         network[f"nat-{index}"] = "natGateway:NatGateway"
-    for purpose in ("alb", "service", "documentdb", "redis"):
+    for purpose in ("alb", "vpc-link", "service", "documentdb", "redis"):
         network[f"{purpose}-sg"] = "securityGroup:SecurityGroup"
     for name, kind in network.items():
         add(f"user-service-{name}", f"aws:ec2/{kind}", planes["network"])
@@ -136,27 +245,29 @@ def _network_graph(add, planes):
 def _application_graph(add, planes):
     for name, kind in {
         "documentdb-subnets": "docdb/subnetGroup:SubnetGroup",
+        "documentdb-parameters": "docdb/clusterParameterGroup:ClusterParameterGroup",
+        "documentdb-audit-logs": "cloudwatch/logGroup:LogGroup",
+        "documentdb-profiler-logs": "cloudwatch/logGroup:LogGroup",
         "documentdb-cluster": "docdb/cluster:Cluster",
         "documentdb-instance-1": "docdb/clusterInstance:ClusterInstance",
         "documentdb-instance-2": "docdb/clusterInstance:ClusterInstance",
         "redis-subnets": "elasticache/subnetGroup:SubnetGroup",
         "redis": "elasticache/replicationGroup:ReplicationGroup",
     }.items():
-        add(f"user-service-{name}", f"aws:{kind}", planes["data"])
-    for name in (
-        "send-email",
-        "failed-send-email",
-        "insert-user-batch",
-        "domain-events",
-        "failed-domain-events",
-        "health-check",
-    ):
+        # DocumentDB owns durable data; Pulumi must refuse to delete it.
+        add(
+            f"user-service-{name}",
+            f"aws:{kind}",
+            planes["data"],
+            protect=kind
+            in ("docdb/cluster:Cluster", "docdb/clusterInstance:ClusterInstance"),
+        )
+    for name in QUEUE_NAMES:
         add(f"user-service-{name}", "aws:sqs/queue:Queue", planes["messaging"])
     compute = {
         "ecs-cluster": "ecs/cluster:Cluster",
         "alb": "lb/loadBalancer:LoadBalancer",
         "target-group": "lb/targetGroup:TargetGroup",
-        "http-listener": "lb/listener:Listener",
         "https-listener": "lb/listener:Listener",
     }
     for kind in ("web", "worker"):
@@ -210,13 +321,14 @@ def _new_goal(urn, plan, graph, provider_id):
     _check(
         not any(
             goal.get(key)
-            for key in (
-                "aliases",
-                "id",
-                "ignoreChanges",
-                "deleteBeforeReplace",
-                "customTimeouts",
-            )
+            for key in ("aliases", "id", "ignoreChanges", "deleteBeforeReplace")
+        )
+    )
+    # Only ECS services bound their steady-state wait; nothing else overrides.
+    _check(
+        unchanged._same(
+            goal.get("customTimeouts") or {},
+            SERVICE_CUSTOM_TIMEOUTS if kind == "aws:ecs/service:Service" else {},
         )
     )
     _check(unchanged._same(goal.get("structuredAliases", []), _sdk_aliases(kind)))
@@ -256,7 +368,7 @@ def validate_first_workload_topology(
     preview, *, saved_plan, prior_resources, projection
 ):
     """Check exact registry-to-workload owners and operations; never grant apply."""
-    _checked(projection)
+    projection = _checked(projection)
     baseline = registry._graph(RegistryPhaseProjection(registry.REGISTRIES))
     prior = registry._prior(prior_resources, baseline)
     _check(prior.keys() == baseline.keys())
@@ -280,10 +392,22 @@ def validate_first_workload_topology(
         desired[urn] = _new_goal(
             urn, plans[urn], graph, prior[registry.PROVIDER_URN]["id"]
         )
+        _task_execution_inputs(desired[urn], projection)
     # All references must remain inside the complete finite owner graph.
     for row in desired.values():
         references = {key: value for key, value in row.items() if key != "provider"}
         unchanged._references(references, desired)
+    _dependency_edges(desired)
+    _private_gateway_inputs(desired, projection)
+    _web_target_inputs(desired, projection)
+    _task_container_inputs(desired, projection)
+    _private_subnet_inputs(desired, projection)
+    _managed_data_inputs(desired)
+    _documentdb_observability_inputs(desired)
+    _encrypted_queue_inputs(desired)
+    _queue_redrive_inputs(desired, projection)
+    _repository_lifecycle_inputs(desired)
+    _fargate_service_inputs(desired)
     seen = _validate_workload_steps(preview["steps"], baseline, graph, desired)
     required = {
         urn
@@ -291,6 +415,716 @@ def validate_first_workload_topology(
         if not graph[urn][0].startswith("pulumi:providers:")
     }
     _check(required <= seen)
+
+
+def _inputs(desired, name):
+    rows = [row for urn, row in desired.items() if urn.rsplit("::", 1)[-1] == name]
+    _check(len(rows) == 1 and type(rows[0].get("inputs")) is dict)
+    return rows[0]["inputs"]
+
+
+DOCUMENTDB_INSTANCE_PREFIX = "user-service-documentdb-instance-"
+
+
+def _dependency_edges(desired):
+    """Keep the fixed private network and ECS edges in first-create plans.
+
+    Unknown physical IDs still require accepted-result observation. Native
+    dependency edges cannot replace that observation, but their absence is a
+    definite topology mismatch before credentials can reach the child.
+    """
+    names = {urn.rsplit("::", 1)[-1]: urn for urn in desired}
+    required = {
+        "user-service-alb": {
+            "user-service-alb-sg",
+            "user-service-app-subnet-1",
+            "user-service-app-subnet-2",
+        },
+        "user-service-alb-sg": {"user-service-vpc", "user-service-vpc-link-sg"},
+        "user-service-vpc-link-sg": {"user-service-vpc"},
+        "user-service-target-group": {"user-service-vpc"},
+        "user-service-documentdb-cluster": {
+            "user-service-documentdb-parameters",
+            "user-service-documentdb-audit-logs",
+            "user-service-documentdb-profiler-logs",
+        },
+        "user-service-https-listener": {
+            "user-service-alb",
+            "user-service-target-group",
+        },
+        "user-service-web-service": {
+            "user-service-web-task",
+            "user-service-service-sg",
+            "user-service-app-subnet-1",
+            "user-service-app-subnet-2",
+            "user-service-https-listener",
+            "user-service-target-group",
+        },
+        "user-service-worker-service": {
+            "user-service-worker-task",
+            "user-service-service-sg",
+            "user-service-app-subnet-1",
+            "user-service-app-subnet-2",
+        },
+    }
+    instances = {name for name in names if name.startswith(DOCUMENTDB_INSTANCE_PREFIX)}
+    require(instances, "workload-first-topology-dependencies")
+    for service in ("user-service-web-service", "user-service-worker-service"):
+        required[service] |= instances
+    for owner, targets in required.items():
+        dependencies = desired[names[owner]].get("dependencies")
+        require(
+            type(dependencies) is list
+            and {names[name] for name in targets} <= set(dependencies),
+            "workload-first-topology-dependencies",
+        )
+
+
+def _private_gateway_inputs(desired, projection):
+    """Reject public ingress and cleartext listeners in the saved native plan.
+
+    First-create physical IDs can still be unknown. The accepted-result observer
+    must later bind the actual ALB, listener and security-group relationships.
+    """
+    _private_alb(_inputs(desired, "user-service-alb"))
+    _alb_ingress(_inputs(desired, "user-service-alb-sg"))
+    cidrs = projection.contract["workload"]["runtime"]["trusted_proxy_cidrs"]
+    _vpc_link_group(_inputs(desired, "user-service-vpc-link-sg"), cidrs)
+    _https_listener(_inputs(desired, "user-service-https-listener"), projection)
+
+
+def _private_alb(alb):
+    label = "workload-private-alb-inputs"
+    require(
+        alb.get("internal") is True
+        and alb.get("loadBalancerType") == "application"
+        and alb.get("dropInvalidHeaderFields") is True,
+        label,
+    )
+    for field, count in (("subnets", 2), ("securityGroups", 1)):
+        values = alb.get(field)
+        require(type(values) is list and len(values) == count, label)
+
+
+def _https_rule(rule, label):
+    require(type(rule) is dict and set(rule) <= ALLOWED_HTTPS_RULE_FIELDS, label)
+    require(
+        rule.get("protocol") == "tcp"
+        and rule.get("fromPort") == 443
+        and rule.get("toPort") == 443
+        and rule.get("self", False) is False,
+        label,
+    )
+
+
+def _alb_ingress(alb_group):
+    label = "workload-private-alb-ingress"
+    rules = alb_group.get("ingress")
+    require(type(rules) is list and len(rules) == 1, label)
+    rule = rules[0]
+    _https_rule(rule, label)
+    require(
+        type(rule.get("securityGroups")) is list
+        and len(rule["securityGroups"]) == 1
+        and all(
+            rule.get(field, []) == []
+            for field in ("cidrBlocks", "ipv6CidrBlocks", "prefixListIds")
+        ),
+        label,
+    )
+
+
+def _vpc_link_group(link_group, expected_cidrs):
+    label = "workload-vpc-link-group-inputs"
+    require(link_group.get("ingress") == [], label)
+    egress = link_group.get("egress")
+    require(type(egress) is list and len(egress) == 1, label)
+    rule = egress[0]
+    _https_rule(rule, label)
+    require(
+        rule.get("cidrBlocks") == expected_cidrs
+        and all(
+            rule.get(field, []) == []
+            for field in ("ipv6CidrBlocks", "prefixListIds", "securityGroups")
+        ),
+        label,
+    )
+
+
+def _https_listener(listener, projection):
+    require(
+        listener.get("protocol") == "HTTPS"
+        and listener.get("port") == 443
+        and listener.get("sslPolicy") == "ELBSecurityPolicy-TLS13-1-2-Res-2021-06"
+        and listener.get("certificateArn") == workload_certificate_arn(projection),
+        "workload-https-listener-inputs",
+    )
+    actions = listener.get("defaultActions")
+    label = "workload-https-listener-action"
+    require(type(actions) is list and len(actions) == 1, label)
+    action = actions[0]
+    require(
+        type(action) is dict
+        and set(action) == {"type", "targetGroupArn"}
+        and action["type"] == "forward"
+        and type(action["targetGroupArn"]) is str
+        and bool(action["targetGroupArn"]),
+        label,
+    )
+
+
+def _web_target_inputs(desired, projection):
+    """Check known routing settings; unknown ARNs still need native observation."""
+    target = _inputs(desired, "user-service-target-group")
+    require(
+        target.get("protocol") == "HTTP"
+        and target.get("targetType") == "ip"
+        and type(target.get("port")) is int
+        and 1 <= target["port"] <= 65535
+        and unchanged._same(target.get("deregistrationDelay"), 30),
+        "workload-web-target-inputs",
+    )
+    require(
+        unchanged._same(
+            target.get("healthCheck"),
+            {
+                "enabled": True,
+                "path": projection.contract["workload"]["runtime"]["health_path"],
+                "protocol": "HTTP",
+                "matcher": "200-399",
+                "healthyThreshold": 2,
+                "unhealthyThreshold": 3,
+                "interval": 30,
+                "timeout": 5,
+            },
+        ),
+        "workload-web-target-health",
+    )
+    action = _inputs(desired, "user-service-https-listener")["defaultActions"][0]
+    web = _inputs(desired, "user-service-web-service")
+    worker = _inputs(desired, "user-service-worker-service")
+    require(
+        unchanged._same(
+            web.get("loadBalancers"),
+            [
+                {
+                    "containerName": "user-service-web",
+                    "containerPort": target["port"],
+                    "targetGroupArn": action["targetGroupArn"],
+                }
+            ],
+        )
+        and worker.get("loadBalancers", []) == [],
+        "workload-web-service-target",
+    )
+
+
+def _private_subnet_inputs(desired, projection):
+    """Bind the private ALB/ECS networks to the admitted proxy CIDRs."""
+    expected = projection.contract["workload"]["runtime"]["trusted_proxy_cidrs"]
+    app = [_inputs(desired, f"user-service-app-subnet-{index}") for index in (1, 2)]
+    data_flags = [
+        _inputs(desired, f"user-service-data-subnet-{index}").get("mapPublicIpOnLaunch")
+        for index in (1, 2)
+    ]
+    require(
+        [row.get("cidrBlock") for row in app] == expected
+        and all(row.get("mapPublicIpOnLaunch") is False for row in app)
+        and all(flag is None or flag is False for flag in data_flags),
+        "workload-private-subnet-inputs",
+    )
+
+
+def _managed_data_inputs(desired):
+    """Reject unencrypted DocumentDB or Redis in a matching plan and preview."""
+    expected = {
+        "user-service-documentdb-cluster": {
+            "engine": "docdb",
+            "engineVersion": "5.0.0",
+            "storageEncrypted": True,
+            "enabledCloudwatchLogsExports": ["audit", "profiler"],
+            "dbClusterParameterGroupName": f"{DOCUMENTDB_CLUSTER}-params",
+            "deletionProtection": True,
+            "skipFinalSnapshot": False,
+            "finalSnapshotIdentifier": f"{DOCUMENTDB_CLUSTER}-final",
+        },
+        "user-service-redis": {
+            "engine": "redis",
+            "engineVersion": "7.1",
+            "atRestEncryptionEnabled": True,
+            "transitEncryptionEnabled": True,
+            "transitEncryptionMode": "required",
+            "authTokenUpdateStrategy": "ROTATE",
+        },
+    }
+    for name, fields in expected.items():
+        inputs = _inputs(desired, name)
+        require(
+            unchanged._same({key: inputs.get(key) for key in fields}, fields),
+            "workload-managed-data-inputs",
+        )
+    docdb = _inputs(desired, "user-service-documentdb-cluster")
+    redis = _inputs(desired, "user-service-redis")
+    require(
+        type(docdb.get("backupRetentionPeriod")) is int
+        and docdb["backupRetentionPeriod"] >= 7
+        and type(redis.get("snapshotRetentionLimit")) is int
+        and redis["snapshotRetentionLimit"] >= 7,
+        "workload-managed-data-retention",
+    )
+
+
+def _documentdb_observability_inputs(desired):
+    """Require explicit TLS/audit/profiler parameters and retained export groups."""
+    label = "workload-documentdb-observability-inputs"
+    group = _inputs(desired, "user-service-documentdb-parameters")
+    parameters = group.get("parameters")
+    require(
+        group.get("name") == f"{DOCUMENTDB_CLUSTER}-params"
+        and group.get("family") == "docdb5.0"
+        and type(parameters) is list
+        and all(type(row) is dict for row in parameters)
+        and unchanged._same(
+            sorted(parameters, key=lambda row: str(row.get("name"))),
+            DOCUMENTDB_PARAMETERS,
+        ),
+        label,
+    )
+    for export in ("audit", "profiler"):
+        logs = _inputs(desired, f"user-service-documentdb-{export}-logs")
+        require(
+            logs.get("name") == f"/aws/docdb/{DOCUMENTDB_CLUSTER}/{export}"
+            and unchanged._same(logs.get("retentionInDays"), 30),
+            label,
+        )
+
+
+def _encrypted_queue_inputs(desired):
+    """Require the fixed seven queues to use AWS-managed SQS encryption."""
+    for logical, physical in QUEUE_NAMES.items():
+        inputs = _inputs(desired, f"user-service-{logical}")
+        require(
+            inputs.get("name") == physical
+            and unchanged._same(
+                {
+                    key: inputs.get(key)
+                    for key in (
+                        "kmsMasterKeyId",
+                        "receiveWaitTimeSeconds",
+                        "visibilityTimeoutSeconds",
+                    )
+                },
+                {
+                    "kmsMasterKeyId": "alias/aws/sqs",
+                    "receiveWaitTimeSeconds": 20,
+                    "visibilityTimeoutSeconds": 120,
+                },
+            ),
+            "workload-encrypted-queue-inputs",
+        )
+
+
+def _queue_redrive_inputs(desired, projection):
+    """Bind each work queue to its retained dead-letter queue.
+
+    A first-create dead-letter ARN is unknown, so the redrive document may be the
+    whole-value unknown sentinel; the dependency edge must still be present.
+    """
+    label = "workload-queue-redrive-inputs"
+    names = {urn.rsplit("::", 1)[-1]: urn for urn in desired}
+    prefix = f"arn:aws:sqs:{projection.contract['region']}:"
+    prefix += f"{projection.contract['account_id']}:"
+    for source, dead_letter in QUEUE_DEAD_LETTERS.items():
+        row = desired[names[f"user-service-{source}"]]
+        dependencies = row.get("dependencies")
+        require(
+            type(dependencies) is list
+            and names[f"user-service-{dead_letter}"] in dependencies,
+            label,
+        )
+        raw = row["inputs"].get("redrivePolicy")
+        if raw != registry.UNKNOWN:
+            require(
+                unchanged._same(
+                    _json_value(raw, label),
+                    {
+                        "deadLetterTargetArn": prefix + QUEUE_NAMES[dead_letter],
+                        "maxReceiveCount": QUEUE_MAX_RECEIVE_COUNT,
+                    },
+                ),
+                label,
+            )
+        target = _inputs(desired, f"user-service-{dead_letter}")
+        require(
+            "redrivePolicy" not in target
+            and unchanged._same(
+                target.get("messageRetentionSeconds"), DEAD_LETTER_RETENTION_SECONDS
+            ),
+            label,
+        )
+
+
+def _repository_lifecycle_inputs(desired):
+    """Never expire tagged release images that rollback may still need."""
+    label = "workload-repository-lifecycle-inputs"
+    for kind in ("web", "worker"):
+        raw = _inputs(desired, f"user-service-{kind}-repository-lifecycle").get(
+            "policy"
+        )
+        require(
+            unchanged._same(_json_value(raw, label), REPOSITORY_LIFECYCLE_POLICY),
+            label,
+        )
+
+
+def _fargate_service_inputs(desired):
+    """Require private, noninteractive Fargate services with rollback enabled."""
+    for kind in ("web", "worker"):
+        inputs = _inputs(desired, f"user-service-{kind}-service")
+        require(
+            inputs.get("launchType") == "FARGATE"
+            and type(inputs.get("desiredCount")) is int
+            and inputs["desiredCount"] > 0
+            and inputs.get("enableExecuteCommand") is False
+            and inputs.get("waitForSteadyState") is True,
+            "workload-private-fargate-service-inputs",
+        )
+        _fargate_breaker(inputs.get("deploymentCircuitBreaker"))
+        _fargate_network(inputs.get("networkConfiguration"))
+
+
+def _fargate_breaker(breaker):
+    require(
+        type(breaker) is dict
+        and set(breaker) == {"enable", "rollback"}
+        and breaker["enable"] is True
+        and breaker["rollback"] is True,
+        "workload-private-fargate-service-inputs",
+    )
+
+
+def _fargate_network(network):
+    label = "workload-private-fargate-service-inputs"
+    require(type(network) is dict and network.get("assignPublicIp") is False, label)
+    for field, count in (("securityGroups", 1), ("subnets", 2)):
+        values = network.get(field)
+        require(type(values) is list and len(values) == count, label)
+
+
+def _task_execution_inputs(resource, projection):
+    """Bind known task inputs even when matching plan/preview bytes were changed.
+
+    Container definitions are checked separately after assembling the full graph.
+    """
+    if resource["type"] != "aws:ecs/taskDefinition:TaskDefinition":
+        return
+    central = projection.contract["workload"]["central"]
+    expected = {
+        "executionRoleArn": central["execution_role_arn"],
+        "taskRoleArn": central["task_role_arn"],
+        "networkMode": "awsvpc",
+        "requiresCompatibilities": ["FARGATE"],
+        "runtimePlatform": {
+            "cpuArchitecture": "X86_64",
+            "operatingSystemFamily": "LINUX",
+        },
+    }
+    require(
+        unchanged._same(
+            {key: resource["inputs"].get(key) for key in expected}, expected
+        ),
+        "workload-task-execution-inputs",
+    )
+
+
+def _task_container_inputs(desired, projection):
+    """Check resolved definitions and return them; unknown ones map to ``None``.
+
+    Admission tolerates first-create unknowns; the post-apply result inspection
+    requires every definition resolved and validates it there.
+    """
+    containers = {}
+    for kind in ("web", "worker"):
+        inputs = _inputs(desired, f"user-service-{kind}-task")
+        require(
+            set(inputs)
+            <= {
+                "cpu",
+                "memory",
+                "family",
+                "tags",
+                "executionRoleArn",
+                "taskRoleArn",
+                "networkMode",
+                "requiresCompatibilities",
+                "runtimePlatform",
+                "volumes",
+                "containerDefinitions",
+            }
+            and inputs.get("family") == f"{registry.PROJECT}-test-{kind}",
+            "workload-task-definition-inputs",
+        )
+        _task_volumes(inputs.get("volumes"), kind)
+        for field in ("cpu", "memory"):
+            # Exact capacity is baseline configuration, absent from this projection.
+            require(
+                type(inputs.get(field)) is str
+                and re.fullmatch(r"[1-9][0-9]{0,5}", inputs[field]),
+                "workload-task-capacity-inputs",
+            )
+        raw = inputs.get("containerDefinitions")
+        _container_dependencies(desired, kind)
+        containers[kind] = None
+        if raw == registry.UNKNOWN:
+            # Output.all(...).apply(json.dumps) is unresolved as a whole when
+            # a first-create queue URL, log name or secret version is unknown.
+            # inspect_first_task_definitions checks the resolved form after apply.
+            continue
+        container = _container_json(raw)
+        _container_runtime(container, kind, desired, projection)
+        _container_environment(container["environment"], kind, projection)
+        _container_secrets(container["secrets"], projection)
+        containers[kind] = container
+    return containers
+
+
+def inspect_first_task_definitions(resources, projection, secrets):
+    """Reject a first-create checkpoint whose resolved containers are not hardened.
+
+    Admission cannot see first-create container definitions (the whole JSON is
+    unknown until apply), so this runs on the authenticated post-apply checkpoint.
+    A deviation is therefore detected after apply, fails the run and must be
+    remediated; it is never admitted as a successful first apply. Only non-secret
+    checkpoint inputs and secret metadata (ARN and version id) are read.
+    """
+    projection = _checked(projection)
+    desired = unchanged._inventory(resources)
+    label = "workload-task-container-secrets"
+    for container in _task_container_inputs(desired, projection).values():
+        require(container is not None, "workload-task-container-unresolved")
+        actual = _container_named_values(container["secrets"], "valueFrom", label)
+        for name, purpose in CONTAINER_SECRET_NAMES.items():
+            observed = secrets[purpose]
+            require(
+                actual[name] == f"{observed['arn']}:::{observed['version_id']}",
+                label,
+            )
+
+
+def _task_volumes(volumes, kind):
+    """Allow only named ephemeral task storage, never host or network mounts."""
+    label = "workload-task-definition-inputs"
+    require(type(volumes) is list and all(type(row) is dict for row in volumes), label)
+    require(
+        unchanged._same(
+            sorted(volumes, key=lambda row: str(row.get("name"))),
+            sorted(
+                ({"name": name} for name, _ in CONTAINER_WRITABLE_PATHS[kind]),
+                key=lambda row: row["name"],
+            ),
+        ),
+        label,
+    )
+
+
+def _container_dependencies(desired, kind):
+    names = {urn.rsplit("::", 1)[-1]: urn for urn in desired}
+    targets = {f"user-service-{kind}-logs"}
+    for purpose in set(CONTAINER_SECRET_NAMES.values()):
+        targets.update((f"runtime-{purpose}", f"runtime-{purpose}-version"))
+    dependencies = desired[names[f"user-service-{kind}-task"]].get("dependencies")
+    require(
+        type(dependencies) is list
+        and {names[name] for name in targets} <= set(dependencies),
+        "workload-task-container-dependencies",
+    )
+
+
+def _json_value(raw, label):
+    """Parse one bounded JSON input with duplicate keys and NaN rejected."""
+    require(type(raw) is str and 0 < len(raw.encode()) <= 65536, label)
+    try:
+        return json.loads(
+            raw,
+            object_pairs_hook=poc_contract._pairs,
+            parse_constant=poc_contract._reject_nonfinite,
+        )
+    except (ValueError, RecursionError):
+        raise ValueError(label) from None
+
+
+def _container_json(raw):
+    label = "workload-task-container-json"
+    containers = _json_value(raw, label)
+    require(
+        type(containers) is list
+        and len(containers) == 1
+        and type(containers[0]) is dict,
+        label,
+    )
+    return containers[0]
+
+
+def _container_runtime(container, kind, desired, projection):
+    expected = {
+        "name": f"user-service-{kind}",
+        "image": projection.images[kind]["uri"],
+        "essential": True,
+        "command": _container_command(kind),
+        "portMappings": [],
+        "readonlyRootFilesystem": True,
+        "mountPoints": [
+            {"sourceVolume": volume, "containerPath": path, "readOnly": False}
+            for volume, path in CONTAINER_WRITABLE_PATHS[kind]
+        ],
+        "linuxParameters": {
+            "capabilities": {"drop": CONTAINER_DROPPED_CAPABILITIES[kind]}
+        },
+        "logConfiguration": {
+            "logDriver": "awslogs",
+            "options": {
+                "awslogs-group": f"/aws/ecs/{registry.PROJECT}-test/{kind}",
+                "awslogs-region": projection.contract["region"],
+                "awslogs-stream-prefix": f"user-service-{kind}",
+            },
+        },
+    }
+    if kind == "web":
+        port = _inputs(desired, "user-service-target-group")["port"]
+        expected["portMappings"] = [
+            {"containerPort": port, "hostPort": port, "protocol": "tcp"}
+        ]
+    else:
+        expected["healthCheck"] = {
+            "command": [
+                "CMD",
+                *projection.contract["workload"]["runtime"]["worker_health_command"],
+            ],
+            "interval": 30,
+            "timeout": 5,
+            "retries": 3,
+            "startPeriod": 60,
+        }
+    require(
+        set(container) == set(expected) | {"environment", "secrets"}
+        and unchanged._same({key: container.get(key) for key in expected}, expected),
+        "workload-task-container-runtime",
+    )
+
+
+def _container_command(kind):
+    runtime = {
+        "web": "frankenphp run --config /etc/caddy/Caddyfile",
+        "worker": (
+            "/usr/bin/supervisord -c /etc/supervisor/supervisord.conf "
+            "-l /srv/app/var/log/supervisord.log -j /srv/app/var/run/supervisord.pid"
+        ),
+    }[kind]
+    bootstrap = (
+        "set -eu; install -d -m 700 /srv/app/var/run/secrets; "
+        "install -d -m 1777 /srv/app/var/tmp; "
+        "install -d -m 755 /srv/app/var/log /srv/app/var/run; "
+        'printf "%s" "$OAUTH_PRIVATE_KEY_PEM"'
+        " > /srv/app/var/run/secrets/oauth-private.pem; "
+        'printf "%s" "$OAUTH_PUBLIC_KEY_PEM"'
+        " > /srv/app/var/run/secrets/oauth-public.pem; "
+        "chmod 600 /srv/app/var/run/secrets/oauth-private.pem; "
+        "chmod 644 /srv/app/var/run/secrets/oauth-public.pem; "
+        f"exec {runtime}"
+    )
+    return ["/bin/sh", "-ec", bootstrap]
+
+
+def _container_named_values(rows, field, label):
+    require(type(rows) is list, label)
+    result = {}
+    for row in rows:
+        require(type(row) is dict and set(row) == {"name", field}, label)
+        name, value = row["name"], row[field]
+        require(
+            type(name) is str
+            and name not in result
+            and type(value) is str
+            and 0 < len(value) <= 4096
+            and registry.UNKNOWN not in value,
+            label,
+        )
+        result[name] = value
+    return result
+
+
+def _container_environment(rows, kind, projection):
+    label = "workload-task-container-environment"
+    actual = _container_named_values(rows, "value", label)
+    workload = projection.contract["workload"]
+    region = projection.contract["region"]
+    url = "https://" + workload["external"]["domain"]["fqdn"]
+    expected = {
+        "APP_ENV": "prod",
+        "APP_DEBUG": "0",
+        "API_BASE_URL": url,
+        "API_URL": url,
+        "CORS_ALLOW_ORIGIN": "^" + re.escape(url) + "$",
+        "MAIL_SENDER": workload["external"]["mail"]["sender"],
+        "MAILER_DSN": f"ses+api://default?region={region}",
+        "JWT_ISSUER": "vilnacrm-user-service",
+        "JWT_AUDIENCE": "vilnacrm-api",
+        "AWS_EMF_NAMESPACE": "UserService/BusinessMetrics",
+        "TMPDIR": "/srv/app/var/tmp",
+        "SOCIAL_OAUTH_ENABLED": "false",
+        "OAUTH_ENCRYPTION_KEY_TYPE": "plain",
+        "AWS_SQS_VERSION": "latest",
+        "AWS_SQS_REGION": region,
+        "AWS_SQS_ENDPOINT_BASE": f"https://sqs.{region}.amazonaws.com",
+        "LOCALSTACK_PORT": "443",
+        "OAUTH_PRIVATE_KEY": "/srv/app/var/run/secrets/oauth-private.pem",
+        "OAUTH_PUBLIC_KEY": "/srv/app/var/run/secrets/oauth-public.pem",
+    }
+    if kind == "web":
+        cidrs = workload["runtime"]["trusted_proxy_cidrs"]
+        expected.update(
+            TRUSTED_PROXIES=",".join(cidrs), TRUSTED_PROXY_CIDRS=" ".join(cidrs)
+        )
+    else:
+        expected["MESSENGER_CONSUMER_NAME"] = f"{registry.PROJECT}-test-worker-consumer"
+    # Native queue identity and effective policy still need post-apply observation.
+    require(
+        set(actual) == set(expected) | set(QUEUE_ENVIRONMENT_NAMES)
+        and {key: actual[key] for key in expected} == expected,
+        label,
+    )
+    for name, logical in QUEUE_ENVIRONMENT_NAMES.items():
+        require(
+            actual[name]
+            == (
+                f"https://sqs.{region}.amazonaws.com/"
+                f"{projection.contract['account_id']}/{QUEUE_NAMES[logical]}"
+                f"?region={region}&auto_setup=false"
+            ),
+            label,
+        )
+
+
+def _container_secrets(rows, projection):
+    label = "workload-task-container-secrets"
+    actual = _container_named_values(rows, "valueFrom", label)
+    require(actual.keys() == CONTAINER_SECRET_NAMES.keys(), label)
+    contract = projection.contract
+    references = contract["workload"]["secret_lifecycle"]["references"]
+    prefix = (
+        f"arn:aws:secretsmanager:{contract['region']}:{contract['account_id']}:secret:"
+    )
+    for name, purpose in CONTAINER_SECRET_NAMES.items():
+        # Namespace and version pin are checkable; the actual suffix/version must
+        # still be bound to authenticated accepted native secret observations.
+        pattern = re.escape(prefix + references[purpose]["name"])
+        require(
+            re.fullmatch(
+                pattern + r"-[A-Za-z0-9]{6}:::[A-Za-z0-9-]{32,64}", actual[name]
+            ),
+            label,
+        )
+    require(actual["REDIS_URL"] == actual["REDIS_LOCKOUT_URL"], label)
 
 
 def _validate_workload_steps(steps, baseline, graph, desired):
@@ -363,6 +1197,5 @@ def _baseline_steps(preview, prior):
 
 
 def admit_first_workload_plan(*args, **kwargs):
-    """Keep execution closed until native capability and input gates are installed."""
+    """Admit a validated first-create preview and saved plan for TEST apply."""
     validate_first_workload_topology(*args, **kwargs)
-    raise ValueError("workload-native-capability-and-input-admission-required")

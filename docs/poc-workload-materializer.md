@@ -2,8 +2,8 @@
 
 `scripts/poc_workload_materializer.py` adds a root-only materialization primitive.
 It does not run Pulumi, select a phase, authenticate AWS evidence or authorize an
-apply. The worker and runner do not call it yet; their unconditional workload
-stops remain unchanged.
+apply. The protected workload runner calls it before saved-plan dispatch for a
+`workload` phase contract; the primitive itself grants no execution authority.
 
 `materialize_workload(area, projection, baseline_config)` accepts the existing
 already-authenticated `WorkloadPhaseProjection` and protected canonical JSON
@@ -49,7 +49,7 @@ worker owns normal lifetime cleanup after use.
 
 The immutable result contains the directory, fixed filename/SHA-256 pairs,
 projection SHA-256 and original baseline SHA-256. `python_command` points to the
-fixed wrapper. These are byte bindings for a future same-run saved-plan manifest;
+fixed wrapper. These are byte bindings for the same-run saved-plan manifest;
 they are not deployment receipts.
 
 ## Native interpreter contract
@@ -64,7 +64,7 @@ backend. It previews only a no-resource Python program. With project runtime
 The negative case adds `runtime.options.virtualenv`. Pulumi then bypasses
 `PULUMI_PYTHON_CMD`, observes isolated mode `0` and fails the child guard. Therefore
 the materializer deliberately omits the virtualenv option: the fixed wrapper
-itself selects `/opt/service-runtime/bin/python -I`. The future dispatcher must
+itself selects `/opt/service-runtime/bin/python -I`. The connected dispatcher must
 preserve this project shape and set `PULUMI_PYTHON_CMD` from the returned fixed
 path. In particular, it cannot reuse the existing transport's project runtime
 rewrite unchanged.
@@ -77,9 +77,10 @@ materializer's positive and rejection paths.
 
 ## Remaining gate
 
-The next gate is a trusted root dispatcher that authenticates the baseline and
-complete native capabilities, calls this helper, selects its wrapper without
-rewriting the project runtime, and binds all returned digests to the same-run
-source/checkpoint and exact saved plan. Protected replay, workload input/graph
-validation, native result/drift observation and workload acceptance remain
-required. This module does not weaken or remove any current stop.
+The protected workload runner (`scripts/poc_workload_runner.py`) already calls
+this helper, selects its wrapper without rewriting the project runtime, and binds
+the returned digests to the same-run source/checkpoint and exact saved plan for
+TEST `plan` and `up-plan`. Workload drift stays rejected. What remains is live
+TEST acceptance of the first workload apply, native result/drift observation and
+the hard-stop preconditions in `specs/poc/README.md`. This module does not weaken
+or remove any current stop.

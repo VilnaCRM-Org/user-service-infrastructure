@@ -25,8 +25,11 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "scripts"), str(ROOT / "tests/unit")]
 from test_environment_component import _resource_mock_outputs  # noqa: E402
 from test_poc_registry_phase_entrypoint import source  # noqa: E402
-from test_poc_workload_phase import _generated_outputs  # noqa: E402
-from test_poc_workload_phase_entrypoint import fixture  # noqa: E402
+from test_poc_workload_phase import (  # noqa: E402
+    _generated_outputs,
+    _workload_queue_outputs,
+)
+from test_poc_workload_phase_entrypoint import fixture, parameter_fixture  # noqa: E402
 
 gate = importlib.import_module("poc_workload_topology")
 bridge = importlib.import_module("poc_workload_phase_entrypoint")
@@ -72,6 +75,7 @@ class LocalProvider(provider_pb2_grpc.ResourceProviderServicer):
             args, dict(inputs), resource_id=name + "-id"
         )
         outputs = _generated_outputs(args, outputs)
+        identifier, outputs = _workload_queue_outputs(args, identifier, outputs)
         if kind == gate.registry.ECR:
             identifier = inputs["name"]
             outputs.update(
@@ -93,7 +97,10 @@ class LocalProvider(provider_pb2_grpc.ResourceProviderServicer):
         )
 
 
-def test_actual_workload_program_native_first_plan(tmp_path, ensure_pulumi_cli):
+@pytest.mark.parametrize("certificate_source", ["explicit", "parameter"])
+def test_actual_workload_program_native_first_plan(
+    tmp_path, ensure_pulumi_cli, certificate_source
+):
     servers, addresses = [], []
     for package, version in (("aws", "7.23.0"), ("random", "4.19.2"), ("tls", "5.3.1")):
         server = grpc.server(ThreadPoolExecutor(max_workers=16))
@@ -105,13 +112,13 @@ def test_actual_workload_program_native_first_plan(tmp_path, ensure_pulumi_cli):
         servers.append(server)
         addresses.append(f"{package}:{port}")
     try:
-        _run_native(tmp_path, addresses)
+        _run_native(tmp_path, addresses, certificate_source)
     finally:
         for server in servers:
             server.stop(0).wait()
 
 
-def _run_native(tmp_path, addresses):
+def _run_native(tmp_path, addresses, certificate_source):
     env = {key: os.environ[key] for key in ("HOME", "PATH") if key in os.environ}
     backend = tmp_path / "backend"
     backend.mkdir()
@@ -146,8 +153,14 @@ def _run_native(tmp_path, addresses):
         "skipRegionValidation": "false",
         "skipRequestingAccountId": "false",
     }
-    contract, images = fixture()
-    projection = bridge.project_workload_phase(source(contract), contract, images)
+    if certificate_source == "parameter":
+        contract, images, certificate = parameter_fixture()
+    else:
+        contract, images = fixture()
+        certificate = None
+    projection = bridge.project_workload_phase(
+        source(contract), contract, images, certificate
+    )
     values = {
         **{
             f"user-service-infrastructure:{key}": value for key, value in config.items()
@@ -203,10 +216,28 @@ def _run_native(tmp_path, addresses):
         + "run_workload_phase(project_workload_phase(\n"
         + f"SourceAdmission(**{source(contract).__dict__!r}),\n"
         + f"json.loads({json.dumps(contract)!r}),\n"
-        + f"json.loads({json.dumps(images)!r})))\n"
+        + f"json.loads({json.dumps(images)!r}),\n"
+        + f"json.loads({json.dumps(certificate)!r})))\n"
+    )
+    # The installed runner previews and applies with the repository policy pack;
+    # the complete workload graph must satisfy it, including BucketV2 guardrails.
+    subprocess.run(
+        [sys.executable, str(ROOT / "scripts/prepare_policy_pack.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        timeout=120,
     )
     preview = json.loads(
-        cli("preview", "--save-plan", "workload.plan", "--json", "--non-interactive")
+        cli(
+            "preview",
+            "--save-plan",
+            "workload.plan",
+            "--json",
+            "--non-interactive",
+            "--policy-pack",
+            str(ROOT / "policy"),
+        )
     )
     arguments = {
         "saved_plan": json.loads((project / "workload.plan").read_bytes()),
@@ -214,7 +245,4 @@ def _run_native(tmp_path, addresses):
         "projection": projection,
     }
     gate.validate_first_workload_topology(preview, **arguments)
-    with pytest.raises(
-        ValueError, match="native-capability-and-input-admission-required"
-    ):
-        gate.admit_first_workload_plan(preview, **arguments)
+    gate.admit_first_workload_plan(preview, **arguments)

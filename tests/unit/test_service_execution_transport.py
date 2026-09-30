@@ -200,8 +200,14 @@ def test_commands_protect_inputs_and_strip_host_authority(
     if operation == "preview":
         arguments += ["--save-plan", str(saved)]
 
-    def run(argv, *, env, cwd, child, check):
+    def run(argv, *, env, cwd, child, check, timeout):
         calls.append("process")
+        expected = (
+            transport.APPLY_TIMEOUT_SECONDS
+            if operation == "up"
+            else transport.DEFAULT_TIMEOUT_SECONDS
+        )
+        assert timeout == expected
         assert check is True
         assert child and cwd == port.work and argv[0] == transport.PULUMI
         assert (
@@ -256,7 +262,8 @@ def test_unchecked_command_preserves_private_result(installed, monkeypatch, retu
     port, _ = installed
     saved = port.repo / ".artifacts" / "unchecked.plan"
 
-    def run(argv, *, env, cwd, child, check):
+    def run(argv, *, env, cwd, child, check, timeout):
+        assert timeout == transport.DEFAULT_TIMEOUT_SECONDS
         assert check is False and child is True and cwd == port.work
         if returncode == 0:
             Path(argv[argv.index("--save-plan") + 1]).write_bytes(b"bounded-result")
@@ -297,6 +304,7 @@ def test_native_metadata_dispatch_and_forbidden_tools(installed, monkeypatch):
     )
     assert port(["aws", "sts", "get-caller-identity"], env={}).stdout == "{}"
     assert calls[0][0][0] == transport.AWS and calls[0][1]["child"] is False
+    assert calls[0][1]["timeout"] == transport.DEFAULT_TIMEOUT_SECONDS
     for command in (["sh", "-c", "anything"], ["/tmp/aws"], ["uv", "sync"]):
         with pytest.raises(ValueError):
             port(command, env={})

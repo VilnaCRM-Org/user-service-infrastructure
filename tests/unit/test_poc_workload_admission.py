@@ -654,7 +654,7 @@ def test_native_capability_failure_stops_before_state_recheck(monkeypatch):
     assert calls == ["registry", "release", "images", "capabilities"]
 
 
-def test_unconnected_authority_inputs_are_not_forwarded_by_controller(installed):
+def test_pinned_authority_inputs_reach_only_the_root_controller(installed):
     import service_execution_host as host
     import yaml
 
@@ -672,8 +672,8 @@ def test_unconnected_authority_inputs_are_not_forwarded_by_controller(installed)
             step for step in steps if "POC_SOURCE_SHA256" in step.get("env", {})
         ]
         assert len(launcher) == 1
-        assert all(key not in launcher[0]["env"] for key in keys)
-    assert all(key not in host.FIELDS for key in keys)
+        assert all(launcher[0]["env"][key] == "${{ vars." + key + " }}" for key in keys)
+    assert all(key in host.FIELDS for key in keys)
     port, _ = installed
     assert all(key not in port.environment for key in keys)
 

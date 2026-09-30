@@ -37,6 +37,74 @@ def fixture():
     return contract, images
 
 
+def parameter_fixture():
+    contract, images = fixture()
+    domain = contract["workload"]["external"]["domain"]
+    observed = {
+        "parameter_arn": (
+            "arn:aws:ssm:eu-central-1:891377212104:parameter"
+            "/vilnacrm/test/user-service/gateway-certificate-arn"
+        ),
+        "parameter_version": 1,
+        "certificate_arn": domain.pop("certificate_arn"),
+    }
+    domain["certificate_parameter_name"] = (
+        "/vilnacrm/test/user-service/gateway-certificate-arn"
+    )
+    return contract, images, observed
+
+
+def test_parameter_projection_binds_version_and_resolved_arn_without_editing_contract():
+    contract, images, certificate = parameter_fixture()
+    before = copy.deepcopy(contract)
+    value = module.project_workload_phase(
+        source(contract), contract, images, certificate
+    )
+    raw = module.encode_workload_projection(value)
+    assert module.decode_workload_projection(raw) == value
+    assert (
+        module.workload_configuration(value)[
+            "user-service-infrastructure:certificateArn"
+        ]
+        == certificate["certificate_arn"]
+    )
+    assert (
+        contract == before
+        and "certificate_arn" not in contract["workload"]["external"]["domain"]
+    )
+    certificate["parameter_version"] = 2
+    moved = module.project_workload_phase(
+        source(contract), contract, images, certificate
+    )
+    assert module.encode_workload_projection(moved) != raw
+    assert value.certificate["parameter_version"] == 1
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("parameter_arn", "foreign"),
+        ("parameter_version", 0),
+        ("parameter_version", True),
+        ("certificate_arn", "foreign"),
+        ("extra", "unexpected"),
+    ],
+)
+def test_parameter_projection_rejects_missing_or_substituted_observation(field, value):
+    contract, images, certificate = parameter_fixture()
+    with pytest.raises(ValueError, match="certificate-parameter"):
+        module.project_workload_phase(source(contract), contract, images)
+    certificate[field] = value
+    with pytest.raises(ValueError, match="certificate-parameter"):
+        module.project_workload_phase(source(contract), contract, images, certificate)
+
+
+def test_explicit_internal_arn_cannot_take_an_unrelated_parameter_observation():
+    contract, images = fixture()
+    with pytest.raises(ValueError, match="observation-unexpected"):
+        module.project_workload_phase(source(contract), contract, images, {})
+
+
 def test_projection_binds_release_settings_without_mutating_source_or_provider():
     contract, images = fixture()
     before = copy.deepcopy((contract, images))
@@ -49,8 +117,22 @@ def test_projection_binds_release_settings_without_mutating_source_or_provider()
         values["user-service-infrastructure:apiUrl"] == "https://user.vilnacrmtest.com"
     )
     assert (
+        values["user-service-infrastructure:apiBaseUrl"]
+        == "https://user.vilnacrmtest.com"
+    )
+    assert (
+        values["user-service-infrastructure:corsAllowOrigin"]
+        == r"^https://user\.vilnacrmtest\.com$"
+    )
+    assert (
         values["user-service-infrastructure:mailSender"]
         == "sender@user.vilnacrmtest.com"
+    )
+    assert values["user-service-infrastructure:jwtIssuer"] == "vilnacrm-user-service"
+    assert values["user-service-infrastructure:jwtAudience"] == "vilnacrm-api"
+    assert (
+        values["user-service-infrastructure:awsEmfNamespace"]
+        == "UserService/BusinessMetrics"
     )
     assert values["user-service-infrastructure:deploymentMode"] == "managed"
     assert all(key.startswith("user-service-infrastructure:") for key in values)

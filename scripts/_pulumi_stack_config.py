@@ -46,6 +46,9 @@ WORKLOAD_CONFIG_KEYS = frozenset(
         "user-service-infrastructure:corsAllowOrigin",
         "user-service-infrastructure:certificateArn",
         "user-service-infrastructure:mailSender",
+        "user-service-infrastructure:jwtIssuer",
+        "user-service-infrastructure:jwtAudience",
+        "user-service-infrastructure:awsEmfNamespace",
         "user-service-infrastructure:healthCheckPath",
         "user-service-infrastructure:healthCheckQueueName",
         "user-service-infrastructure:awsSqsEndpointBase",
@@ -455,6 +458,11 @@ def _validate_workload_runtime(
         and workload_config["user-service-infrastructure:appEnv"] == "prod"
         and workload_config["user-service-infrastructure:appDebug"] == "0"
         and workload_config["user-service-infrastructure:apiUrl"] == api_base_url
+        and workload_config["user-service-infrastructure:jwtIssuer"]
+        == "vilnacrm-user-service"
+        and workload_config["user-service-infrastructure:jwtAudience"] == "vilnacrm-api"
+        and workload_config["user-service-infrastructure:awsEmfNamespace"]
+        == "UserService/BusinessMetrics"
         and re.fullmatch(r"https://[a-z0-9.-]+", api_base_url)
         and workload_config["user-service-infrastructure:corsAllowOrigin"]
         == "^" + re.escape(api_base_url) + "$",

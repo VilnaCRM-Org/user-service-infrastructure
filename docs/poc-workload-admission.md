@@ -1,15 +1,15 @@
 # Candidate workload prerequisite checks
 
 The TEST registry plan/apply/drift route is admitted after authenticated source,
-requester and review checks; workload execution remains closed. Its trusted
-service worker distinguishes the phase in the authenticated fixed PoC source
-contract and rejects workload requests with `workload-execution-not-enabled`
-before any workload checks or Pulumi program. The prerequisite helpers below
-remain candidate code for a future separately validated integration. The TEST
+requester and review checks. The trusted service worker distinguishes the phase
+in the authenticated fixed PoC source contract: it routes workload `plan` and
+`up-plan` through the protected runner and rejects workload drift before invoking
+that runner. The prerequisite helpers below run before both the saved plan and its
+apply. The TEST
 registry completion jobs are connected in reviewed source but await installation
 and live acceptance. PROD remains absent; scheduled drift retains the installed-main path.
 
-The unconnected workload helper reuses the original registry completion verifier, including
+The workload helper, called by the protected workload runner, reuses the original registry completion verifier, including
 its App issuer, successful original workflow/jobs, historical source and immutable
 observation artifacts. It compares that receipt with a fresh native checkpoint
 and the complete eleven-resource registry/prerequisite graph and ECR controls. An absent,
@@ -44,9 +44,8 @@ declared byte size and SHA-256, then its native `os` and `architecture` are comp
 with the reviewed `linux/amd64` or `linux/arm64` release platform. Only platform,
 config digest and size join the image projection. Image environment, labels,
 history and other configuration never enter the projection or diagnostic errors.
-The bounded role/input prerequisite reader below runs only when the candidate
-helper is invoked directly. The installed worker stops before invoking it.
-Full installed runtime capability admission remains required before constructing
+The worker invokes the bounded role/input prerequisite reader for workload `plan` and `up-plan`.
+Full installed runtime capability admission remains required before applying
 workload settings.
 The observer supports at most 100 layers and deliberately accepts only compressed
 Docker gzip or OCI gzip/zstd layers. A different valid image shape requires a
@@ -78,20 +77,22 @@ are `poc-release-manifest-{run}-1` (`release-manifest.json`),
 `poc-quality-evidence-{run}-1` (`quality.json`),
 `poc-build-provenance-{run}-1` (`provenance.json`), and
 `poc-image-build-{run}-1`. The release uses the existing `poc-release-v1` fields.
-Publisher source and installation must implement this protocol before any real
-evidence can pass; these source checks do not establish that it is installed.
+The publisher workflow is on application `main` at `a95c1e854bf21770b7fc630611a8257b0f9c600b`;
+these source checks do not establish a successful TEST publication.
 
 ## Trusted inputs
 
-Future integration would need the three TEST execution jobs to pass protected
+Workload integration needs the three TEST execution jobs to pass protected
 `GOVERNANCE_PROMOTION_APP_ID` and `GOVERNANCE_PROMOTION_APP_SLUG` variables, plus
 explicit `POC_REGISTRY_WORKFLOW_SHA` and `POC_PUBLISHER_WORKFLOW_SHA` revision pins.
 The latter pins must be set to reviewed installed workflow revisions. No value
 is inferred from a receipt, PR, dispatch input or current application branch.
-Missing values reject the candidate helper's workload observation. The installed
-TEST jobs do not forward these inputs, and the host allowlist omits all four.
-Neither the root worker nor the UID 2000 program currently receives them; GitHub
-credentials remain outside the program environment.
+Missing values reject the candidate helper's workload observation. In this PR's
+workflow source, the three TEST execution jobs pass these values through the
+fixed host allowlist to the isolated root worker. The worker invokes that helper
+for workload plan and apply requests. The UID 2000 program
+does not receive these authority values or GitHub credentials. This source is
+not installed on `main` yet.
 
 The read adapter uses fixed `/usr/bin/gh`, `api.github.com`, a root-private HOME,
 a closed GitHub environment and the existing bounded process runner. Native
@@ -100,8 +101,8 @@ permission denial fails closed and is not evidence of an empty registry.
 
 ## Remaining enabling work
 
-The unconnected helper calls `poc_workload_capabilities.inspect_capabilities`;
-the installed worker rejects workloads before reaching this helper.
+The workload plan and apply paths call
+`poc_workload_capabilities.inspect_capabilities` before the child starts.
 It requires the fixed central TEST execution/task role ARNs, native names, root
 paths, IAM role IDs, and exact independently enrolled `issue219/test/boundary/`
 policy ARNs. Execution trust must match the existing central ECS task service
@@ -127,16 +128,16 @@ and endpoints, with bounded output, no ambient profiles, credentials files or
 endpoint overrides. Access denial fails closed. Offline tests use synthetic native
 responses; no AWS validation or successful workload receipt is claimed.
 
-Successful direct helper reads currently end with
-`workload-native-image-capability-and-plan-gates-required`. No plan artifact is
-published and no workload is registered or applied. This is an intentional
-execution boundary, not an acceptance result.
+The older `inspect_workload` helper still ends with
+`workload-native-image-capability-and-plan-gates-required`. The protected runner
+uses `observe_workload` and the first-topology gate for both the saved plan and
+its replay. A successful plan or first apply is not an acceptance result.
 
-Before enabling the full graph, establish actual runtime pulls, authenticated seed
-inventory/revision and immutable guard/policy installation, full task and deployer
-capabilities and approved endpoint/log/mail metadata,
-the generated-settings child entrypoint, and actual workload saved-plan validation
-and replay bindings. Extend result observation and scheduled drift for the accepted
+Live TEST acceptance of the full graph still needs actual runtime pulls,
+authenticated seed inventory/revision and immutable guard/policy installation,
+full task and deployer capabilities and approved endpoint/log/mail metadata,
+the generated-settings child entrypoint, and live evidence for the workload
+saved-plan validation and replay bindings. Extend result observation and scheduled drift for the accepted
 workload phase, including native secret version history across releases/rollback.
 The current registry completion proof and full TEST+PROD promotion retain their
 existing meanings. Workload-to-registry downgrade remains forbidden.
@@ -197,18 +198,17 @@ the helper never retries an uncertain POST. Inspect the native run before any
 operator retry. Reruns of the service workflow remain rejected by attempt-one
 admission.
 
-Enabling prerequisites remain external: install the reviewed publisher on
-application `main`; set `POC_PUBLISHER_WORKFLOW_SHA` to that installed main commit;
-and grant/accept Actions write for the existing App installation with access to
-`user-service`. App permissions currently advertise Actions read, and
-application main lacks the publisher workflow. Installation selection could
-not be verified with the available organization API access. Token creation fails
-if the installation has not accepted the permission or lacks repository access.
-The application main review rules must also be installed: current API inspection
-finds no effective main branch ruleset. The `poc-test-images` environment already
-exists with Kravalg as its independent reviewer.
+The reviewed publisher is now on application `main`, and
+`POC_PUBLISHER_WORKFLOW_SHA` is pinned to that commit in the service repository.
+The application `main` branch has an active repository PR review ruleset, and
+`poc-test-images` exists with Kravalg as its independent reviewer. The remaining
+App prerequisite is to grant and accept Actions write for the existing App
+installation with access to `user-service`. Its advertised permission is still
+Actions read, and installation selection could not be verified with the
+available organization API access. Token creation fails if the installation
+has not accepted the permission or lacks repository access.
 The runtime must be able to
 read the effective rules, ruleset and environment through its existing read
 token; API denial remains a blocking prerequisite rather than an admission bypass.
-The dispatcher therefore remains fail-closed with the current configuration.
-No App setting, workflow pin or AWS permission is changed by this source patch.
+The dispatcher therefore remains fail-closed with the current App configuration.
+This source patch changes no App setting or AWS permission.

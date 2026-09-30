@@ -16,7 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import argparse  # noqa: E402
 import base64  # noqa: E402
 import binascii  # noqa: E402
+import hashlib  # noqa: E402
 import json  # noqa: E402
+import os  # noqa: E402
 import subprocess  # noqa: E402  # nosec B404
 from dataclasses import asdict, dataclass  # noqa: E402
 from typing import Any, Callable, Mapping, cast  # noqa: E402
@@ -226,6 +228,34 @@ def prepare_authenticated_source(
     )
 
 
+def observe_phase(source: admission.SourceAdmission, gh: GitHubRead) -> str:
+    """Emit a routing hint from the same immutable reviewed contract bytes.
+
+    The hint is not admission: each credentialed worker reauthenticates the
+    source and contract before using AWS. Keep it out of PreparedSource so the
+    fixed source-artifact schema does not acquire an authority field.
+    """
+    _require(type(source) is admission.SourceAdmission, "Source facts required")
+    blob, raw = _content_bytes(
+        gh(
+            f"repos/{admission.REPOSITORY}/contents/{admission.CONTRACT_PATH}"
+            f"?ref={source.head_sha}"
+        )
+    )
+    _require(blob == source.blob_sha, "Contract blob changed")
+    document = admission._decode_contract(raw)
+    poc_contract._validate_document(document)
+    digest = hashlib.sha256(
+        json.dumps(
+            document, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode()
+    ).hexdigest()
+    _require(digest == source.contract_sha256, "Contract digest changed")
+    phase = document["phase"]
+    _require(phase in {"registry", "workload"}, "Unsupported phase")
+    return phase
+
+
 def main(argv: list[str] | None = None) -> int:
     """Emit bounded source facts after trusted GitHub reads; never authorize work."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -239,6 +269,7 @@ def main(argv: list[str] | None = None) -> int:
             gh=preflight.gh,
             collect_evidence=preflight.collect_evidence,
         )
+        phase = observe_phase(result.source, preflight.gh)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         print("INVALID: trusted source preparation failed", file=sys.stderr)
         return 1
@@ -254,6 +285,10 @@ def main(argv: list[str] | None = None) -> int:
             separators=(",", ":"),
         )
     )
+    output = os.environ.get("GITHUB_OUTPUT")
+    if output:
+        with Path(output).open("a", encoding="utf-8") as stream:
+            stream.write(f"phase={phase}\n")
     return 0
 
 

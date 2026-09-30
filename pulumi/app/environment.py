@@ -25,7 +25,6 @@ __all__ = [
     "StackSettings",
     "build_resource_name",
     "has_aws_credentials",
-    "is_production_environment",
     "resolve_config_value",
     "resolve_deployment_mode",
     "resolve_stack_settings",
@@ -79,8 +78,6 @@ class DocumentDbSettings:
     backup_retention_days: int
     preferred_backup_window: str
     preferred_maintenance_window: str
-    deletion_protection: bool
-    skip_final_snapshot: bool
 
 
 @dataclass(frozen=True)
@@ -116,6 +113,7 @@ class QueueSettings:
     send_email: str
     failed_send_email: str
     insert_user_batch: str
+    failed_insert_user_batch: str
     domain_events: str
     failed_domain_events: str
     health_check: str
@@ -419,11 +417,6 @@ def _get_int(config: pulumi.Config, key: str, *, default: int) -> int:
     return default if value is None else value
 
 
-def is_production_environment(environment: str) -> bool:
-    """Return whether the environment should enable stricter protections."""
-    return environment in {"prod", "production"}
-
-
 def build_resource_name(
     stack_tag: str,
     suffix: str,
@@ -633,7 +626,6 @@ def resolve_stack_settings(
         )
     )
 
-    is_production = is_production_environment(environment)
     api_base_url = resolve_config_value(
         None,
         config.get("apiBaseUrl"),
@@ -697,8 +689,6 @@ def resolve_stack_settings(
             config.get("documentDbPreferredMaintenanceWindow"),
             default="sun:05:00-sun:07:00",
         ),
-        deletion_protection=is_production,
-        skip_final_snapshot=not is_production,
     )
 
     redis = RedisSettings(
@@ -780,6 +770,11 @@ def resolve_stack_settings(
             None,
             config.get("insertUserBatchQueueName"),
             default="insert-user-batch",
+        ),
+        failed_insert_user_batch=resolve_config_value(
+            None,
+            config.get("failedInsertUserBatchQueueName"),
+            default="failed-insert-user-batch",
         ),
         domain_events=resolve_config_value(
             None,

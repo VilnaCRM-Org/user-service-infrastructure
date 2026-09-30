@@ -1,0 +1,137 @@
+# Sealed TEST workload runner source boundary
+
+`scripts/poc_workload_runner.py` connects the existing authenticated source,
+registry receipt/checkpoint, publisher, image and native prerequisite readers to
+the protected workload materializer and shared saved-plan dispatcher. It accepts
+only the root PID 1, read-only installed worker and its `ServiceTransport`; there
+is no local execution fallback or arbitrary program path.
+
+The runner requires the production domain declaration to use
+`certificate_parameter_name: /vilnacrm/test/user-service/gateway-certificate-arn`.
+The schema retains an explicit `certificate_arn` alternative for internal/test
+projections, but the production runner rejects that alternative. Both fields
+together, neither field, and any other parameter name reject. The trusted reader
+requires the exact SSM Name/ARN, String/text type, positive integer version and
+same-account regional ACM certificate ARN. It applies existing issued-certificate,
+SAN, TLS usage and validity checks, then repeats SSM/ACM observation. No decrypted
+parameter or application secret is fetched or logged.
+
+The source contract remains immutable. The closed `poc-workload-child-v2`
+projection carries separate public certificate observation fields:
+`parameter_arn`, `parameter_version`, and `certificate_arn`. Its canonical digest,
+the prepared configuration digest and all generated file digests enter the
+saved-plan `executionIdentity`. Replay rejects missing or changed execution
+identity, including replay through an ordinary registry context. Existing source,
+age, plan/preview byte hashes and provider/checkpoint checks remain in force.
+
+Before every child preview/apply, the original source/requester admission runs and
+the protected generated files are read back with exact content, mode, ownership,
+single-link and path checks. The child uses the generated isolated Python wrapper.
+Neither GitHub authority nor PR-controlled Python is passed to that child.
+
+The installed worker sends `test_preview` and first-create `test_apply` to the
+protected workload runner. The exact first-workload topology is checked again
+against the saved plan before replay. A successful apply must produce a new,
+stable complete checkpoint with the fixed graph, unchanged registry resources
+and native secret metadata read twice. A first-create plan leaves both task
+definitions' `containerDefinitions` unknown (the JSON is built from queue URLs,
+log group names and secret versions that exist only after apply), so the plan
+gate cannot run the container runtime, environment and secret checks on it. The
+runner therefore reads back both resolved task definitions from the stable
+post-apply checkpoint (non-secret inputs only) and applies the same container
+checks; every secret `valueFrom` must equal the observed secret ARN and current
+version. An unresolved or non-hardened definition fails the run. This detects a
+deviation after apply, not before: the deviating task definition is already
+registered and the services may already run it. The check assumes the checkpoint stores
+each `containerDefinitions` input as the resolved plaintext JSON string in the
+saved-plan input form (not wrapped as a Pulumi secret, not normalized by the
+provider). That assumption is unverified: until a live TEST apply confirms it,
+a correctly hardened first apply could still fail closed after its resources
+exist. The backend and requester are
+rechecked before the job reports success. Workload drift and later releases remain closed
+until an authenticated accepted-workload receipt exists. This first-apply result
+is not a success receipt or gateway descriptor; live application acceptance is
+still required.
+
+The workload source uses an internal ALB in its application subnets and only an
+HTTPS listener. A service-owned VPC-link security group is its exclusive ingress
+source. The generated application trusted-proxy CIDRs match these ALB subnets.
+The legacy template path remains separate from this fixed workload projection.
+The first-workload native plan gate now checks the private ALB flag, single
+security-group HTTPS ingress, VPC-link egress limited to the admitted application
+subnet CIDRs, issued-certificate listener input, and private noninteractive
+Fargate service settings with circuit-breaker rollback. First-create physical
+IDs are unresolved in the plan; the accepted-result observer must still bind
+their actual subnet, listener and security-group relationships before issuing
+any workload receipt or gateway descriptor.
+The native gate also requires the fixed ALB/subnet/security-group, HTTPS listener,
+and ECS task/service dependency edges. These edges are an early rejection check,
+not proof of the resolved physical relationships.
+The first-plan gate binds both private application subnet CIDRs to the admitted
+trusted-proxy networks, rejects public IP assignment on application/data subnets,
+requires encrypted DocumentDB and Redis with retained backups/snapshots, and
+requires a Pulumi-protected DocumentDB cluster and instances with deletion
+protection and a fixed final snapshot. The DocumentDB cluster must use its own
+`docdb5.0` parameter group with `tls`, `audit_logs` and `profiler` enabled
+(`profiler_threshold_ms` 100) and depend on pre-created `/aws/docdb/<cluster>/audit`
+and `/aws/docdb/<cluster>/profiler` log groups with 30-day retention. It also
+requires all seven SQS queues to keep AWS-managed KMS encryption, long polling and
+their fixed visibility timeout. It pins their physical names to the TEST PoC
+defaults, including `health-check-queue`, and binds each application transport DSN
+to its fixed queue name, TEST account, region and `auto_setup=false`. The
+`send-email`, `insert-user-batch` and `domain-events` queues must depend on and
+redrive to their own 14-day dead-letter queue (`failed-send-email`,
+`failed-insert-user-batch`, `failed-domain-events`) with `maxReceiveCount` 3; a
+first-create redrive document may still be unknown. Both ECR lifecycle policies
+may expire only untagged images after 14 days, so tagged `sha-` release images
+stay available for rollback. Both ECS services must wait for steady state with
+10-minute create/update timeouts, so an apply fails instead of reporting success
+while tasks never become healthy. Both containers run with a read-only root
+filesystem: web writes only `/srv/app/var`, `/data` and `/config`, worker writes
+only `/srv/app/var` and `/run`, PHP/supervisord temporary files use
+`TMPDIR=/srv/app/var/tmp`, and the task definitions declare only those named
+ephemeral volumes. The worker drops all Linux capabilities. The web container
+drops every Docker default except `NET_BIND_SERVICE` (FrankenPHP binds `:80`
+through a file capability) and `SETUID`/`SETGID` (PHP preloads as
+`opcache.preload_user=www-data`). These checks operate on the saved native plan
+and preview together whenever the container definitions are resolved there; on
+first create they run only in the post-apply inspection above. Live resource identifiers and effective cloud behavior
+still require the accepted-result observer and manual TEST acceptance.
+The generated configuration also fixes the application's JWT issuer/audience and
+metrics namespace to its TEST runtime contract. The protected config overlay and
+native task-definition gate reject changes to those three public values.
+
+The source includes a metadata-only first-create secret-history checker. It
+compares the protected checkpoint graph with the registry baseline and reads
+Secrets Manager `DescribeSecret` twice for every declared runtime secret. It
+requires the same ARN, name, KMS key and sole current version in checkpoint and
+native metadata, with no pending rotation or deletion. `DescribeSecret` omits
+`RotationEnabled` for a never-rotated secret, so an absent field counts as
+disabled; any value other than native `false` rejects. It never calls
+`GetSecretValue`. On its own this checker does not authenticate the checkpoint or
+AWS session. The installed runner composes it with authenticated private
+checkpoint reads after the first saved-plan apply; it still issues no receipt.
+
+Two container follow-ups need a `user-service` image change rather than a task
+definition change. The image has no non-root user and keeps root-owned
+application files, so the containers still run as root. Dropping all web
+capabilities also needs FrankenPHP without its `cap_net_bind_service` file
+capability on an unprivileged port and no `opcache.preload_user` switch. The
+worker image's `worker-healthcheck` calls `supervisorctl` without `-c`, so it
+reads Alpine's `/etc/supervisord.conf` socket path instead of the running
+`/run/supervisor.sock`; with steady-state waiting, a declared health command
+that uses it keeps the worker unhealthy and fails the apply.
+
+Live prerequisites remain external: installed central runtime/deployment IAM and
+the exact SSM read grant in bootstrap #219; completed registry proof; authenticated
+immutable image publication; gateway-owned issued ACM certificate and its SSM
+publication; verified SES prerequisites. Gateway route deployment follows the
+[authenticated backend descriptor contract](poc-api-gateway-backend.md).
+
+The metadata-only release/rollback secret checker accepts two complete workload
+checkpoints and a prior secret observation supplied by a future authenticated
+receipt. It requires every secret and secret-version state row to remain unchanged
+apart from observation timestamps, then reads native secret descriptions twice
+and requires the current version, ARN and KMS key to match that prior observation.
+It never reads secret values. Neither this checker nor its caller yet authenticates
+an accepted workload receipt or enables a release/rollback apply.

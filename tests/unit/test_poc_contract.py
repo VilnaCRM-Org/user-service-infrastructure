@@ -317,6 +317,27 @@ def test_dns_is_bound_to_approved_test_endpoint(field, value):
         validate(contract, previous=fixture("registry"))
 
 
+@pytest.mark.parametrize("mutation", [None, "wrong-name", "both", "missing"])
+def test_domain_uses_one_explicit_arn_or_exact_gateway_parameter(mutation):
+    contract = fixture("workload")
+    domain = contract["workload"]["external"]["domain"]
+    certificate = domain.pop("certificate_arn")
+    domain["certificate_parameter_name"] = (
+        "/vilnacrm/test/user-service/gateway-certificate-arn"
+    )
+    if mutation == "wrong-name":
+        domain["certificate_parameter_name"] = "/foreign"
+    elif mutation == "both":
+        domain["certificate_arn"] = certificate
+    elif mutation == "missing":
+        domain.pop("certificate_parameter_name")
+    if mutation is None:
+        assert len(validate(contract, previous=fixture("registry"))) == 64
+    else:
+        with pytest.raises(ValueError, match="schema"):
+            validate(contract, previous=fixture("registry"))
+
+
 def test_mail_secret_is_rejected_and_generated_secrets_remain_required():
     previous = fixture("workload")
     references = previous["workload"]["secret_lifecycle"]["references"]

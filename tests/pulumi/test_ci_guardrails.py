@@ -255,8 +255,8 @@ def test_pr_destructive_gates_exclude_scheduled_execution():
     assert "destructive-gate" in job["steps"][-1]["run"]
 
 
-def test_test_controller_admits_only_reviewed_registry_graph():
-    """TEST registry execution stays behind source and account admission."""
+def test_test_controller_admits_only_reviewed_poc_graph():
+    """TEST phase execution stays behind source and account admission."""
     workflow = _workflow("self-deploy.yml")
     jobs = workflow["jobs"]
     assert set(jobs) == {
@@ -291,12 +291,14 @@ def test_test_controller_admits_only_reviewed_registry_graph():
             "needs.preflight.outputs.target_environment == 'test' }}"
         ),
         "test_post_apply_drift": (
-            "${{ needs.preflight.outputs.command == 'up' && "
-            "needs.preflight.outputs.target_environment == 'test' }}"
+            "needs.preflight.outputs.command == 'up' && "
+            "needs.preflight.outputs.target_environment == 'test' && "
+            "needs.poc_prepare_source.outputs.phase == 'registry'"
         ),
         "test_registry_observation": (
-            "${{ needs.preflight.outputs.command == 'up' && "
-            "needs.preflight.outputs.target_environment == 'test' }}"
+            "needs.preflight.outputs.command == 'up' && "
+            "needs.preflight.outputs.target_environment == 'test' && "
+            "needs.poc_prepare_source.outputs.phase == 'registry'"
         ),
     }
     for name, condition in guards.items():
@@ -317,10 +319,10 @@ def test_test_controller_admits_only_reviewed_registry_graph():
     }
     assert "test_destructive_diff" in jobs["test_apply"]["needs"]
     assert "test_apply" in jobs["test_post_apply_drift"]["needs"]
-    assert "TEST registry proof and application publisher dispatch only" in str(
+    assert "registry proof and publisher dispatch are not repeated" in str(
         jobs["comment_result"]
     )
-    assert "workload deployment require separate verification" in str(
+    assert "Workload result requires live application acceptance" in str(
         jobs["comment_result"]
     )
 

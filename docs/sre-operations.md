@@ -89,6 +89,16 @@ make pulumi-destroy
 
 Treat destroy as irreversible unless you have a tested restore path.
 
+Managed DocumentDB clusters and instances are Pulumi-protected in every
+environment, and each cluster keeps deletion protection plus a named final
+snapshot (`<stack>-docdb-final`). A destroy therefore stops at DocumentDB until a
+separately reviewed change removes that protection; do not unprotect state or
+disable deletion protection out of band.
+
+A failed, interrupted or partial first workload apply is not recoverable with
+shipped tooling: stop and escalate to governance, following the
+[PoC workload recovery runbook](poc-workload-recovery.md).
+
 ## Stack Strategy
 
 Recommended stack patterns:

@@ -501,10 +501,13 @@
               "required": [
                 "fqdn",
                 "dns_authority",
-                "certificate_arn",
                 "review",
                 "account_id",
                 "hosted_zone_id"
+              ],
+              "oneOf": [
+                {"required": ["certificate_arn"]},
+                {"required": ["certificate_parameter_name"]}
               ],
               "properties": {
                 "fqdn": {
@@ -518,6 +521,9 @@
                   "minLength": 1,
                   "maxLength": 512,
                   "pattern": "^arn:aws:acm:eu-central-1:891377212104:certificate/[0-9a-f-]{36}$"
+                },
+                "certificate_parameter_name": {
+                  "const": "/vilnacrm/test/user-service/gateway-certificate-arn"
                 },
                 "review": {
                   "$ref": "#/$defs/review"

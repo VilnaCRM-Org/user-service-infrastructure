@@ -1,7 +1,8 @@
 """Installed service worker: authenticate in root, execute Pulumi as UID 2000.
 
-The workflow supplies immutable mounts and its existing credentials. This entry
-point observes workload prerequisites but does not execute a workload graph.
+The workflow supplies immutable mounts and its existing credentials. For a
+workload-phase contract this entry point routes TEST ``plan`` and ``up-plan`` to
+the protected saved-plan runner; workload drift stays rejected.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import contextlib  # noqa: E402
 import tempfile  # noqa: E402
 
 import poc_registry_runner as registry  # noqa: E402
+import poc_workload_runner as workload  # noqa: E402
 from service_execution_process import require  # noqa: E402
 from service_execution_transport import ServiceTransport, copy_tree  # noqa: E402
 
@@ -94,7 +96,9 @@ def _test(port, command, head):
     os.write(2, b"Trusted worker stage: source review\n")
     registry._review(source)
     if contract["phase"] == "workload":
-        raise ValueError("workload-execution-not-enabled")
+        require(command in ("plan", "up-plan"), "workload-drift-not-enabled")
+        os.write(2, b"Trusted worker stage: workload saved-plan execution\n")
+        return workload.execute(command, **references, transport=port)
     os.write(2, b"Trusted worker stage: registry execution\n")
     return registry.execute(command, **references, transport=port)
 

@@ -27,6 +27,11 @@ PULL_ACTIONS = (
     "ecr:BatchGetImage",
     "ecr:GetDownloadUrlForLayer",
 )
+CERTIFICATE_PARAMETER_NAME = "/vilnacrm/test/user-service/gateway-certificate-arn"
+CERTIFICATE_PARAMETER_ARN = (
+    f"arn:aws:ssm:{backend.REGION}:{backend.ACCOUNT}:parameter"
+    f"{CERTIFICATE_PARAMETER_NAME}"
+)
 
 
 def _native(service, operation, arguments):
@@ -37,6 +42,7 @@ def _native(service, operation, arguments):
             ("iam", "get-role"),
             ("iam", "simulate-principal-policy"),
             ("acm", "describe-certificate"),
+            ("ssm", "get-parameter"),
         },
         "workload-capability-operation",
     )
@@ -55,7 +61,7 @@ def _native(service, operation, arguments):
     endpoint = (
         "https://iam.amazonaws.com"
         if service == "iam"
-        else f"https://acm.{backend.REGION}.amazonaws.com"
+        else f"https://{service}.{backend.REGION}.amazonaws.com"
     )
     raw = run(
         [
@@ -260,8 +266,61 @@ def _certificate(native, domain):
     return certificate
 
 
+def certificate_projection(domain, observed):
+    """Validate closed public observations; this does not authenticate AWS reads."""
+    if "certificate_arn" in domain:
+        require(observed is None, "workload-certificate-observation-unexpected")
+        return None
+    require(
+        domain.get("certificate_parameter_name") == CERTIFICATE_PARAMETER_NAME
+        and type(observed) is dict
+        and set(observed) == {"parameter_arn", "parameter_version", "certificate_arn"},
+        "workload-certificate-parameter-projection",
+    )
+    require(
+        observed["parameter_arn"] == CERTIFICATE_PARAMETER_ARN
+        and type(observed["parameter_version"]) is int
+        and observed["parameter_version"] > 0
+        and type(observed["certificate_arn"]) is str
+        and re.fullmatch(
+            rf"arn:aws:acm:{backend.REGION}:{backend.ACCOUNT}:certificate/"
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+            observed["certificate_arn"],
+        ),
+        "workload-certificate-parameter-binding",
+    )
+    return dict(observed)
+
+
+def _certificate_input(native, domain):
+    """Resolve only the gateway-owned nonsecret String; never decrypt or log it."""
+    if "certificate_arn" in domain:
+        return domain, None
+    result = native("ssm", "get-parameter", ["--name", CERTIFICATE_PARAMETER_NAME])
+    parameter = result.get("Parameter")
+    required = {"Name", "ARN", "Type", "DataType", "Value", "Version"}
+    require(
+        type(parameter) is dict
+        and required <= parameter.keys() <= required | {"LastModifiedDate"}
+        and parameter["Name"] == CERTIFICATE_PARAMETER_NAME
+        and parameter["ARN"] == CERTIFICATE_PARAMETER_ARN
+        and parameter["Type"] == "String"
+        and parameter["DataType"] == "text",
+        "workload-certificate-parameter-metadata",
+    )
+    observed = certificate_projection(
+        domain,
+        {
+            "parameter_arn": parameter["ARN"],
+            "parameter_version": parameter["Version"],
+            "certificate_arn": parameter["Value"],
+        },
+    )
+    return {**domain, "certificate_arn": parameter["Value"]}, observed
+
+
 def inspect_capabilities(contract, *, native=None):
-    """Check prerequisites only; no settings, receipt, plan or authority is returned."""
+    """Return observed certificate coordinates only, never plan or apply authority."""
     contracts._validate_document(contract)
     require(contract["phase"] == "workload", "workload-contract-required")
     _stable_registries(contract["registries"])
@@ -274,10 +333,14 @@ def inspect_capabilities(contract, *, native=None):
     roles = {purpose: _role(native, purpose, central) for purpose in ROLE_NAMES}
     _execution_trust(roles["execution"])
     domain = contract["workload"]["external"]["domain"]
-    certificate = _certificate(native, domain)
+    resolved_domain, observed = _certificate_input(native, domain)
+    certificate = _certificate(native, resolved_domain)
     _pull(native, roles["execution"], contract["registries"])
+    current_domain, current_observed = _certificate_input(native, domain)
     require(
         {purpose: _role(native, purpose, central) for purpose in ROLE_NAMES} == roles
-        and _certificate(native, domain) == certificate,
+        and current_observed == observed
+        and _certificate(native, current_domain) == certificate,
         "workload-native-inputs-changed",
     )
+    return observed

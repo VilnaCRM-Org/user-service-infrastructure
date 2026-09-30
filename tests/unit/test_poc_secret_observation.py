@@ -8,7 +8,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
 import pytest
 from poc_contract import validate
-from poc_secret_observation import SECRET_PREFIX, validate_secret_observation
+from poc_secret_observation import (
+    SECRET_PREFIX,
+    validate_secret_observation,
+    validate_seed_input,
+)
 from test_poc_contract import fixture
 
 
@@ -154,3 +158,85 @@ def test_extra_native_secret_purpose_rejected():
     current["unreviewed"] = copy.deepcopy(current["app_secret"])
     with pytest.raises(ValueError, match="purposes differ"):
         validate_secret_observation(contract, current)
+
+
+def test_seeded_secrets_have_no_version_until_the_seed_then_keep_it():
+    contract = fixture("workload-hardened")
+    before_seed = observation(contract)
+    for secret in before_seed.values():
+        secret["version_id"] = None
+    validate_secret_observation(contract, before_seed)
+    seeded = observation(contract)
+    validate_secret_observation(contract, seeded, previous=before_seed)
+    validate_secret_observation(contract, copy.deepcopy(seeded), previous=seeded)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("version_id", None),
+        ("version_id", "b" * 32),
+        (
+            "arn",
+            SECRET_PREFIX + "/user-service-infrastructure/runtime/test/"
+            "synthetic-app_secret-ZyXwVu",
+        ),
+    ],
+)
+def test_seeded_identity_and_seeded_version_are_preserved(field, value):
+    contract = fixture("workload-hardened")
+    previous = observation(contract)
+    current = copy.deepcopy(previous)
+    current["app_secret"][field] = value
+    with pytest.raises(ValueError, match="replacement or version change"):
+        validate_secret_observation(contract, current, previous=previous)
+
+
+def _seed(contract, purpose="app_secret"):
+    return {
+        "secret_arn": observation(contract)[purpose]["arn"],
+        "purpose": purpose,
+    }
+
+
+@pytest.mark.parametrize("purpose", ["app_secret", "oauth_encryption_key"])
+def test_seed_input_is_exactly_the_secret_arn_and_purpose(purpose):
+    contract = fixture("workload-hardened")
+    validate_seed_input(contract, _seed(contract, purpose))
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda seed: seed.update(value="synthetic"), "fields differ"),
+        (lambda seed: seed.update(version_id="a" * 32), "fields differ"),
+        (lambda seed: seed.update(stage="AWSCURRENT"), "fields differ"),
+        (lambda seed: seed.pop("purpose"), "fields differ"),
+        (lambda seed: seed.update(purpose="oauth_passphrase"), "not a rotated"),
+        (lambda seed: seed.update(purpose="redis_auth_token"), "not a rotated"),
+        (lambda seed: seed.update(purpose=["app_secret"]), "not a rotated"),
+        (
+            lambda seed: seed.update(purpose="oauth_encryption_key"),
+            "identity differs",
+        ),
+        (lambda seed: seed.update(secret_arn=None), "identity differs"),
+    ],
+)
+def test_seed_input_with_any_other_key_or_target_is_rejected(mutate, message):
+    contract = fixture("workload-hardened")
+    seed = _seed(contract)
+    mutate(seed)
+    with pytest.raises(ValueError, match=message):
+        validate_seed_input(contract, seed)
+
+
+@pytest.mark.parametrize("seed", [None, [], "app_secret"])
+def test_untyped_seed_input_is_rejected(seed):
+    with pytest.raises(ValueError, match="fields differ"):
+        validate_seed_input(fixture("workload-hardened"), seed)
+
+
+def test_pre_hardening_contract_has_no_seed_input():
+    contract = fixture("workload")
+    with pytest.raises(ValueError, match="hardened workload contract"):
+        validate_seed_input(contract, _seed(contract))

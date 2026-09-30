@@ -18,6 +18,7 @@ PRECONDITIONS = (
     "bootstrap governance grants for the new resources (N-11)",
     "N-04 apply timeout budget",
     "N-06 recovery runbook",
+    "first-create container hardening before apply",
     "live TEST acceptance",
 )
 README_MARKERS = (
@@ -39,6 +40,8 @@ README_MARKERS = (
     "real import path for fixed-name resources",
     "#57",
     "OIDC credential issuance to the end of result observation",
+    "First-create container hardening before apply",
+    "Checkpoint container form verified",
     "Live TEST acceptance",
 )
 

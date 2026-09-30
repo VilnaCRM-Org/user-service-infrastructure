@@ -29,7 +29,10 @@ hand, and do not improvise a plan.
   both the workload runner and the registry runner. See
   `docs/poc-workload-admission.md`.
 - `pulumi up` succeeded but the runner's post-apply inspection of the first
-  result then failed (`scripts/poc_workload_runner.py`). The checkpoint holds the
+  result then failed (`scripts/poc_workload_runner.py`), for example because a
+  resolved task definition is not hardened
+  (`inspect_first_task_definitions` in `scripts/poc_workload_topology.py`); that
+  task definition is already registered. The checkpoint holds the
   complete workload state, and no runner accepts it: the first-workload gate
   allows only `create` from the registry baseline, and no acceptance receipt
   exists.

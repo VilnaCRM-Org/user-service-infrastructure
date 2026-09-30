@@ -141,7 +141,9 @@ def test_first_saved_plan_gate_runs_and_apply_checks_result(
     monkeypatch.setattr(
         module,
         "_inspect_first_result",
-        lambda source, contract, prior: observed.append((source, contract, prior)),
+        lambda source, contract, prior, projection: observed.append(
+            (source, contract, prior, projection)
+        ),
     )
     monkeypatch.setattr(
         module.topology, "validate_first_workload_topology", lambda *a, **k: None
@@ -151,6 +153,7 @@ def test_first_saved_plan_gate_runs_and_apply_checks_result(
     assert len(observed) == (1 if command == "up-plan" else 0)
     if observed:
         assert observed[0][2] is driver.capture
+        assert observed[0][3] == driver.projection
     assert driver.transport.environment["PULUMI_PYTHON_CMD"] == "installed-python"
 
 
@@ -183,18 +186,26 @@ def test_first_result_binds_changed_stable_checkpoint_and_secret_readback(
     monkeypatch.setattr(
         module.secret_result,
         "inspect_first_secret_history",
-        lambda contract, before, after: observed.append((contract, before, after)),
+        lambda contract, before, after: (
+            observed.append((contract, before, after)) or "secret-metadata"
+        ),
+    )
+    monkeypatch.setattr(
+        module.topology,
+        "inspect_first_task_definitions",
+        lambda *args: observed.append(args),
     )
     module._inspect_first_result(
-        driver.source, driver.projection.contract, driver.capture
+        driver.source, driver.projection.contract, driver.capture, driver.projection
     )
     assert observed == [
-        (driver.projection.contract, driver.capture.resources, final.resources)
+        (driver.projection.contract, driver.capture.resources, final.resources),
+        (final.resources, driver.projection, "secret-metadata"),
     ]
     assert driver.calls[-2:] == ["review", "actor"]
 
 
-@pytest.mark.parametrize("fault", ["unchanged", "moved", "secret"])
+@pytest.mark.parametrize("fault", ["unchanged", "moved", "secret", "containers"])
 def test_first_result_rejects_missing_or_unstable_evidence(driver, monkeypatch, fault):
     final = copy.deepcopy(driver.capture)
     final.summary["state"]["VersionId"] = "new-version"
@@ -214,10 +225,15 @@ def test_first_result_rejects_missing_or_unstable_evidence(driver, monkeypatch, 
         if fault == "secret":
             raise ValueError("workload-secret-result")
 
+    def containers(*_):
+        if fault == "containers":
+            raise ValueError("workload-task-container-runtime")
+
     monkeypatch.setattr(module.secret_result, "inspect_first_secret_history", secrets)
+    monkeypatch.setattr(module.topology, "inspect_first_task_definitions", containers)
     with pytest.raises(ValueError, match="workload-"):
         module._inspect_first_result(
-            driver.source, driver.projection.contract, driver.capture
+            driver.source, driver.projection.contract, driver.capture, driver.projection
         )
 
 

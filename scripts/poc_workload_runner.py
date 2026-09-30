@@ -121,9 +121,11 @@ def _prepared_workload(context, transport, projection):
             transport.before_program = previous_admission
 
 
-def _inspect_first_result(source, contract, prior):
+def _inspect_first_result(source, contract, prior, projection):
     """Require a complete stable first-create checkpoint and native secret metadata.
 
+    Resolved task definitions are validated here because admission sees them as
+    unknown; a hardening deviation fails the run after apply, never before it.
     This is same-run TEST apply evidence, not a receipt for later release or drift.
     Native application behavior and resolved gateway relationships still require
     live acceptance before the PoC is considered deployed.
@@ -135,9 +137,10 @@ def _inspect_first_result(source, contract, prior):
         and _checkpoint(final) != _checkpoint(prior),
         "workload-first-result-checkpoint",
     )
-    secret_result.inspect_first_secret_history(
+    secrets = secret_result.inspect_first_secret_history(
         contract, prior.resources, final.resources
     )
+    topology.inspect_first_task_definitions(final.resources, projection, secrets)
     repeat = registry.backend.capture_backend(source, operation="up-plan")
     require(
         repeat.summary["state"] == final.summary["state"]
@@ -201,5 +204,5 @@ def execute(command, *, artifact_id, archive_sha256, source_sha256, transport):
     with _prepared_workload(context, transport, projection) as prepared:
         status = registry.runner._dispatch_command(command, prepared, ["test"])
         if status == 0 and command == "up-plan":
-            _inspect_first_result(source, contract, prior)
+            _inspect_first_result(source, contract, prior, projection)
         return status

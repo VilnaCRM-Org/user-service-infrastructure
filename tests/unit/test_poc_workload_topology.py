@@ -989,7 +989,62 @@ def test_task_inputs_reject_unknown_capacity_or_additional_configuration(
         gate.validate_first_workload_topology(**data)
 
 
-def test_first_create_unknown_containers_never_authorize_execution(data):
+def _first_checkpoint(data):
+    """Project the admitted goals to a resolved post-apply checkpoint."""
+    plans = data["saved_plan"]["resourcePlans"]
+    resources = copy.deepcopy(data["prior_resources"])
+    existing = {row["urn"] for row in resources}
+    rows = []
+    for urn, plan in plans.items():
+        if urn in existing:
+            continue
+        goal = plan["goal"]
+        row = {
+            key: copy.deepcopy(value)
+            for key, value in goal.items()
+            if key in gate.registry.STATE_FIELDS
+        }
+        row.update(
+            urn=urn,
+            inputs=copy.deepcopy(goal["inputDiff"]["adds"]),
+            outputs={},
+            aliases=gate.unchanged.state_aliases(urn, goal["type"]),
+        )
+        if goal["custom"]:
+            row["id"] = urn.rsplit("::", 1)[-1] + "-id"
+        rows.append(row)
+    identifiers = {row["urn"]: row.get("id") for row in resources + rows}
+    for row in rows:
+        target, _, identifier = row.get("provider", "").rpartition("::")
+        if identifier == gate.registry.UNKNOWN:
+            row["provider"] = target + "::" + identifiers[target]
+    return resources + rows
+
+
+def _observed_secrets(data):
+    """Return secret metadata matching the resolved container references."""
+    rows = _task_containers(data, "web")[0]["secrets"]
+    rows = {row["name"]: row["valueFrom"] for row in rows}
+    result = {}
+    for name, purpose in gate.CONTAINER_SECRET_NAMES.items():
+        arn, version = rows[name].split(":::")
+        result[purpose] = {"arn": arn, "version_id": version}
+    return result
+
+
+def _inspect_first(data, resources=None, secrets=None):
+    gate.inspect_first_task_definitions(
+        _first_checkpoint(data) if resources is None else resources,
+        data["projection"],
+        _observed_secrets(data) if secrets is None else secrets,
+    )
+
+
+def test_first_create_unknown_containers_are_admitted_then_checked_after_apply(
+    data,
+):
+    """Admission cannot see first-create definitions; the result inspection can."""
+    resolved, secrets = _first_checkpoint(data), _observed_secrets(data)
     for kind in ("web", "worker"):
         _set_matching_input(
             data,
@@ -999,6 +1054,88 @@ def test_first_create_unknown_containers_never_authorize_execution(data):
         )
     gate.validate_first_workload_topology(**data)
     gate.admit_first_workload_plan(**data)
+    unresolved = _first_checkpoint(data)
+    with pytest.raises(ValueError, match="workload-task-container-unresolved"):
+        _inspect_first(data, unresolved, secrets)
+    _inspect_first(data, resolved, secrets)
+
+
+def test_resolved_first_create_containers_pass_result_inspection(data):
+    before = copy.deepcopy(data)
+    _inspect_first(data)
+    assert data == before
+
+
+@pytest.mark.parametrize("kind", ["web", "worker"])
+@pytest.mark.parametrize(
+    "path,value,error",
+    [
+        (("readonlyRootFilesystem",), False, "runtime"),
+        (("linuxParameters", "capabilities", "drop"), [], "runtime"),
+        (("image",), "foreign@sha256:" + "a" * 64, "runtime"),
+        (("privileged",), True, "runtime"),
+        (("environment",), [], "environment"),
+        (("secrets",), [], "secrets"),
+    ],
+)
+def test_resolved_first_create_hardening_deviation_fails_after_apply(
+    data, kind, path, value, error
+):
+    secrets = _observed_secrets(data)
+    _set_container_field(data, kind, path, value)
+    with pytest.raises(ValueError, match=f"workload-task-container-{error}"):
+        _inspect_first(data, secrets=secrets)
+
+
+@pytest.mark.parametrize("field", ["arn", "version_id"])
+def test_resolved_container_secrets_bind_observed_secret_versions(data, field):
+    secrets = _observed_secrets(data)
+    secrets["app_secret"][field] += "0"
+    with pytest.raises(ValueError, match="workload-task-container-secrets"):
+        _inspect_first(data, secrets=secrets)
+
+
+@pytest.mark.parametrize("kind", ["web", "worker"])
+def test_secret_wrapped_checkpoint_container_definitions_fail_closed(data, kind):
+    """A secret-wrapped checkpoint input is refused, never decrypted or trusted."""
+    secrets = _observed_secrets(data)
+    resources = _first_checkpoint(data)
+    row = next(
+        row for row in resources if row["urn"].endswith(f"::user-service-{kind}-task")
+    )
+    row["inputs"]["containerDefinitions"] = {
+        "4dabf18193072939515e22adb298388d": "1b47061264138c4ac30d75fd1eb44270",
+        "ciphertext": "v1:opaque",
+    }
+    with pytest.raises(ValueError, match="workload-task-container-json"):
+        _inspect_first(data, resources, secrets)
+
+
+def test_worker_secret_binding_is_checked_independently_of_web(data):
+    """A worker-only valueFrom mismatch fails even when web is bound correctly."""
+    secrets = _observed_secrets(data)
+    containers = _task_containers(data, "worker")
+    for row in containers[0]["secrets"]:
+        if row["name"] == "APP_SECRET":
+            arn, version = row["valueFrom"].split(":::")
+            replacement = "f" * len(version)
+            assert replacement != version  # nosec B101
+            row["valueFrom"] = f"{arn}:::{replacement}"
+    _set_matching_input(
+        data,
+        "user-service-worker-task",
+        ("containerDefinitions",),
+        json.dumps(containers),
+    )
+    with pytest.raises(ValueError, match="workload-task-container-secrets"):
+        _inspect_first(data, secrets=secrets)
+
+
+def test_result_inspection_requires_an_authenticated_checkpoint_inventory(data):
+    resources = _first_checkpoint(data)
+    resources.append(copy.deepcopy(resources[-1]))
+    with pytest.raises(ValueError, match="workload-no-change-reconciliation"):
+        _inspect_first(data, resources)
 
 
 def test_named_environment_and_secret_order_is_not_semantic(data):

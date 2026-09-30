@@ -41,6 +41,11 @@ DISABLED_APPLY_CLAIMS = tuple(
         r"no workload phase is admitted",
         r"next gate is a trusted root dispatcher",
         r"before any future workload execution",
+        r"workload (routes?|execution)[^.]{0,80}\babsent\b",
+        r"admits only[^.]{0,40}registry-phase",
+        r"future (authenticated )?result observer",
+        r"future (root-owned generated program|root materializer|protected launcher)",
+        r"network gate remains\s+fail-closed",
     )
 )
 HISTORICAL_CLAIMS = (
@@ -74,6 +79,16 @@ HISTORICAL_CLAIMS = (
     "phase is admitted by this change.",
     "The next gate is a trusted root dispatcher that authenticates the baseline and",
     "must be checked independently before any future workload execution.",
+    # Stale wording found by the pre-gate audit of attempt 5.
+    "The TEST controller admits only authenticated registry-phase plan/apply/drift",
+    "PROD and workload routes remain absent.",
+    "PROD, workload execution, registry-completion proofs, publisher dispatch, and "
+    "promotion are absent from this controller.",
+    "This is one component of a future authenticated result observer.",
+    "Encode detached nonsecret data for a future root-owned generated program.",
+    "The future root materializer must protect this program",
+    "Return the future protected launcher; never execute or install it here.",
+    "The saved-plan network gate remains fail-closed while complete resource",
 )
 
 

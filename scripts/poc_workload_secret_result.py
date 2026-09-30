@@ -1,6 +1,7 @@
 """Read first-workload secret metadata without fetching any secret value.
 
-This is one component of a future authenticated result observer. The caller
+This is one component of the authenticated result observer that the workload
+runner calls after apply. The caller
 must bind the before/after checkpoint reads, source, accepted apply and native
 AWS session before treating these observations as a deployment receipt.
 """

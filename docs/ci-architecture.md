@@ -128,10 +128,11 @@ publisher run; it does not prove image publication or activate workloads.
 
 ## Isolated service execution
 
-The TEST controller admits only authenticated registry-phase plan/apply/drift
-jobs after source, requester, review and environment checks. Its TEST registry
-jobs use the installed-main `service_execution_host.py` launcher.
-PROD and workload routes remain absent. Registry completion can publish only
+The TEST controller admits authenticated registry-phase plan/apply/drift jobs
+and, when the committed contract phase is `workload`, workload `plan` and
+`up-plan` (workload drift is rejected), after source, requester, review and
+environment checks. Its TEST jobs use the installed-main
+`service_execution_host.py` launcher. PROD routes are not implemented. Registry completion can publish only
 the distinct TEST proof after apply, drift and observation, then dispatch the
 protected application publisher. Scheduled drift retains the
 existing main-only `make start` / `make test-drift` path; it does not call the

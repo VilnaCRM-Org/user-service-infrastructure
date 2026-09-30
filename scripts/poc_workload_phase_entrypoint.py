@@ -134,7 +134,7 @@ def _checked(projection):
 
 
 def encode_workload_projection(projection):
-    """Encode detached nonsecret data for a future root-owned generated program."""
+    """Encode detached nonsecret data for the root-owned generated program."""
     checked = _checked(projection)
     raw = json.dumps(
         {
@@ -194,7 +194,7 @@ def decode_workload_projection(raw):
 def workload_program_source(projection):
     """Generate only a fixed installed import and literal data, never caller code.
 
-    The future root materializer must protect this program, its config and the
+    The root materializer must protect this program, its config and the
     installed runtime. This function neither writes files nor launches a child.
     """
     raw = encode_workload_projection(projection)
@@ -209,7 +209,7 @@ def workload_program_source(projection):
 
 
 def workload_python_wrapper_source():
-    """Return the future protected launcher; never execute or install it here."""
+    """Return the protected launcher; never execute or install it here."""
     return (
         "#!/opt/service-runtime/bin/python -I\n"
         "import os, sys\n"

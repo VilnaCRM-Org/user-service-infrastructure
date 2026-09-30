@@ -168,7 +168,9 @@ follow-up (issue #57).
   failed is rejected by workload admission, the first-workload topology gate and
   registry capture; runner kill or credential expiry leaves a state lock and
   pending operations; failed checkpoint writes and unrecorded fixed-name
-  resources (DocumentDB cluster, parameter group, log groups, secrets) cannot be
+  resources (including DocumentDB cluster and instances, parameter group, log
+  groups, Redis replication group, ALB and target group, ECS services, ALB
+  access-log bucket, secrets) cannot be
   re-created or imported. Hard-stop sub-preconditions, all required before the
   `workload` phase:
   - an admission path (resume and abandon) for a non-registry TEST checkpoint;

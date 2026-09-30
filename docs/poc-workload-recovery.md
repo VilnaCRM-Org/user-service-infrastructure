@@ -40,8 +40,10 @@ hand, and do not improvise a plan.
   releases the lock or clears pending operations.
 - Checkpoint writes that failed. Resources created in AWS but never recorded in
   state are unknown to Pulumi.
-- Unrecorded resources with fixed names: the DocumentDB cluster, its parameter
-  group, log groups and runtime secrets. A re-create returns `AlreadyExists`.
+- Unrecorded resources with fixed names: including the DocumentDB cluster
+  and instances, its parameter group, log groups, the Redis replication group,
+  the ALB and target group, the web and worker ECS services, the ALB access-log
+  bucket and runtime secrets. A re-create returns `AlreadyExists`.
   No import path exists (section 5 lists the future one).
 
 Future procedure (NOT shipped, NOT executable today; hard-stop preconditions in

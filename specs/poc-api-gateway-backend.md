@@ -64,6 +64,5 @@ API Gateway VPC links support this ALB listener integration directly:
 
 Generated `apiBaseUrl` and `apiUrl` are both `https://` plus the admitted public
 gateway FQDN; `corsAllowOrigin` is anchored to that exact origin. Private ALB DNS
-is never advertised as the application URL. The saved-plan network gate remains
-fail-closed while complete resource semantics and accepted-state authentication
-are unfinished; the native descriptor checks do not independently authorize apply.
+is never advertised as the application URL. The saved-plan network gate
+(`admit_first_workload_plan`) accepts only a validated first-create plan; the native descriptor checks do not independently authorize apply.

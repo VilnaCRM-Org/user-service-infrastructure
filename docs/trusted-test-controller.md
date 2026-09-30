@@ -1,5 +1,11 @@
 # Trusted TEST registry controller
 
+> **Historical.** This page records the original, disabled registry-controller
+> installation candidate. The current controller also routes workload `plan` and
+> `up-plan` for a `workload` contract phase; see
+> [ci-architecture.md](ci-architecture.md#isolated-service-execution) and the
+> hard stop in `specs/poc/README.md`.
+
 **Disabled installation candidate.** Preflight exits before AWS credentials, and
 source/TEST jobs have unconditional false guards. Local native graph, saved-plan
 replay, and aggregate coverage gates pass. Independent review and a live TEST
@@ -56,8 +62,8 @@ installed observer constants and schema before Docker starts. Only that role ARN
 crosses the environment boundary; backend capture repeats coordinate checks and
 verifies the actual native STS caller. Post-apply drift uses the Preview role.
 
-PROD, workload execution, registry-completion proofs, publisher dispatch, and
-promotion are absent from this controller. The existing main-only initialization
+This candidate did not include PROD, workload execution, registry-completion
+proofs, publisher dispatch, or promotion. The existing main-only initialization
 and scheduled baseline drift workflows are outside this change. Successful
 registry execution is not workload release authority.
 

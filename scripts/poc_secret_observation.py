@@ -10,7 +10,6 @@ from poc_contract import _validate_document
 # Resource identifier prefix, never credential material.
 SECRET_PREFIX = "arn:aws:secretsmanager:eu-central-1:891377212104:secret:"  # nosec B105
 FIELDS = {"arn", "version_id", "kms_key_arn", "owner"}
-IDENTITY = ("arn", "kms_key_arn", "owner")
 SEED_FIELDS = {"secret_arn", "purpose"}
 
 
@@ -63,17 +62,22 @@ def _validate_references(
 def _validate_preserved(
     observed: dict[str, Any], previous: dict[str, Any], *, seeded: bool
 ) -> None:
-    """Keep identities; only a seeded secret's first version may appear later."""
+    """Compare a prior receipt: seeded secrets by ARN and name, else exactly.
+
+    The name is bound by the validated ARN. The observed AWSCURRENT version is
+    evidence only for a seeded secret (AD-25): rotation may change it, but a
+    secret that had a current version cannot lose it.
+    """
     if not seeded:
         if observed != previous:
             raise ValueError("Generated secret rotation or replacement forbidden")
         return
     for purpose, prior in previous.items():
         current = observed[purpose]
-        if any(current[key] != prior[key] for key in IDENTITY) or prior[
-            "version_id"
-        ] not in (None, current["version_id"]):
-            raise ValueError("Seeded secret replacement or version change forbidden")
+        if current["arn"] != prior["arn"]:
+            raise ValueError("Seeded secret replacement forbidden")
+        if prior["version_id"] is not None and current["version_id"] is None:
+            raise ValueError("Seeded secret lost its current version")
 
 
 def validate_secret_observation(

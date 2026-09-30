@@ -8,6 +8,7 @@ pre-hardening projection keeps generating values in state until S4.10 removes it
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any
 
 import pulumi_aws as aws
@@ -30,6 +31,21 @@ ENVIRONMENT_NAMES = {
     "oauth_private_key": "OAUTH_PRIVATE_KEY_PEM",
     "oauth_public_key": "OAUTH_PUBLIC_KEY_PEM",
 }
+
+
+# A secret ARN, optionally selecting a JSON key (`arn:key::`). Any version ID or
+# staging label segment is refused so ECS always resolves AWSCURRENT.
+_SECRET_REFERENCE = re.compile(
+    r"arn:aws:secretsmanager:[a-z0-9-]+:\d{12}:secret:[A-Za-z0-9/_+=.@-]+-[A-Za-z0-9]{6}"
+    r"(?::[A-Za-z0-9_.-]+::)?"
+)
+
+
+def require_unversioned_reference(reference: Any) -> str:
+    """Accept only the secret ARN or ``arn:key::``; reject versions and stages."""
+    if type(reference) is not str or not _SECRET_REFERENCE.fullmatch(reference):
+        raise ValueError("Secret reference must not pin a version or staging label")
+    return reference
 
 
 class RuntimeSecretsDescriptor:
@@ -267,7 +283,9 @@ class RuntimeSecrets(pulumi.ComponentResource):
         return self._persist(purpose, value)
 
     def ecs_secrets(self) -> list[dict[str, pulumi.Input[str]]]:
-        """Inject eight version-pinned values through nine environment names."""
+        """Inject secrets by ARN (AWSCURRENT); pre-hardening stays version-pinned."""
+        if self._hardened:
+            return self._current_references()
         if set(self.secret_arns) != set(self.references) or set(
             self.version_ids
         ) != set(self.references):
@@ -283,6 +301,20 @@ class RuntimeSecrets(pulumi.ComponentResource):
                 *ENVIRONMENT_NAMES.items(),
                 ("redis_url", "REDIS_LOCKOUT_URL"),
             )
+        ]
+
+    def _current_references(self) -> list[dict[str, pulumi.Input[str]]]:
+        """Reference each declared secret by its bare ARN, never a version ID."""
+        if set(self.secret_arns) != set(self.references):
+            raise ValueError("Runtime secret inventory is incomplete")
+        return [
+            {
+                "name": ENVIRONMENT_NAMES[purpose],
+                "valueFrom": self.secret_arns[purpose].apply(
+                    require_unversioned_reference
+                ),
+            }
+            for purpose in self.references
         ]
 
     def complete(self) -> None:

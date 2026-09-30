@@ -8,8 +8,10 @@ are not desired inputs: first creation cannot know those AWS-generated values.
 `poc_secret_observation.validate_secret_observation` checks metadata supplied by
 the trusted result observer. Every purpose must have an exact matching name,
 account, region, key and owner. Extra fields, including secret values, fail.
-After the first accepted workload, updates and rollback must preserve the exact
-ARN and version from its authenticated prior receipt. Desired secret names and
+After the first accepted workload, updates and rollback of a generated
+(pre-hardening) shape must preserve the exact ARN and version from its
+authenticated prior receipt; a hardened shape compares the ARN and name only
+(see "ECS references resolve `AWSCURRENT`" below). Desired secret names and
 keys remain immutable across workload transitions. Rotation needs a separate
 reviewed protocol.
 
@@ -51,6 +53,22 @@ input is exactly `{secret_arn, purpose}` for a rotated purpose
 `workload_step` keeps the pre-hardening shape and graph unchanged until the
 topology story removes that branch (AD-25). Switching a workload contract
 between the two shapes is refused; it would need a reviewed state migration.
+
+### ECS references resolve `AWSCURRENT` (F-02, FR-08)
+
+For a hardened projection, `RuntimeSecrets.ecs_secrets()` sets each container
+secret's `valueFrom` to the bare secret ARN, or to `arn:<json-key>::` when a JSON
+key is selected. ECS then resolves the `AWSCURRENT` version at task start, so a
+rotated value needs only new tasks. `require_unversioned_reference` refuses any
+reference with a version ID or staging label (`arn:::<id>`, `arn::AWSCURRENT:`),
+and a missing declaration fails the inventory check. The pre-hardening
+projection keeps its version-pinned references until S4.10 removes that branch.
+
+The observed `AWSCURRENT` version is evidence only. For a seeded secret the
+prior-receipt comparison uses the ARN and the name bound by that ARN: a rotation
+may change `version_id`, a different ARN is a replacement and fails, and a secret
+that had a current version cannot lose it. The generated (pre-hardening) shape
+still requires the exact prior observation.
 
 V-8 (provider source): pulumi-aws 7.23.0 builds on terraform-provider-aws
 v6.36.0 with no Secrets Manager patch. Reading `Secret` calls only

@@ -171,24 +171,35 @@ def test_seeded_secrets_have_no_version_until_the_seed_then_keep_it():
     validate_secret_observation(contract, copy.deepcopy(seeded), previous=seeded)
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("version_id", None),
-        ("version_id", "b" * 32),
-        (
-            "arn",
-            SECRET_PREFIX + "/user-service-infrastructure/runtime/test/"
-            "synthetic-app_secret-ZyXwVu",
-        ),
-    ],
-)
-def test_seeded_identity_and_seeded_version_are_preserved(field, value):
+def test_seeded_rotation_changes_the_current_version_as_evidence_only():
     contract = fixture("workload-hardened")
     previous = observation(contract)
     current = copy.deepcopy(previous)
-    current["app_secret"][field] = value
-    with pytest.raises(ValueError, match="replacement or version change"):
+    current["app_secret"]["version_id"] = "b" * 32
+    validate_secret_observation(contract, current, previous=previous)
+
+
+def test_seeded_prior_receipt_comparison_uses_arn_and_name_only():
+    contract = fixture("workload-hardened")
+    previous = observation(contract)
+    current = copy.deepcopy(previous)
+    for secret in current.values():
+        secret["version_id"] = "c" * 32
+    validate_secret_observation(contract, current, previous=previous)
+    current["app_secret"]["arn"] = (
+        SECRET_PREFIX
+        + "/user-service-infrastructure/runtime/test/synthetic-app_secret-ZyXwVu"
+    )
+    with pytest.raises(ValueError, match="replacement forbidden"):
+        validate_secret_observation(contract, current, previous=previous)
+
+
+def test_seeded_secret_cannot_lose_its_current_version():
+    contract = fixture("workload-hardened")
+    previous = observation(contract)
+    current = copy.deepcopy(previous)
+    current["app_secret"]["version_id"] = None
+    with pytest.raises(ValueError, match="lost its current version"):
         validate_secret_observation(contract, current, previous=previous)
 
 

@@ -27,6 +27,7 @@ SECRET_MATERIAL = ("random:", "tls:", "aws:secretsmanager/secretVersion:SecretVe
 #   secret_policy.go resourceSecretPolicyRead -> GetResourcePolicy
 # None of their create, read, update or delete paths calls GetSecretValue; only
 # secret_version.go does, which is why no SecretVersion may be declared (FR-09).
+ARN_PREFIX = "arn:aws:secretsmanager:eu-central-1:891377212104:secret:"
 V8_PROVIDER_VERSION = "7.23.0"
 V8_METADATA_READ_TYPES = {
     "aws:secretsmanager/secret:Secret",
@@ -434,15 +435,101 @@ def test_readding_secret_material_to_the_hardened_graph_fails(tmp_path, mutation
     ]
 
 
-def test_hardened_inventory_has_no_version_references_or_derived_secrets():
+class _Resolved:
+    """Stand-in for a resolved Output: apply runs the callback immediately."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def apply(self, callback):
+        return callback(self.value)
+
+
+def _hardened_resource(arns=None):
     resource = object.__new__(module.RuntimeSecrets)
+    resource._hardened = True
     resource.references = _hardened_contract()["workload"]["secret_lifecycle"][
         "references"
     ]
-    resource.secret_arns = dict.fromkeys(resource.references, "synthetic-arn")
+    resource.secret_arns = arns or {
+        purpose: _Resolved(f"{ARN_PREFIX}{purpose}-AbCdEf")
+        for purpose in resource.references
+    }
     resource.version_ids = {}
+    return resource
+
+
+def test_hardened_ecs_secrets_reference_the_secret_arn_without_a_version():
+    rows = _hardened_resource().ecs_secrets()
+    assert {row["name"] for row in rows} == {
+        "APP_SECRET",
+        "OAUTH_ENCRYPTION_KEY",
+        "OAUTH_PASSPHRASE",
+        "TWO_FACTOR_ENCRYPTION_KEY",
+        "OAUTH_PRIVATE_KEY_PEM",
+        "OAUTH_PUBLIC_KEY_PEM",
+    }
+    for row in rows:
+        assert row["valueFrom"].startswith(ARN_PREFIX)
+        assert row["valueFrom"].endswith("-AbCdEf")
+    assert not any(":::" in row["valueFrom"] for row in rows)
+
+
+def test_hardened_ecs_secrets_fail_closed_on_an_incomplete_inventory():
+    resource = _hardened_resource()
+    resource.secret_arns.pop("app_secret")
     with pytest.raises(ValueError, match="incomplete"):
         resource.ecs_secrets()
+
+
+def test_hardened_ecs_secret_with_a_version_suffix_fails():
+    resource = _hardened_resource()
+    resource.secret_arns["app_secret"] = _Resolved(
+        f"{ARN_PREFIX}app_secret-AbCdEf:::" + "1" * 32
+    )
+    with pytest.raises(ValueError, match="version"):
+        resource.ecs_secrets()
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        f"{ARN_PREFIX}app_secret-AbCdEf",
+        f"{ARN_PREFIX}app_secret-AbCdEf:password::",
+    ],
+)
+def test_unversioned_reference_accepts_the_arn_or_arn_key(reference):
+    assert module.require_unversioned_reference(reference) == reference
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        f"{ARN_PREFIX}app_secret-AbCdEf:::" + "1" * 32,
+        f"{ARN_PREFIX}app_secret-AbCdEf::AWSCURRENT:",
+        f"{ARN_PREFIX}app_secret-AbCdEf:password:AWSCURRENT:",
+        f"{ARN_PREFIX}app_secret-AbCdEf:password::" + "1" * 32,
+        f"{ARN_PREFIX}app_secret-AbCdEf:",
+        "not-an-arn",
+        None,
+    ],
+)
+def test_version_suffix_or_stage_in_a_secret_reference_fails(reference):
+    with pytest.raises(ValueError, match="version"):
+        module.require_unversioned_reference(reference)
+
+
+def test_hardened_inventory_has_no_derived_secrets():
+    resource = _hardened_resource()
     for purpose in sorted(module.DERIVED):
         with pytest.raises(ValueError, match="invalid or duplicated"):
             resource.persist_url(purpose, "synthetic")
+
+
+def test_pre_hardening_ecs_secrets_remain_version_pinned_until_s4_10():
+    resource = object.__new__(module.RuntimeSecrets)
+    resource.references = {"app_secret": {}}
+    resource.secret_arns = {"app_secret": "arn"}
+    resource.version_ids = {}
+    with pytest.raises(ValueError, match="incomplete"):
+        resource.ecs_secrets()

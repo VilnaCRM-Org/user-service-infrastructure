@@ -326,9 +326,11 @@ jobs:
       - poc_prepare_source
       - test_preview
       - test_destructive_diff
-    # Ordering that must hold: workload `pulumi up` process timeout 3300 s (55
-    # min, APPLY_TIMEOUT_SECONDS) <= STS session 3600 s (the OIDC step below sets
-    # no role-duration-seconds, so the role default applies and credentials are
+    # Ordering that must hold: every service-transport `pulumi up` (registry and
+    # workload) process timeout 3300 s (55 min, APPLY_TIMEOUT_SECONDS) <= STS
+    # session 3600 s (the OIDC step below sets no role-duration-seconds, so the
+    # configure-aws-credentials action's default session duration applies and
+    # credentials are
     # not refreshed) <= this job timeout. Other Pulumi/AWS commands keep the
     # 1200 s default. A first create must therefore finish within 55 min; if
     # measured longer, a bootstrap MaxSessionDuration increase plus

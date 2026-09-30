@@ -162,8 +162,11 @@ the committed contract phase is `workload`; only the registry completion
 observer/publisher helpers are not yet installed.
 
 The TEST-only source prerequisite still blocks PROD promotion. The committed
-contract phase stays `registry` (see the hard stop in `specs/poc/README.md`), so
-no workload apply runs until its preconditions are met and reviewed. Network-disabled Docker tests prove the local
+contract phase stays `registry` (see the hard stop in `specs/poc/README.md`), and
+the hard stop is a merge gate only: the phase is read from the PR-head contract
+and admission checks review, not CI, so it is not a runtime block. A runtime guard
+that refuses workload apply independent of the PR-head phase is tracked in issue
+#57. Network-disabled Docker tests prove the local
 UID/filesystem/process boundary with synthetic state; they do not establish
 hosted OIDC, cloud deployment or workload acceptance. Installation and current-head
 TEST registry evidence remain required before this route is accepted; issue 185

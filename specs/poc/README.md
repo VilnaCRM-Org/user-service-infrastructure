@@ -147,19 +147,38 @@ follow-up (issue #57).
 - Cost and sustainability review (F-15).
 - Worker healthcheck image fix (user-service PR #501) and a non-root image.
 - Bootstrap governance grants for the new resources (N-11).
-- N-04 apply timeout budget (partial, done here): the workload `pulumi up`
-  process timeout is 3300 s (55 min), below the 3600 s STS session (no
-  `role-duration-seconds` is set, credentials are not refreshed) and below the
-  70 min `test_apply` job timeout; other commands keep the 1200 s default. A
-  first create must finish within 55 min. If a measured first create is longer,
-  a bootstrap `MaxSessionDuration` increase plus `role-duration-seconds` is
-  required first. Hard stop: no `workload` phase until the first create is
-  measured within 55 min or that increase is landed.
-- N-06 recovery (partial): `docs/poc-workload-recovery.md` documents only the
-  clean-failure paths. Runner kill or credential expiry (state lock and pending
-  operations), failed checkpoint writes and unrecorded fixed-name resources
-  (DocumentDB cluster, parameter group, log groups, secrets) are not recoverable
-  with shipped tooling. Hard stop: a reviewed CI recovery command owned by
-  governance (CODEOWNERS) performing stack export, lock release, pending-operation
-  clear and imports, with evidence, must ship before the `workload` phase.
+- N-04 apply timeout budget (partial, done here): every service-transport
+  `pulumi up` (registry and workload) has a 3300 s (55 min) process timeout,
+  below the 3600 s STS session (no `role-duration-seconds` is set, so the
+  configure-aws-credentials action's default session duration applies and
+  credentials are not refreshed) and below the 70 min `test_apply` job timeout;
+  other commands keep the 1200 s default. `MARGIN_SECONDS=300` in
+  `tests/unit/test_apply_timeout_budget.py` is an assumption, not a measured
+  value. Measurement definition: from OIDC credential issuance to the end of
+  result observation must be <= 3600 s, and from job start to the end must be
+  <= the job timeout. A first create must finish within 55 min. If a measured
+  first create is longer, a bootstrap `MaxSessionDuration` increase plus
+  `role-duration-seconds` is required first. Hard stop: no `workload` phase
+  until the first create is measured within these bounds or that increase is
+  landed. A timeout kills Pulumi without a grace period, so it can leave the
+  state lock behind (see N-06).
+- N-06 recovery (NOT met): `docs/poc-workload-recovery.md` states that no
+  first-workload apply that changed the checkpoint is recoverable with shipped
+  tooling: a partial checkpoint or a complete one whose post-apply inspection
+  failed is rejected by workload admission, the first-workload topology gate and
+  registry capture; runner kill or credential expiry leaves a state lock and
+  pending operations; failed checkpoint writes and unrecorded fixed-name
+  resources (DocumentDB cluster, parameter group, log groups, secrets) cannot be
+  re-created or imported. Hard-stop sub-preconditions, all required before the
+  `workload` phase:
+  - an admission path (resume and abandon) for a non-registry TEST checkpoint;
+  - sanitized operator-visible failure diagnostics (Pulumi output currently
+    stays in a private temporary log, so the failing resource and AWS error are
+    not visible in CI);
+  - a real import path for fixed-name resources (none exists today);
+  - a reviewed CI recovery command owned by governance (CODEOWNERS) performing
+    stack export, lock release, pending-operation clear and imports, with
+    evidence.
+  Until then any first workload apply is stop-and-escalate. The runtime guard
+  independent of the PR-head phase is tracked in issue #57.
 - Live TEST acceptance of the first workload apply, clean drift and rollback.

@@ -1,10 +1,10 @@
 # PoC workload recovery runbook
 
-Scope: the TEST stack after the first `workload` phase apply fails part-way or
-must be abandoned. This runbook is reviewed source; it is not permission to run
-anything. Every state-changing step below goes through the reviewed pull request
-and the protected saved-plan workflow (`/pulumi test plan`, `/pulumi test up`).
-Never run `pulumi`, `aws` or console changes out of band, never edit or import
+Scope: the TEST stack after a first `workload` phase apply fails, is
+interrupted, or must be abandoned. Shipped tooling cannot recover any of these
+(section 0): this runbook is a stop-and-escalate procedure plus the requirements
+for a future recovery path. It is reviewed source, not permission to run
+anything. Never run `pulumi`, `aws` or console changes out of band, never edit or import
 state by hand, and never unprotect a resource outside a reviewed change.
 
 The committed `specs/poc/poc-test.json` phase is `registry`. This runbook is one
@@ -12,90 +12,98 @@ of the preconditions for switching it to `workload` (see `specs/poc/README.md`).
 
 ## 0. What is and is not recoverable with shipped tooling
 
-Status: N-06 is partial. Only failures that leave a clean, unlocked, complete
-checkpoint are recoverable with the shipped workflow. These cases are NOT
-recoverable with shipped tooling today:
+Status: N-06 is NOT met. Shipped tooling has no recovery path for any first
+`workload` apply that changed the checkpoint. Treat every such apply as
+stop-and-escalate to governance (CODEOWNERS); do not retry, do not clean up by
+hand, and do not improvise a plan.
 
+"Changed the checkpoint" includes all of these, none of which is recoverable:
+
+- `pulumi up` failed part-way, even when Pulumi exited cleanly. The checkpoint
+  then holds the registry resources plus some workload resources. Workload
+  admission requires the exact registry resource count and receipt checkpoint
+  (`scripts/poc_workload_admission.py`), the first-workload topology gate
+  requires the prior state to equal the registry baseline
+  (`scripts/poc_workload_topology.py`), and registry capture rejects larger state
+  (`scripts/poc_registry_plan.py`). A partial checkpoint is therefore rejected by
+  both the workload runner and the registry runner. See
+  `docs/poc-workload-admission.md`.
+- `pulumi up` succeeded but the runner's post-apply inspection of the first
+  result then failed (`scripts/poc_workload_runner.py`). The checkpoint holds the
+  complete workload state, and no runner accepts it: the first-workload gate
+  allows only `create` from the registry baseline, and no acceptance receipt
+  exists.
 - Runner killed (SIGKILL, job cancel, runner loss) or STS credentials expired
   mid-update. Pulumi leaves the state lock and pending operations behind. The
   trusted backend observer rejects any lock and any pending operation
   (`scripts/poc_backend_observer.py`), and no shipped command exports state,
-  releases the lock or clears pending operations. Waiting does not release a
-  lock owned by a dead process. Both `plan` and `up-plan` therefore stay blocked.
+  releases the lock or clears pending operations.
 - Checkpoint writes that failed. Resources created in AWS but never recorded in
-  state are unknown to Pulumi. A re-run does not continue from state, because the
-  state does not contain them.
+  state are unknown to Pulumi.
 - Unrecorded resources with fixed names: the DocumentDB cluster, its parameter
   group, log groups and runtime secrets. A re-create returns `AlreadyExists`.
-  The reviewed import path covers only Secrets Manager secrets, not the other
-  resource types.
+  No import path exists (section 5 lists the future one).
 
-Required future procedure (not shipped, hard-stop precondition in
-`specs/poc/README.md`): a reviewed CI recovery command, owned by governance
-(CODEOWNERS), that runs through the protected environment and performs stack
-export, lock release, pending-operation clear and imports of unrecorded
-resources, and that emits evidence (before and after state hashes, the lock and
-pending-operation listings, the import list, run IDs, approver). Until that
-command exists and is accepted, treat any of the cases above as a stop: do not
-retry, do not clean up by hand, and escalate to governance.
+Future procedure (NOT shipped, NOT executable today; hard-stop preconditions in
+`specs/poc/README.md`, N-06): (1) an admission path (resume and abandon) for a
+non-registry TEST checkpoint; (2) sanitized operator-visible failure
+diagnostics; (3) a real import path for fixed-name resources; and (4) a reviewed
+CI recovery command, owned by governance (CODEOWNERS), that runs through the
+protected environment and performs stack export, lock release, pending-operation
+clear and imports, and emits evidence (before and after state hashes, the lock
+and pending-operation listings, the import list, run IDs, approver). The runtime
+guard that refuses workload apply independent of the PR-head phase is tracked in
+issue #57. Until all of these exist and are accepted, sections 2, 3 and the
+import steps of section 5 below are design notes, not procedures.
 
-## 1. Triage a failed or partial first apply
+## 1. Triage a failed first apply
 
-1. Read the failed `test_apply` job summary for the failing resource and its
-   AWS error. A job timeout is not proof that AWS stopped: the provider may still
-   be creating resources (DocumentDB instances, Redis replica, NAT gateways
-   commonly need 15 to 25 minutes).
-2. Classify the failure. If the job ended cleanly (Pulumi reported the failed
-   resource and exited), state has a complete checkpoint and no lock: continue
-   with section 2 or 3. If the process was killed, cancelled, timed out or lost
-   credentials, or a checkpoint write failed, you are in a section 0 case: stop
-   and escalate; do not wait for a lock, and do not run `pulumi cancel` or
-   `pulumi stack export/import`.
-3. Decide between resume and abandon.
+The Pulumi output of a workload apply stays in a private temporary log inside the
+ephemeral worker (`scripts/service_execution_worker.py`,
+`scripts/service_execution_process.py`, `docs/ci-architecture.md`). It is not in
+the job summary or any artifact. The operator sees only the stage markers and a
+generic failure line, so the failing resource and the AWS error are NOT visible
+in CI. Sanitized failure diagnostics are a hard-stop precondition (N-06).
 
-## 2. Resume (clean failure only)
+1. Note the run ID, the reviewed PR head SHA and the last stage marker in the
+   `test_apply` job log. A job timeout is not proof that AWS stopped: the
+   provider may still be creating resources (DocumentDB instances, Redis
+   replica, NAT gateways commonly need 15 to 25 minutes).
+2. Do not attempt to classify the failure from the checkpoint. Any failed or
+   timed-out first workload apply is a section 0 case: stop and escalate to
+   governance; do not wait for a lock, retry, or run `pulumi cancel` or
+   `pulumi stack export/import`. Do not run `aws` or console changes to
+   investigate out of band.
+3. Record the run ID and stage markers for the escalation.
 
-Resume only when Pulumi exited cleanly after a transient failure (throttling,
-capacity, an ECS steady-state wait that the fixed image now satisfies) and the
-next `/pulumi test plan` is admitted by the backend observer.
+## 2. Resume (FUTURE; not executable with shipped tooling)
 
-1. Confirm the next plan is admitted; a lock or pending operation rejecting it is
-   a section 0 case.
-2. Push the fix (if any) to the same PR, or leave the head unchanged for a pure
-   retry. A new head needs a fresh `/pulumi test plan`.
-3. Comment `/pulumi test plan` on the current head, review the saved plan (it
-   must only create or update the resources that did not finish), then request
-   `/pulumi test up` with a maintainer other than the sole environment reviewer.
-4. Resources Pulumi recorded before the failure are in state, so the plan
-   continues from it. Resources still pending in AWS are reconciled by the
-   refresh in the plan; if the plan proposes replacing a protected resource, stop
-   and treat that as a review finding.
-5. After a green apply, wait for the clean drift job before any acceptance claim.
+There is no resume path today. After a partial or complete first workload
+checkpoint, workload admission, the first-workload topology gate and registry
+capture all reject the state (section 0). Do not run `/pulumi test plan` or
+`/pulumi test up` hoping to continue. A future resume needs the admission path
+for a non-registry TEST checkpoint (N-06) with its own reviewed design: the
+plan must only create or update unfinished resources, and a plan that replaces
+a protected resource is a review finding.
 
-## 3. Abandon
+## 3. Abandon (FUTURE; not executable with shipped tooling)
 
-Applies only to a clean, unlocked state (not a section 0 case).
+There is no abandon path today. Switching `phase` back to `registry` hits the
+same prior-state rejection (registry capture rejects larger state), and the
+first-workload gate accepts only `create` operations, so a destroy or delete
+plan is rejected. Do not open a PR that claims to abandon.
 
-Abandon when the design is wrong, the image cannot become healthy, or the stack
-cannot be resumed safely. Abandon is a reviewed change, never a direct destroy.
-
-1. Open a PR that switches `phase` back to `registry` only if the registry-only
-   graph can be admitted, or that removes the failed workload resources.
-2. Protected resources (DocumentDB cluster and instances, runtime secrets and
-   their versions) refuse deletion. The PR must name each resource it unprotects
-   and, for the DocumentDB cluster, disable deletion protection in the same
-   reviewed change. It must state the data-loss decision explicitly. Maintainer
-   `@Kravalg` approval of the protected environment is still required.
-3. Run the plan, review that the destructive diff lists exactly those resources,
-   then apply through `/pulumi test up`. The destructive-diff gate applies as for
-   any other change; do not bypass it.
-4. Verify in the next plan that the stack graph matches the intended state and
-   that no orphan resources remain.
+A future abandon needs the same admission path (N-06), plus a reviewed change
+that names each protected resource it unprotects (DocumentDB cluster and
+instances, runtime secrets and their versions), disables DocumentDB deletion
+protection in the same change, states the data-loss decision explicitly, and
+keeps the destructive-diff gate and `@Kravalg` protected-environment approval.
 
 ## 4. Final-snapshot name collisions
 
-The "reviewed operator task" below is a governance-owned manual decision recorded
-in the PR; no shipped command performs it.
+This section is FUTURE, part of the abandon design (section 3), and not
+executable today. The "reviewed operator task" below is a governance-owned manual
+decision recorded in the PR; no shipped command performs it.
 
 The DocumentDB cluster keeps a named final snapshot, `<stack-tag>-docdb-final`
 (for TEST: `user-service-test-docdb-final`). AWS refuses to create a second
@@ -113,7 +121,10 @@ a diff on every plan. Handle a collision with a reviewed decision:
   approver in the PR. Do not delete a snapshot unless the abandon decision
   explicitly accepts that loss.
 
-## 5. Secrets Manager recovery-window collisions
+## 5. Secrets Manager recovery-window collisions (FUTURE)
+
+Not executable with shipped tooling: there is no import path (section 0) and no
+admission path for the resulting state.
 
 Runtime secrets use fixed names and are Pulumi-protected. After a destroy, AWS
 keeps a deleted secret for its recovery window (default 30 days) and refuses to
@@ -123,10 +134,11 @@ Decide before the next create:
 
 - Restore: if the secret content is still wanted and the KMS key is unchanged,
   a reviewed operator task restores the scheduled-for-deletion secret and the
-  next plan adopts it via the reviewed import path; do not hand-edit state.
+  a future import path (N-06 precondition; not shipped) would adopt it.
+  Do not hand-edit state.
 - Force delete: if the content is disposable (generated PoC values), a reviewed
-  operator task force-deletes the scheduled secret without recovery, then the
-  first-create plan proceeds. Force delete is irreversible; record the secret
+  operator task force-deletes the scheduled secret without recovery, then a
+  first-create plan could proceed. Force delete is irreversible; record the secret
   names, the decision and the approver in the PR, and never print secret values.
 
 Neither action is available to the service apply role, which has no IAM or
@@ -137,5 +149,5 @@ separate precondition (N-11).
 ## 6. Evidence to keep
 
 - The failed and the recovering run IDs and the reviewed PR head SHA.
-- The plan output for the resume or abandon change.
+- The stage markers of the failed run; the plan output of any future recovery change.
 - Snapshot and secret decisions with approver and date.

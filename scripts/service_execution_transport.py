@@ -214,7 +214,8 @@ class ServiceTransport:
     def _timeout(command, child):
         """Only the saved-plan replay (`pulumi up`) may outlast the default bound.
 
-        A first workload create stays below the 3600 s STS session.
+        Every service-transport `pulumi up` (registry and workload) gets the
+        3300 s bound, which stays below the 3600 s STS session.
         """
         if child and command[3:4] == ["up"]:
             return APPLY_TIMEOUT_SECONDS

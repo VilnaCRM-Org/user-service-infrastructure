@@ -34,6 +34,11 @@ README_MARKERS = (
     "N-11",
     "N-04",
     "N-06",
+    "admission path (resume and abandon) for a non-registry TEST checkpoint",
+    "sanitized operator-visible failure diagnostics",
+    "real import path for fixed-name resources",
+    "#57",
+    "OIDC credential issuance to the end of result observation",
     "Live TEST acceptance",
 )
 
@@ -49,7 +54,7 @@ def test_poc_test_phase_stays_registry_until_hardening_preconditions_are_met():
 
 def test_readme_lists_every_workload_phase_precondition():
     text = (ROOT / "specs/poc/README.md").read_text()
-    section = text.split("## Workload phase hard stop", 1)[1]
+    section = " ".join(text.split("## Workload phase hard stop", 1)[1].split())
     missing = [marker for marker in README_MARKERS if marker not in section]
     assert missing == []
     assert "stacked hardening PR" in section

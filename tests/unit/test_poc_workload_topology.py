@@ -1425,3 +1425,20 @@ def test_tmpdir_stays_inside_the_application_volume(data):
     _set_container_field(data, "web", ("environment",), rows)
     with pytest.raises(ValueError, match="workload-task-container-environment"):
         gate.validate_first_workload_topology(**data)
+
+
+def test_registry_graph_plus_one_workload_resource_is_rejected_as_prior(data):
+    """A partial or complete workload checkpoint is not a valid prior state."""
+    baseline = gate.registry._graph(
+        gate.RegistryPhaseProjection(gate.registry.REGISTRIES)
+    )
+    step = next(
+        row
+        for row in data["preview"]["steps"]
+        if row["urn"] not in {item["urn"] for item in data["prior_resources"]}
+    )
+    data["prior_resources"].append(copy.deepcopy(step["newState"]))
+    with pytest.raises(ValueError):
+        gate.registry._prior(data["prior_resources"], baseline)
+    with pytest.raises(ValueError):
+        gate.validate_first_workload_topology(**data)

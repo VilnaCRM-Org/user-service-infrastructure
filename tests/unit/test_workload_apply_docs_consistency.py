@@ -198,3 +198,65 @@ def test_enabled_routing_is_stated_positively(monkeypatch):
     for command in routed:
         assert f"``{command}``" in worker_doc, command
         assert f"`{command}`" in bridge_doc, command
+
+
+# Claims the recovery runbook and related docs must never make while shipped
+# admission rejects partial or complete first-workload checkpoints.
+RECOVERY_OVERCLAIMS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"continues? from (it|state|the (recorded|partial|checkpoint))",
+        r"reviewed import path",
+        r"adopts it via",
+        r"read the failed `?test_apply`? job summary",
+        r"(failing resource|aws error)[^.]{0,80}job summary",
+        r"job summary for the failing",
+        r"clean failures? (are|is) recoverable",
+        r"no workload apply runs until",
+    )
+)
+RECOVERY_HISTORICAL = (
+    "so the plan continues from it.",
+    "The reviewed import path covers only Secrets Manager secrets.",
+    "the next plan adopts it via the reviewed import path",
+    "Read the failed `test_apply` job summary for the failing resource and its "
+    "AWS error.",
+    "so no workload apply runs until its preconditions are met and reviewed.",
+)
+
+
+def _recovery_overclaims():
+    hits = []
+    for path, text in _documents():
+        flat = " ".join(text.split())
+        hits.extend(
+            (str(path), match.group(0))
+            for claim in RECOVERY_OVERCLAIMS
+            for match in claim.finditer(flat)
+        )
+    return hits
+
+
+@pytest.mark.parametrize("sentence", RECOVERY_HISTORICAL)
+def test_recovery_overclaim_wording_is_recognized(sentence):
+    assert any(claim.search(sentence) for claim in RECOVERY_OVERCLAIMS)
+
+
+def test_docs_make_no_unshipped_recovery_or_visibility_claims():
+    assert _recovery_overclaims() == []
+
+
+def test_recovery_runbook_marks_unshipped_paths_and_private_logs():
+    text = " ".join((ROOT / "docs/poc-workload-recovery.md").read_text().split())
+    for marker in (
+        "## 2. Resume (FUTURE; not executable with shipped tooling)",
+        "## 3. Abandon (FUTURE; not executable with shipped tooling)",
+        "## 5. Secrets Manager recovery-window collisions (FUTURE)",
+        "stays in a private temporary log",
+        "stop-and-escalate",
+        "issue #57",
+    ):
+        assert marker in text, marker
+    ci_doc = " ".join((ROOT / "docs/ci-architecture.md").read_text().split())
+    assert "merge gate only" in ci_doc
+    assert "#57" in ci_doc

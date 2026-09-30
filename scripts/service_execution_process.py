@@ -115,7 +115,9 @@ def _stop_children():
 
 
 # Ordering that must hold: APPLY_TIMEOUT_SECONDS <= STS session (3600 s, the
-# default when the OIDC step sets no role-duration-seconds) <= test_apply job
+# configure-aws-credentials default session duration when the OIDC step sets no
+# role-duration-seconds; APPLY_TIMEOUT_SECONDS applies to every service-transport
+# `pulumi up`, registry and workload) <= test_apply job
 # timeout in self-deploy.yml. tests/unit/test_apply_timeout_budget.py asserts it.
 DEFAULT_TIMEOUT_SECONDS = 1200
 APPLY_TIMEOUT_SECONDS = 3300

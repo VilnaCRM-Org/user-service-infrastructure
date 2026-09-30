@@ -49,7 +49,7 @@ worker owns normal lifetime cleanup after use.
 
 The immutable result contains the directory, fixed filename/SHA-256 pairs,
 projection SHA-256 and original baseline SHA-256. `python_command` points to the
-fixed wrapper. These are byte bindings for a future same-run saved-plan manifest;
+fixed wrapper. These are byte bindings for the same-run saved-plan manifest;
 they are not deployment receipts.
 
 ## Native interpreter contract
@@ -64,7 +64,7 @@ backend. It previews only a no-resource Python program. With project runtime
 The negative case adds `runtime.options.virtualenv`. Pulumi then bypasses
 `PULUMI_PYTHON_CMD`, observes isolated mode `0` and fails the child guard. Therefore
 the materializer deliberately omits the virtualenv option: the fixed wrapper
-itself selects `/opt/service-runtime/bin/python -I`. The future dispatcher must
+itself selects `/opt/service-runtime/bin/python -I`. The connected dispatcher must
 preserve this project shape and set `PULUMI_PYTHON_CMD` from the returned fixed
 path. In particular, it cannot reuse the existing transport's project runtime
 rewrite unchanged.

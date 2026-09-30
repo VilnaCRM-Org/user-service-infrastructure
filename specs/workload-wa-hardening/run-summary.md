@@ -11,12 +11,12 @@ This file is the execution ledger. It is not a planning input.
 | Worktree | wt-usi-hardening |
 | Branch | feat/workload-wa-hardening |
 | Source baseline | 66776772979956de9c5abdbee7c45641a1b533fa (PR #56 head) |
-| Bundle revision | 13 (answers readiness round 13: R13-m1, R13-m2, R13-n1…n7; wording only, no new user decision; parent commit b1ed572, which is revision 12) |
+| Bundle revision | 14 (answers readiness round 14: R14-m1, R14-m2, R14-n1, R14-n2; wording only, no new user decision; parent commit 4c40a27, which is revision 13, which answered round 13 on top of revision 12, b1ed572) |
 | Specs directory | `specs/workload-wa-hardening/` (slug chosen by the caller) |
 | Target | pulumi (Python Pulumi), stacks test and prod |
 | Environment | none selected; planning is offline |
 | Stage | do-sdlc-plan |
-| Date (UTC) | 2026-09-30 (revisions 1-11); 2026-10-01 (revisions 12 and 13) |
+| Date (UTC) | 2026-09-30 (revisions 1-11); 2026-10-01 (revisions 12, 13 and 14) |
 
 ## Tooling and profile
 
@@ -311,19 +311,19 @@ This file is the execution ledger. It is not a planning input.
 - User decisions given in chat on 2026-09-30 and relayed by the coordinator: D-1…D-7 (`decisions.md`). The D-4 and D-5 clarifications came in a second message the same day, and D-8…D-13 (derived details) were confirmed in a third. D-14 (recovery targets RPO ≤ 1 hour, RTO ≤ 24 hours) is a user decision of the same date, recorded in `decisions.md` by commit `68584e1`. **D-15** (the gateway certificate ARN pinned in the reviewed USI workload contract and checked only with `acm:DescribeCertificate`; no CI role gets any `ssm:GetParameter` read; no identity deny, seed guard, seed boundary or catalog hash loosened for SSM) is a user decision given in chat on 2026-09-30, answering the coordinator's question, and relayed with round 10; revision 10 records it in `decisions.md`.
 - Read-only cross-repository reconnaissance: bootstrap-infrastructure @debd88b, api-gateway-infrastructure, and user-service @main via `gh api`
 
-## Artifacts (sha256, revision 13)
+## Artifacts (sha256, revision 14)
 
-`run-summary.md` is not hashed here, because it contains the hashes. `decisions.md` is a planning input and is hashed. Commit `68584e1` added its D-14 row after revision 5; revision 6 changed only that row's label (a user decision, not a planning default); revisions 7, 8 and 9 do not change it; revision 10 adds the D-15 row (a user decision of 2026-09-30); revision 11 changes only D-15's note text (R11-n3); revisions 12 and 13 do not change it. `research.md` is unchanged since revision 4; `brief.md` changed last in revision 10 (front matter and AS-4, D-15).
+`run-summary.md` is not hashed here, because it contains the hashes. `decisions.md` is a planning input and is hashed. Commit `68584e1` added its D-14 row after revision 5; revision 6 changed only that row's label (a user decision, not a planning default); revisions 7, 8 and 9 do not change it; revision 10 adds the D-15 row (a user decision of 2026-09-30); revision 11 changes only D-15's note text (R11-n3); revisions 12, 13 and 14 do not change it. `research.md` is unchanged since revision 4; `brief.md` changed last in revision 10 (front matter and AS-4, D-15).
 Check with `sha256sum -c` over the block below, from `specs/workload-wa-hardening/`.
 
 ```
 beca16ba9ab95d76cd28ed47ac8e806549b94805ddca9a2d138a790ee0f0ca59  research.md
 5d7d1e37b9417de7cbe7b4fa0bcafe28ed723da997c22be7ef5902b384e302e4  brief.md
-807345cc4de89ee36a50b52b5c26ed782dd3cc107c11a1b48902459e20849033  prd.md
-dc1fb43514c252a8b3d2cc01010a6b4d364133b28a8ea9ee69a797679ea4fc80  architecture.md
-d1a4e453c90bef8d6e3ade5a88d7f88f2680be17400d4f29a2f35fc198e7bf61  epics-stories.md
+fc0dc5e90013f7361821001e8470d259eb368a1562649023f48bafccd44f3dde  prd.md
+a632f89643792a71cf764651d601893dab25060cb56d7f3ba00ce7590930c1a4  architecture.md
+fc5c9895d9094b8501e72aa9aa7f4b1b70e4aad7c06c3a824dd7578ed262ba8b  epics-stories.md
 86df7c4f7b72ad49cbca328ec79884c792c1b3f833567f4a34586eb60d5259c6  decisions.md
-bd4f9e98fda9753408e6fb4c073b7ef2126ac2d93f1b2506cee55e56ea333691  readiness.md
+45553cbd61f1ae16c238cba9f3ee4f555ede5e06d5e9aaa9199670f0ad81046a  readiness.md
 ```
 
 ## Gates
@@ -345,20 +345,36 @@ bd4f9e98fda9753408e6fb4c073b7ef2126ac2d93f1b2506cee55e56ea333691  readiness.md
 | 11 | FAIL (R11-M1 and the round-11 findings); fixed in revision 11, after a pre-commit fresh-context audit of the revision-11 changes (REFUTED: 2 major, 3 minor, 3 nits) and its recheck (REFUTED: all 8 fixed; N1 (major), N2 and N3 new, all folded in); both recorded in `readiness.md` |
 | 12 | FAIL against `7bf441c` (2 major: R12-M1, the TEST Apply role's deny-all hold `Issue215CutoverSessions` not planned; R12-M2, no creator for the ECS roles' permissions boundaries and execution-role grants; 4 minor: R12-m1 installer identity, R12-m2 Lambda ENI scope, R12-m3 step-18 detach ownership, R12-m4 S5.24a fit-first; 3 nits: R12-n1…n3); fixed in revision 12, after a pre-commit fresh-context audit of the revision-12 changes (REFUTED: 1 major, 9 minor, 8 nits, all fixed) and its recheck (REFUTED on minors only; the new items A-H folded in by the final pass; both recorded in `readiness.md`) |
 | 13 | FAIL against `b1ed572` (0 major; 2 minor: R13-m1 GetRole returns no managed attachments, R13-m2 row-8 PassRole allow half; 7 nits: R13-n1…n7); fixed in revision 13 (wording only; no pre-commit audit, the next independent round verifies it) |
+| 14 | FAIL against `4c40a27` (0 major; 2 minor: R14-m1 S4.7's live PROD simulator rows assigned to a role whose grant does not cover them, R14-m2 rows 8 and 9 evidence depended on row 10; 2 nits: R14-n1 V-25 fallback missing its key-policy part, R14-n2 stale history and status text); fixed in revision 14 (wording only; no pre-commit audit, the next independent round verifies it) |
 
-Stage status: **BLOCKED** until an independent review of revision 13 reports
+Stage status: **BLOCKED** until an independent review of revision 14 reports
 PASS. Round 5 was recorded as the last allowed round, and rounds 6, 7, 8,
-9, 10, 11, 12 and 13 ran after it; whether another independent round runs is for the coordinator and
+9, 10, 11, 12, 13 and 14 ran after it; whether another independent round runs is for the coordinator and
 the user to decide. `readiness.md` is written by the author and says PENDING;
 it is not a PASS.
 
-**Attempt ledger:** canonical `attempts.json` was NOT initialized. The atomic reservation needs verified host write isolation for the copied ledger_reference package, and a same-user host cannot provide it. The ledger is therefore BLOCKED. Attempt count by caller record: 1 procedure run, with 13 recorded review rounds (round 13: FAIL, answered by revision 13). This count is not canonical.
+**Attempt ledger:** canonical `attempts.json` was NOT initialized. The atomic reservation needs verified host write isolation for the copied ledger_reference package, and a same-user host cannot provide it. The ledger is therefore BLOCKED. Attempt count by caller record: 1 procedure run, with 14 recorded review rounds (round 14: FAIL, answered by revision 14). This count is not canonical.
 
 ## Acceptance checklist for the next independent reviewer
 
 A reviewer ticks each item from the bundle text and the cited source, not
 from this list.
 
+- [ ] Every round-14 finding in `readiness.md` maps to text that
+      resolves it at the cited file and line: the BI owner runs S4.7's PROD
+      USI-role rows and the S5.24b PROD Drift rows, and the PROD Preview
+      role repeats live only the execution-role `_role`/`_pull` rows
+      (R14-m1); rows 8 and 9 have the BI owner run every USI-role and
+      ECS-role simulator row, and the TEST Preview-role rule starts at
+      row 10 (R14-m2); the V-25 fallback names the ECS runtime stack
+      amendment and S5.4's runtime-CMK key-policy statement, in a
+      conditional row-43 slot (R14-n1); the history and status text is
+      current (R14-n2). The ordered list is still 53 rows, rows 0-52,
+      with no forward dependency.
+- [ ] Every round-13 finding in `readiness.md` maps to text that resolves
+      it at the cited file and line (R13-m1 `iam:GetRole` and the
+      attachment row; R13-m2 row 8's PassRole assertion limited to the
+      deny halves; R13-n1…n7).
 - [ ] Every round-12 finding in `readiness.md` maps to text that
       resolves it at the cited file and line, and the cited source lines
       say what the plan claims (round-11, round-10, round-9 and round-8
@@ -540,7 +556,7 @@ from this list.
 - [ ] The artifact hashes above match the committed files
       (`sha256sum -c`).
 
-## Scope limits of revisions 4, 5, 6, 7, 8, 9, 10, 11 and 12
+## Scope limits of revisions 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 and 14
 
 - No aws or pulumi command ran against any account; no repository test, lint
   or preview ran; no secret value was read; nothing was pushed or commented.
@@ -583,3 +599,8 @@ from this list.
   read-only `Explore` subagent over `git show 7bf441c`, and ran one
   read-only fresh-context audit subagent over the uncommitted changes,
   plus its recheck, before the single commit.
+  Revisions 13 and 14 were wording-only passes: they read and edited
+  the bundle with `sed`, `grep`, `git` (read-only) and Python text edits,
+  ran `sha256sum`, and made one local `git commit` each. No audit subagent
+  ran, no AWS documentation lookup ran, and no `aws`, `pulumi` or `make`
+  command ran.

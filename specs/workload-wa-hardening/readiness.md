@@ -2,23 +2,28 @@
 artifact: implementation-readiness
 workflow: _bmad/bmm/workflows/3-solutioning/bmad-check-implementation-readiness (Validate mode)
 task: workload-wa-hardening
-source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa (workload source); bundle parent b1ed572 (revision 12)
+source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa (workload source); bundle parent b1ed572 (revision 12); revision 14 parent 4c40a27 (revision 13)
 date: 2026-10-01
-revision: 13
-author: the planning agent that wrote revision 13 (NOT an independent reviewer)
-independent_reviewer: none yet for revision 13
-status: PENDING independent review of revision 13
+revision: 14
+author: the planning agent that wrote revision 14 (NOT an independent reviewer)
+independent_reviewer: none yet for revision 14
+status: PENDING independent review of revision 14
 ---
 
 # Implementation readiness
 
 ## Verdict
 
-**PENDING. Not PASS.** The author of revision 13 wrote this file. It records
+**PENDING. Not PASS.** The author of revision 14 wrote this file. It records
 what changed and the repository source each fix was checked against. It does
 not grade itself.
 
 - Only an independent reviewer's PASS satisfies the planning gate.
+- Revision 14 answers independent readiness round 14 against `4c40a27`
+  (FAIL: 0 major; 2 minor, R14-m1 and R14-m2; 2 nits, R14-n1 and
+  R14-n2). No user decision. It is a wording-only pass: no row, story or
+  design choice changes. **No pre-commit audit was run for it**, because
+  the changes are wording; the next independent round verifies it.
 - Revision 13 answers independent readiness round 13 against `b1ed572`
   (FAIL: 0 major; 2 minor, R13-m1 and R13-m2; 7 nits, R13-n1…n7). No
   user decision. It is a wording-only pass: no row, story or design
@@ -56,7 +61,7 @@ not grade itself.
   the commit, and a recheck by the same auditor after its findings were
   folded in; both are recorded in "Pre-commit audit of revision 10"
   below. They are author-side checks, not the independent review.
-- Rounds 5 to 12 ran after round 5 was recorded as the last allowed
+- Rounds 5 to 14 ran after round 5 was recorded as the last allowed
   round. Whether another independent round runs is for the coordinator
   and the user to decide. Until an independent reviewer reports PASS, the
   stage stays BLOCKED.
@@ -77,7 +82,8 @@ not grade itself.
 | 10 | independent reviewer (relayed by the coordinator), against `8e097aa` | FAIL: R10-M1, R10-m1, R10-m2, R10-n1…n6; the coordinator relayed user decision D-15 with it | revision 10 |
 | 11 | independent reviewer (relayed by the coordinator), against `9b17199` | FAIL: R11-M1, R11-m1…m4, R11-n1…n4; the coordinator gave the design direction for R11-M1 (independent CloudFormation owners) | revision 11 |
 | 12 | independent reviewer (relayed by the coordinator), against `7bf441c` | FAIL: R12-M1, R12-M2, R12-m1…m4, R12-n1…n3 | revision 12 |
-| 13 | independent reviewer (relayed by the coordinator), against `b1ed572` | FAIL: 0 major, R13-m1, R13-m2, R13-n1…n7 | revision 13 (this file) |
+| 13 | independent reviewer (relayed by the coordinator), against `b1ed572` | FAIL: 0 major, R13-m1, R13-m2, R13-n1…n7 | revision 13 |
+| 14 | independent reviewer (relayed by the coordinator), against `4c40a27` | FAIL: 0 major, R14-m1, R14-m2, R14-n1, R14-n2 | revision 14 (this file) |
 
 ## User decisions (all explicit, dated 2026-09-30)
 
@@ -132,6 +138,24 @@ boundary path) is S5.1's since revision 12 (R12-M2).
   threshold and the rule that every PROD increase is justified (NFR-11,
   m17). The user may change them.
 
+## Round-14 finding → resolution map
+
+Line numbers refer to the revision-14 working tree. No repository source
+was read beyond this bundle: every fix is wording. Reads only (`sed`, `grep`).
+
+| Finding | Resolution | Location |
+| --- | --- | --- |
+| R14-m1 S4.7's live PROD simulator run asked the PROD Preview role for rows its grant does not cover | The BI owner runs S4.7's PROD USI-role rows and the S5.24b PROD Drift rows with a BI identity; the PROD Preview role (`prod_preview`) repeats live only the execution-role `_role`/`_pull` rows, the only rows S5.24a's grant covers. Aligned in AD-26 "Who runs which rows" and its live-repeats line, S4.7, the S5.24 cell, S4.15's `complete`-level sentence and S5.24a's "S4.7 repeats them live" clause. FR-27 now names the TEST Preview role (`…-test`) for S5.17's grant and states that PROD has only S5.24a's execution-role grant. | `architecture.md:2500-2520`, `2757-2761`; `epics-stories.md:2398-2401`, `3462-3475`, `3745`; `prd.md:208` |
+| R14-m2 rows 8 and 9's evidence depended on row 10 | The "TEST Preview role simulates" rule is qualified as applying from row 10 on; at rows 8 (S5.1) and 9 (S5.2) the BI owner runs every USI-role and ECS-role row with a BI identity (only the TEST `_pull` row is exempt, as before). Mirrored in the S5.1 and S5.2 acceptance cells and the test-level no-forward-dependency note. | `architecture.md:2500-2512`; `epics-stories.md:3732-3733`, `3875`, `3853` |
+| R14-n1 V-25 fallback named only the stack amendment | The fallback has two parts: the ECS runtime stack amendment and S5.4's runtime-CMK key-policy statement naming the execution role (no root `kms:*`). A conditional V-25 slot (after step 7, before step 18) is added to the row-43 serialization lists, like row 45's, and the S4.6 step-7 STOP names both parts. | `architecture.md:569-579`, `2635-2637`, `2770`, `2934`; `epics-stories.md:2759-2761`, `3708-3712`, `3937-3939` |
+| R14-n2 stale history and status text | "Rounds 5 to 14"; round-13 and round-14 checklist items; the scope-limits heading now covers revisions 13 and 14 (with their scope paragraph); the AD-26 heading lists revisions 13 and 14; the round-13 map cells corrected (`run-summary.md:391`, `epics-stories.md:2675-2688`, both in revision-13 tree terms); run-summary identity, gates, status and ledger rows updated for revision 14; front matter of prd, architecture and epics-stories set to revision 14. | `readiness.md:64`; `run-summary.md:363-376`, `559`; `architecture.md:1631` |
+
+**Ordered list (re-verified in revision 14).** Still 53 rows (0-52); no row
+is added, removed or moved, and no story depends on a higher-numbered row
+(R14-m2 removes the evidence dependency of rows 8 and 9 on row 10; the
+conditional V-25 slot sits inside row 43). This is a wording-only pass with
+no pre-commit audit; the next independent round verifies it.
+
 ## Round-13 finding → resolution map
 
 Line numbers refer to the revision-13 working tree. Sources: BI `origin/main`
@@ -140,10 +164,10 @@ through `wt-boot-urllib3` (`862b4bf`); #284 `wt-boot-pr280` (`e85534c`);
 
 | Finding | Resolution | Location |
 | --- | --- | --- |
-| R13-m1 `iam:GetRole` does not return managed attachments | S4.6 step 3 keeps `iam:GetRole` for path `/` and the boundary ARN only; the "`-Guard` is the only managed attachment" row comes from `iam:ListAttachedRolePolicies` run by the BI owner, or the attached S5.1/S5.4 verifier output, like the BI-role rows. The Preview role is not widened. | `epics-stories.md:2676-2691`; `architecture.md:2482-2485`, `2488-2491` |
+| R13-m1 `iam:GetRole` does not return managed attachments | S4.6 step 3 keeps `iam:GetRole` for path `/` and the boundary ARN only; the "`-Guard` is the only managed attachment" row comes from `iam:ListAttachedRolePolicies` run by the BI owner, or the attached S5.1/S5.4 verifier output, like the BI-role rows. The Preview role is not widened. | `epics-stories.md:2675-2688`; `architecture.md:2482-2485`, `2488-2491` |
 | R13-m2 row-8 stack PRs asserted the PassRole allow that row 9 creates | The PassRole-allowed half is scoped to seed operations from row 9 on, after XP-18; at row 8 only the deny halves are asserted (PassRole denied elsewhere, CreateRole denied). Added to the XP-18 affected-rows text and S5.1's acceptance. The forward-dependency claim was re-verified. | `architecture.md:2463-2467`, `1829-1831`; `epics-stories.md:3721`, `3841-3843` |
 | R13-n1 front matter | prd, architecture and epics-stories: revision 13, date 2026-10-01 | `prd.md:6-7`; `architecture.md:6-7`; `epics-stories.md:6-7` |
-| R13-n2 "XP-8 items 1-3" | now 1-4 | `run-summary.md:390` |
+| R13-n2 "XP-8 items 1-3" | now 1-4 | `run-summary.md:391` |
 | R13-n3 stack-operation rows list | row 50 (S5.24a's PROD ECS stack amendment) added | `readiness.md:1181` (conditional-decision table) |
 | R13-n4 XP-17 permissions | `iam:AttachRolePolicy` added, and `iam:DetachRolePolicy` for a `Modify` row that changes the attachment | `prd.md:753-756` |
 | R13-n5 V-21 and V-25 | V-21's STOP cell follows S4.6 step 4 (read back inline policies; hold to XP-18; other explicit deny STOP plus BI review; implicit deny grant fix then resume). V-25's fallback is an ECS runtime stack amendment with `-Boundary`/`-Guard` `Modify` rows by the XP-17 installer in a row-43 slot. | `architecture.md:2912`, `2916`, `569-575` |

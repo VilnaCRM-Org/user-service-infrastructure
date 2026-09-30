@@ -11,7 +11,7 @@ This file is the execution ledger. It is not a planning input.
 | Worktree | wt-usi-hardening |
 | Branch | feat/workload-wa-hardening |
 | Source baseline | 66776772979956de9c5abdbee7c45641a1b533fa (PR #56 head) |
-| Bundle revision | 8 (answers readiness round 8 and the residuals A1…A4 of the recheck of the revision-7 pre-commit audit; parent commit 72873f9, which is revision 7) |
+| Bundle revision | 9 (answers readiness round 9: R9-M1, R9-m1, R9-m2, R9-n1…n4; parent commit c61d8d6, which is revision 8) |
 | Specs directory | `specs/workload-wa-hardening/` (slug chosen by the caller) |
 | Target | pulumi (Python Pulumi), stacks test and prod |
 | Environment | none selected; planning is offline |
@@ -44,6 +44,29 @@ This file is the execution ledger. It is not a planning input.
 
 - `specs/poc/README.md` sha256: 8ad9ccf4ae28083c36e30909a21d8ebec4fc0d40a9b716c9bb8b78b6276ed5b7
 - `decisions.md` (the user decisions, a planning input; hash below)
+- Repository source read for revision 9 at `c61d8d6` (the workload source
+  is unchanged from the baseline), without executing it:
+  `scripts/poc_workload_images.py` (whole file),
+  `scripts/poc_workload_capabilities.py` (lines 1-60, 89-120, 193-340),
+  `scripts/poc_workload_runner.py` (lines 45-62, 165-185),
+  `scripts/poc_workload_admission.py` (lines 455-480),
+  `scripts/poc_backend_observer.py` (lines 125-130, 160-185, 419-490),
+  `scripts/poc_mail_prerequisite.py` (AWS call set),
+  `docs/poc-workload-admission.md` (lines 36-125),
+  `specs/poc-workload-runner.md` (lines 108-114), `specs/poc/README.md`
+  (lines 105-128), `.github/workflows/scheduled-drift.yml` (lines 30-40,
+  94-102), the tests `tests/unit/test_poc_workload_image_config.py` and
+  `tests/unit/test_poc_workload_images.py` (the authorization and
+  registry-hop cases, by grep); bootstrap-infrastructure (read-only
+  local clone; fetched `origin/main` `bea5252` read with `git show`):
+  `pulumi/infra/governance.py` (lines 140-300, 300-470),
+  `pulumi/infra/ci_bootstrap.py` (lines 45-60, 120-175, 600-670),
+  `pulumi/infra/test-poc-identity.json`; and the unmerged worktree
+  `wt-boot-219` (`54e9e2f`): `pulumi/infra/governance.py` (lines
+  276-515), `pulumi/infra/test-poc-identity.json`, and greps of
+  `pulumi/` for SSM, ACM, IAM, ECR and `RepositoryPolicy` grants.
+  AWS documentation (aws-knowledge MCP, 2026-09-30): the ECR API
+  reference for `GetDownloadUrlForLayer`
 - Repository source read for revision 8 at `72873f9` (the workload source is
   unchanged from the baseline; `git diff --stat 66776772 72873f9 --
   scripts schemas tests .github docs specs/poc` is empty), without
@@ -177,19 +200,19 @@ This file is the execution ledger. It is not a planning input.
 - User decisions given in chat on 2026-09-30 and relayed by the coordinator: D-1…D-7 (`decisions.md`). The D-4 and D-5 clarifications came in a second message the same day, and D-8…D-13 (derived details) were confirmed in a third. D-14 (recovery targets RPO ≤ 1 hour, RTO ≤ 24 hours) is a user decision of the same date, recorded in `decisions.md` by commit `68584e1`.
 - Read-only cross-repository reconnaissance: bootstrap-infrastructure @debd88b, api-gateway-infrastructure, and user-service @main via `gh api`
 
-## Artifacts (sha256, revision 8)
+## Artifacts (sha256, revision 9)
 
-`run-summary.md` is not hashed here, because it contains the hashes. `decisions.md` is a planning input and is hashed. Commit `68584e1` added its D-14 row after revision 5; revision 6 changed only that row's label (a user decision, not a planning default); revisions 7 and 8 do not change it. `research.md` and `brief.md` are unchanged in revision 8, and `research.md` since revision 4.
+`run-summary.md` is not hashed here, because it contains the hashes. `decisions.md` is a planning input and is hashed. Commit `68584e1` added its D-14 row after revision 5; revision 6 changed only that row's label (a user decision, not a planning default); revisions 7, 8 and 9 do not change it. `research.md` and `brief.md` are unchanged in revision 9, and `research.md` since revision 4.
 Check with `sha256sum -c` over the block below, from `specs/workload-wa-hardening/`.
 
 ```
 beca16ba9ab95d76cd28ed47ac8e806549b94805ddca9a2d138a790ee0f0ca59  research.md
 d4ab4288bd8b99daa5fc9181db040dcd49a22593670c1820412480559c68fd3a  brief.md
-7f7974eea8d201c3550f66a7fa693cfc1d078f30d0132fb82c75cab16888211c  prd.md
-1258072f31c7e3a19fbc4546c31452f0ba6394e6a5e38f0e83623168f560dcca  architecture.md
-7cb8457c16c5a22a26996adcfe79af546bd16ce5b367138b10e080f8d29ad96f  epics-stories.md
+287d3c975932b087b2bc4071de2058ba3c87d0eea62445ef004d98905b567947  prd.md
+d06b26bb74820acfcfec975d6abbbcd0a6db92da675612d750403e5ea125d626  architecture.md
+7e6566e54a491cd7d79a3abb580f07079e0d240f17d4941c0636b21eca7374ce  epics-stories.md
 4f2911c3b75d890ad0d37b161cf5568909f049d51bf289509cc14f66d5f2a76e  decisions.md
-4a603f213f83ce5ee1b907ec2d9c11d0223cbaa4665cad4607ae77b58a1b8951  readiness.md
+1d8d6581f2afc74a4cef1b25d61a42d81c1bb1a21ccc6eadc29f42c58989e23c  readiness.md
 ```
 
 ## Gates
@@ -206,24 +229,42 @@ d4ab4288bd8b99daa5fc9181db040dcd49a22593670c1820412480559c68fd3a  brief.md
 | 6 | FAIL (R6-M1, R6-M2; R6-m1 and R6-m3…m14; no R6-m2 was relayed); fixed in revision 6 |
 | 7 | FAIL (R7-M1, R7-M2; R7-m1…m9; R7-n1…n3), plus a fresh-context audit of revision 6 (F1…F8; F2, F6 and F8 not covered by round 7); fixed in revision 7, after a pre-commit fresh-context audit of the revision-7 changes (recorded in `readiness.md`) |
 | 8 | FAIL (R8-M1; R8-m1…m7; R8-n1…n4), plus the residuals A1…A4 of the recheck of the revision-7 pre-commit audit (A2 merged into R8-m1); fixed in revision 8, after a pre-commit fresh-context audit of the revision-8 changes (recorded in `readiness.md`) |
+| 9 | FAIL (1 major, R9-M1: the Preview and Apply roles are blocked by explicit secret-read denies on every workload `plan` and `up-plan`, and no story owned the TEST fix fully or the PROD one; 2 minor, R9-m1 and R9-m2; 4 nits, R9-n1…n4); fixed in revision 9, after a pre-commit fresh-context audit of the revision-9 changes and its recheck (both recorded in `readiness.md`) |
 
-Stage status: **BLOCKED** until an independent review of revision 8 reports
-PASS. Round 5 was recorded as the last allowed round, and rounds 6, 7 and 8
-ran after it; whether another independent round runs is for the coordinator and
+Stage status: **BLOCKED** until an independent review of revision 9 reports
+PASS. Round 5 was recorded as the last allowed round, and rounds 6, 7, 8
+and 9 ran after it; whether another independent round runs is for the coordinator and
 the user to decide. `readiness.md` is written by the author and says PENDING;
 it is not a PASS.
 
-**Attempt ledger:** canonical `attempts.json` was NOT initialized. The atomic reservation needs verified host write isolation for the copied ledger_reference package, and a same-user host cannot provide it. The ledger is therefore BLOCKED. Attempt count by caller record: 1 procedure run, with 8 recorded review rounds (round 8: FAIL, answered by revision 8). This count is not canonical.
+**Attempt ledger:** canonical `attempts.json` was NOT initialized. The atomic reservation needs verified host write isolation for the copied ledger_reference package, and a same-user host cannot provide it. The ledger is therefore BLOCKED. Attempt count by caller record: 1 procedure run, with 9 recorded review rounds (round 9: FAIL, answered by revision 9). This count is not canonical.
 
 ## Acceptance checklist for the next independent reviewer
 
 A reviewer ticks each item from the bundle text and the cited source, not
 from this list.
 
-- [ ] Every round-8 finding and recheck residual A1…A4 in `readiness.md`
-      maps to text that resolves it at the cited file and line, and the
-      cited source lines say what the plan claims (round-7 rows and audit
-      F2, F6 and F8 stay resolved).
+- [ ] Every round-9 finding in `readiness.md` maps to text that resolves
+      it at the cited file and line, and the cited source lines say what
+      the plan claims (round-8 rows, recheck residuals A1…A4, round-7 rows
+      and audit F2, F6 and F8 stay resolved).
+- [ ] Architecture AD-26: the non-weakening evaluation is recorded (the ECR
+      token removed by S4.14's `GetDownloadUrlForLayer` config read,
+      adopted with a fail-closed live open point; the PR-path certificate
+      parameter kept, with the contract-ARN alternative left to the user;
+      the Drift SSM read dropped by S4.17). The only narrowing is
+      `ssm:GetParameter` on the exact certificate parameter for the
+      Preview and Apply roles: TEST through XP-11 (gate 1) and PROD
+      through S5.24a (row 50, before gate 2a; the Drift grants are the
+      separately approved S5.24b). Every new allow is also added to the
+      `GovernanceBoundary-<project>-<env>` permissions boundary. The
+      narrowing is under the BI review approved by `@Kravalg`, fails
+      closed, and has one simulator matrix per owner (R9-M1).
+- [ ] S5.24 and S4.17 name `s3:GetBucketVersioning`; the TEST grants need
+      the capability `enabled`, and `withdrawn` is a STOP; XP-14 owns the
+      PROD Preview and Apply versioning read (R9-m1).
+- [ ] The Drift role's deny is unchanged, and AD-26 has its
+      reachable-privilege table and the repository-policy check (R9-m2).
 - [ ] S4.17 publishes one record per successful run: worker copy to
       `/public/workload-drift-result/record.json`, host copy-out, one
       pinned upload directly after `execute` with
@@ -231,7 +272,9 @@ from this list.
       `artifact_sha256` (R8-M1).
 - [ ] S4.17 is data-driven per stack (`registry-phase` record on
       `phase: registry`), and gate 2b needs a TEST `checked` record and a
-      PROD `before-acceptance` or `checked` record after the flip (R8-m1).
+      PROD `before-acceptance` record with `null` success-receipt fields
+      after the flip, plus the S5.24a/S5.24b PROD simulator evidence
+      (R8-m1, R9-n1).
 - [ ] S4.14's first case is the grep inventory, and every hit has an owner
       or an exclusion reason (R8-m2).
 - [ ] The S4.17 projection is built only from the receipt, fresh reads are
@@ -248,7 +291,8 @@ from this list.
 - [ ] `workload_route` comes from the authenticated receipt lineage; a
       pre-acceptance `rollback-zero` or `policy-update` runs no drift job.
 - [ ] The PROD contract schema is S4.14's, S4.7 owns the PROD workload
-      contract PRs, and S5.24 grants the Drift-role reads before S4.17.
+      contract PRs, and S5.24 grants the Drift-role reads before S4.17 and
+      the PROD Preview and Apply observation reads before gate 2a.
 - [ ] D-1…D-7, D-14, and D-8…D-13 are dated 2026-09-30 in `decisions.md`;
       RPO ≤ 1 hour and RTO ≤ 24 hours are labelled user decision D-14
       everywhere, and only the 20% TEST cost threshold and the PROD
@@ -307,16 +351,20 @@ from this list.
 - [ ] The artifact hashes above match the committed files
       (`sha256sum -c`).
 
-## Scope limits of revisions 4, 5, 6, 7 and 8
+## Scope limits of revisions 4, 5, 6, 7, 8 and 9
 
 - No aws or pulumi command ran against any account; no repository test, lint
   or preview ran; no secret value was read; nothing was pushed or commented.
 - The only local commands were file reads and greps of this repository and
   the read-only bootstrap-infrastructure clone, AWS documentation lookups
-  (aws-knowledge MCP, revision 4 only), Python text edits and table checks
+  (aws-knowledge MCP, revisions 4 and 9 only), Python text edits and table checks
   over the bundle, `sha256sum`, and a local `git commit` of the bundle.
   Revision 7 also ran one read-only fresh-context audit subagent
   (`claude-router:audit`) over the uncommitted changes. Revision 8 read
   the bootstrap-infrastructure clone and its fetched `origin/main` with
   `git show` and `grep` only (no fetch, no checkout), and ran one
   read-only fresh-context audit subagent over the uncommitted changes.
+  Revision 9 did the same over `origin/main` and the `wt-boot-219`
+  worktree, made one aws-knowledge MCP documentation lookup, and ran one
+  read-only fresh-context audit subagent over the uncommitted changes,
+  plus its recheck, before the single commit.

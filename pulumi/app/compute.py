@@ -29,10 +29,12 @@ __all__ = ["ComputePlane"]
 # rollback; only untagged leftovers (failed or superseded pushes) expire.
 UNTAGGED_IMAGE_EXPIRY_DAYS = 14
 # Apply fails when ECS never reaches steady state instead of reporting success
-# with flapping tasks. The web and worker services each wait up to this bound;
-# the TEST apply job timeout in self-deploy.yml must cover both waits back to
-# back plus first-create provisioning of the whole stack (see the arithmetic
-# there and tests/unit/test_apply_timeout_budget.py).
+# with flapping tasks. The web and worker services each wait up to this bound.
+# The whole first create must finish within 55 minutes (workload `pulumi up`
+# process timeout 3300 s <= 3600 s STS session <= test_apply job timeout in
+# self-deploy.yml); if a measured first create is longer, a bootstrap
+# MaxSessionDuration increase plus role-duration-seconds is required first
+# (see tests/unit/test_apply_timeout_budget.py and specs/poc/README.md).
 SERVICE_STEADY_STATE_MINUTES = 10
 SERVICE_STEADY_STATE_TIMEOUT = f"{SERVICE_STEADY_STATE_MINUTES}m"
 # Docker's default Linux capability set, which Fargate grants unless dropped.

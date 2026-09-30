@@ -12,7 +12,14 @@ from dataclasses import replace
 from pathlib import Path
 
 import yaml
-from service_execution_process import private_read, protected_write, require, run
+from service_execution_process import (
+    APPLY_TIMEOUT_SECONDS,
+    DEFAULT_TIMEOUT_SECONDS,
+    private_read,
+    protected_write,
+    require,
+    run,
+)
 
 PYTHON = "/opt/service-runtime/bin/python"
 PULUMI = "/opt/pulumi/pulumi"
@@ -203,6 +210,16 @@ class ServiceTransport:
             saved.write_bytes(private_read(Path(argv[argv.index("--save-plan") + 1])))
             saved.chmod(0o600)
 
+    @staticmethod
+    def _timeout(command, child):
+        """Only the saved-plan replay (`pulumi up`) may outlast the default bound.
+
+        A first workload create stays below the 3600 s STS session.
+        """
+        if child and command[3:4] == ["up"]:
+            return APPLY_TIMEOUT_SECONDS
+        return DEFAULT_TIMEOUT_SECONDS
+
     def __call__(self, command, *, env, check=True, capture_output=False, stdout=None):
         """Adapt the existing CommandContext protocol without ambient execution."""
         del capture_output
@@ -232,7 +249,14 @@ class ServiceTransport:
                 if key in env
             },
         }
-        raw = run(argv, env=environment, cwd=self.work, child=child, check=check)
+        raw = run(
+            argv,
+            env=environment,
+            cwd=self.work,
+            child=child,
+            timeout=self._timeout(command, child),
+            check=check,
+        )
         self._collect_saved_plan(saved, argv, raw, check)
         if check:
             result = subprocess.CompletedProcess(command, 0, raw.decode(), "")

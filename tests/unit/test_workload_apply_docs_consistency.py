@@ -35,6 +35,12 @@ DISABLED_APPLY_CLAIMS = tuple(
         r"no cli or config dispatches to this class",
         r"before wiring it into the trusted controller",
         r"before\s+removing that stop",
+        r"unconnected workload (helper|runner)",
+        r"preview-only worker",
+        r"(observer/publisher )?helpers? remains? unconnected",
+        r"no workload phase is admitted",
+        r"next gate is a trusted root dispatcher",
+        r"before any future workload execution",
     )
 )
 HISTORICAL_CLAIMS = (
@@ -60,6 +66,14 @@ HISTORICAL_CLAIMS = (
     "removing that stop.",
     "No CLI or config dispatches to this class; verified releases",
     "separate prerequisites before wiring it into the trusted controller.",
+    # Stale wording found by the attempt-3 gate.
+    "The unconnected workload helper reuses the original registry completion verifier",
+    "The preview-only worker invokes the bounded role/input prerequisite reader.",
+    "The registry completion observer/publisher helpers remain unconnected.",
+    "The TEST-only source prerequisite still blocks PROD promotion, and no workload "
+    "phase is admitted by this change.",
+    "The next gate is a trusted root dispatcher that authenticates the baseline and",
+    "must be checked independently before any future workload execution.",
 )
 
 

@@ -9,7 +9,7 @@ apply. The TEST
 registry completion jobs are connected in reviewed source but await installation
 and live acceptance. PROD remains absent; scheduled drift retains the installed-main path.
 
-The unconnected workload helper reuses the original registry completion verifier, including
+The workload helper, called by the protected workload runner, reuses the original registry completion verifier, including
 its App issuer, successful original workflow/jobs, historical source and immutable
 observation artifacts. It compares that receipt with a fresh native checkpoint
 and the complete eleven-resource registry/prerequisite graph and ECR controls. An absent,
@@ -44,7 +44,7 @@ declared byte size and SHA-256, then its native `os` and `architecture` are comp
 with the reviewed `linux/amd64` or `linux/arm64` release platform. Only platform,
 config digest and size join the image projection. Image environment, labels,
 history and other configuration never enter the projection or diagnostic errors.
-The preview-only worker invokes the bounded role/input prerequisite reader.
+The worker invokes the bounded role/input prerequisite reader for workload `plan` and `up-plan`.
 Full installed runtime capability admission remains required before applying
 workload settings.
 The observer supports at most 100 layers and deliberately accepts only compressed

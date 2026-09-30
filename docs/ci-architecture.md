@@ -157,10 +157,13 @@ The trusted parent retains the existing requester/review, provider/checkpoint,
 saved-plan hash/age, destructive-change and TEST registry graph checks. Admission
 is refreshed immediately before each preview or apply program and after execution.
 Only the existing plan, preview and manifest artifacts leave the private worker.
-The registry completion observer/publisher helpers remain unconnected.
+The protected workload runner is connected for TEST `plan` and `up-plan` when
+the committed contract phase is `workload`; only the registry completion
+observer/publisher helpers are not yet installed.
 
-The TEST-only source prerequisite still blocks PROD promotion, and no workload
-phase is admitted by this change. Network-disabled Docker tests prove the local
+The TEST-only source prerequisite still blocks PROD promotion. The committed
+contract phase stays `registry` (see the hard stop in `specs/poc/README.md`), so
+no workload apply runs until its preconditions are met and reviewed. Network-disabled Docker tests prove the local
 UID/filesystem/process boundary with synthetic state; they do not establish
 hosted OIDC, cloud deployment or workload acceptance. Installation and current-head
 TEST registry evidence remain required before this route is accepted; issue 185

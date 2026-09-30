@@ -10,35 +10,71 @@ state by hand, and never unprotect a resource outside a reviewed change.
 The committed `specs/poc/poc-test.json` phase is `registry`. This runbook is one
 of the preconditions for switching it to `workload` (see `specs/poc/README.md`).
 
+## 0. What is and is not recoverable with shipped tooling
+
+Status: N-06 is partial. Only failures that leave a clean, unlocked, complete
+checkpoint are recoverable with the shipped workflow. These cases are NOT
+recoverable with shipped tooling today:
+
+- Runner killed (SIGKILL, job cancel, runner loss) or STS credentials expired
+  mid-update. Pulumi leaves the state lock and pending operations behind. The
+  trusted backend observer rejects any lock and any pending operation
+  (`scripts/poc_backend_observer.py`), and no shipped command exports state,
+  releases the lock or clears pending operations. Waiting does not release a
+  lock owned by a dead process. Both `plan` and `up-plan` therefore stay blocked.
+- Checkpoint writes that failed. Resources created in AWS but never recorded in
+  state are unknown to Pulumi. A re-run does not continue from state, because the
+  state does not contain them.
+- Unrecorded resources with fixed names: the DocumentDB cluster, its parameter
+  group, log groups and runtime secrets. A re-create returns `AlreadyExists`.
+  The reviewed import path covers only Secrets Manager secrets, not the other
+  resource types.
+
+Required future procedure (not shipped, hard-stop precondition in
+`specs/poc/README.md`): a reviewed CI recovery command, owned by governance
+(CODEOWNERS), that runs through the protected environment and performs stack
+export, lock release, pending-operation clear and imports of unrecorded
+resources, and that emits evidence (before and after state hashes, the lock and
+pending-operation listings, the import list, run IDs, approver). Until that
+command exists and is accepted, treat any of the cases above as a stop: do not
+retry, do not clean up by hand, and escalate to governance.
+
 ## 1. Triage a failed or partial first apply
 
 1. Read the failed `test_apply` job summary for the failing resource and its
    AWS error. A job timeout is not proof that AWS stopped: the provider may still
    be creating resources (DocumentDB instances, Redis replica, NAT gateways
    commonly need 15 to 25 minutes).
-2. Wait for the Pulumi state lock to be released. The workflow's concurrency group
-   serializes applies; do not force-cancel a running update and do not run
-   `pulumi cancel` or `pulumi stack export/import`.
+2. Classify the failure. If the job ended cleanly (Pulumi reported the failed
+   resource and exited), state has a complete checkpoint and no lock: continue
+   with section 2 or 3. If the process was killed, cancelled, timed out or lost
+   credentials, or a checkpoint write failed, you are in a section 0 case: stop
+   and escalate; do not wait for a lock, and do not run `pulumi cancel` or
+   `pulumi stack export/import`.
 3. Decide between resume and abandon.
 
-## 2. Resume (default)
+## 2. Resume (clean failure only)
 
-Resume when the failure was transient (timeout, throttling, capacity, an ECS
-steady-state wait that the fixed image now satisfies).
+Resume only when Pulumi exited cleanly after a transient failure (throttling,
+capacity, an ECS steady-state wait that the fixed image now satisfies) and the
+next `/pulumi test plan` is admitted by the backend observer.
 
-1. Confirm no update is running and the lock is released.
+1. Confirm the next plan is admitted; a lock or pending operation rejecting it is
+   a section 0 case.
 2. Push the fix (if any) to the same PR, or leave the head unchanged for a pure
    retry. A new head needs a fresh `/pulumi test plan`.
 3. Comment `/pulumi test plan` on the current head, review the saved plan (it
    must only create or update the resources that did not finish), then request
    `/pulumi test up` with a maintainer other than the sole environment reviewer.
-4. Pulumi records resources created before the failure, so a re-run continues
-   from that state. Resources still pending in AWS are reconciled by the refresh
-   in the plan; if the plan proposes replacing a protected resource, stop and
-   treat that as a review finding.
+4. Resources Pulumi recorded before the failure are in state, so the plan
+   continues from it. Resources still pending in AWS are reconciled by the
+   refresh in the plan; if the plan proposes replacing a protected resource, stop
+   and treat that as a review finding.
 5. After a green apply, wait for the clean drift job before any acceptance claim.
 
 ## 3. Abandon
+
+Applies only to a clean, unlocked state (not a section 0 case).
 
 Abandon when the design is wrong, the image cannot become healthy, or the stack
 cannot be resumed safely. Abandon is a reviewed change, never a direct destroy.
@@ -57,6 +93,9 @@ cannot be resumed safely. Abandon is a reviewed change, never a direct destroy.
    that no orphan resources remain.
 
 ## 4. Final-snapshot name collisions
+
+The "reviewed operator task" below is a governance-owned manual decision recorded
+in the PR; no shipped command performs it.
 
 The DocumentDB cluster keeps a named final snapshot, `<stack-tag>-docdb-final`
 (for TEST: `user-service-test-docdb-final`). AWS refuses to create a second

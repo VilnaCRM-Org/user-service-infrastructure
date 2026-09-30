@@ -2,7 +2,7 @@
 
 This module never starts a Pulumi program or grants phase permission. A registry
 receipt authenticates historical completion; current checkpoint and publisher
-evidence must be checked independently before any future workload execution.
+evidence must be checked independently before each workload plan or apply.
 """
 
 from __future__ import annotations

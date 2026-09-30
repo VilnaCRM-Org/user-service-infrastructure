@@ -77,9 +77,10 @@ materializer's positive and rejection paths.
 
 ## Remaining gate
 
-The next gate is a trusted root dispatcher that authenticates the baseline and
-complete native capabilities, calls this helper, selects its wrapper without
-rewriting the project runtime, and binds all returned digests to the same-run
-source/checkpoint and exact saved plan. Protected replay, workload input/graph
-validation, native result/drift observation and workload acceptance remain
-required. This module does not weaken or remove any current stop.
+The protected workload runner (`scripts/poc_workload_runner.py`) already calls
+this helper, selects its wrapper without rewriting the project runtime, and binds
+the returned digests to the same-run source/checkpoint and exact saved plan for
+TEST `plan` and `up-plan`. Workload drift stays rejected. What remains is live
+TEST acceptance of the first workload apply, native result/drift observation and
+the hard-stop preconditions in `specs/poc/README.md`. This module does not weaken
+or remove any current stop.

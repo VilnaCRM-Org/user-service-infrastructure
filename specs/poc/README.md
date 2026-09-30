@@ -127,12 +127,17 @@ The remaining producer/consumer work and acceptance evidence are:
    saved-plan/replay. Workload drift remains rejected until an accepted-workload
    receipt exists. No approval flag or phase-file edit replaces these checks.
 
-## Workload phase hard stop (fail closed)
+## Workload phase hard stop (merge gate, fail closed at CI)
 
 `specs/poc/poc-test.json` `phase` stays `"registry"`. Switching it to
 `"workload"` is allowed only in the stacked hardening PR, and only when every
 precondition below is met and reviewed. Until then a regression test fails any
 change to the phase.
+
+This stop gates merge only: the phase is read from the PR-head contract and
+admission checks review, not CI, so it is not a runtime block. A runtime guard
+that refuses workload apply independent of the PR-head phase is tracked as a
+follow-up (issue #57).
 
 - Secret rotation (F-01) and `AWSCURRENT` references instead of version pinning
   (F-02); see `secret-lifecycle.md`.
@@ -141,7 +146,20 @@ change to the phase.
 - ALB-to-task TLS decision (F-09) and customer-managed key decision (F-14).
 - Cost and sustainability review (F-15).
 - Worker healthcheck image fix (user-service PR #501) and a non-root image.
-- Bootstrap governance grants for the new resources (N-11), plus N-04 (apply
-  timeout budget, done here) and N-06 (recovery runbook,
-  `docs/poc-workload-recovery.md`, done here) accepted by the reviewers.
+- Bootstrap governance grants for the new resources (N-11).
+- N-04 apply timeout budget (partial, done here): the workload `pulumi up`
+  process timeout is 3300 s (55 min), below the 3600 s STS session (no
+  `role-duration-seconds` is set, credentials are not refreshed) and below the
+  70 min `test_apply` job timeout; other commands keep the 1200 s default. A
+  first create must finish within 55 min. If a measured first create is longer,
+  a bootstrap `MaxSessionDuration` increase plus `role-duration-seconds` is
+  required first. Hard stop: no `workload` phase until the first create is
+  measured within 55 min or that increase is landed.
+- N-06 recovery (partial): `docs/poc-workload-recovery.md` documents only the
+  clean-failure paths. Runner kill or credential expiry (state lock and pending
+  operations), failed checkpoint writes and unrecorded fixed-name resources
+  (DocumentDB cluster, parameter group, log groups, secrets) are not recoverable
+  with shipped tooling. Hard stop: a reviewed CI recovery command owned by
+  governance (CODEOWNERS) performing stack export, lock release, pending-operation
+  clear and imports, with evidence, must ship before the `workload` phase.
 - Live TEST acceptance of the first workload apply, clean drift and rollback.

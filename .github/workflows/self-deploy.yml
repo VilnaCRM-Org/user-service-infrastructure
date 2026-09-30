@@ -326,12 +326,20 @@ jobs:
       - poc_prepare_source
       - test_preview
       - test_destructive_diff
-    # First workload create budget (minutes), worst case with every wait serial:
-    # network 2 NAT gateways + ALB 15, DocumentDB cluster + 2 t4g.medium
-    # instances 25, Redis multi-AZ with replica 20, plus two ECS steady-state
-    # waits of 10 (web, worker) = 20, plus setup, plan replay and checks 10 = 90.
-    # tests/unit/test_apply_timeout_budget.py ties this value to the code bounds.
-    timeout-minutes: 90
+    # Ordering that must hold: workload `pulumi up` process timeout 3300 s (55
+    # min, APPLY_TIMEOUT_SECONDS) <= STS session 3600 s (the OIDC step below sets
+    # no role-duration-seconds, so the role default applies and credentials are
+    # not refreshed) <= this job timeout. Other Pulumi/AWS commands keep the
+    # 1200 s default. A first create must therefore finish within 55 min; if
+    # measured longer, a bootstrap MaxSessionDuration increase plus
+    # role-duration-seconds is required first (hard-stop precondition in
+    # specs/poc/README.md). Job budget (minutes): 55 apply + 10 setup, plan
+    # replay and checks margin + 5 slack = 70.
+    # tests/unit/test_apply_timeout_budget.py ties these values together.
+    # Concurrency: this job shares the pulumi-state group with
+    # scheduled-drift.yml; cancel-in-progress is false, but GitHub keeps only one
+    # pending run per group, so a queued job can be cancelled by a newer one.
+    timeout-minutes: 70
     permissions:
       contents: read
       actions: read

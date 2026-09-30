@@ -60,7 +60,7 @@ This file is the execution ledger. It is not a planning input.
   (CloudWatch Logs KMS)
 - AWS documentation, via aws-knowledge MCP (see research §3); revision 3 re-verified A-16 (REST API VPC link V2 → ALB), A-20 (SES API VPC endpoints), A-23 (ElastiCache IAM limits), A-24 (`StsGetCallerIdentityCalls`) and A-25 (managed DocumentDB rotation) on 2026-09-30
 - Local provider source: `pulumi_aws` 7.23.0 `apigateway.Integration.integration_target` (read-only grep of the installed SDK)
-- User decisions given in chat on 2026-09-30 and relayed by the coordinator: D-1…D-7 (`decisions.md`). The D-4 and D-5 clarifications came in a second message the same day.
+- User decisions given in chat on 2026-09-30 and relayed by the coordinator: D-1…D-7 (`decisions.md`). The D-4 and D-5 clarifications came in a second message the same day, and D-8…D-13 (derived details) were confirmed in a third.
 - Read-only cross-repository reconnaissance: bootstrap-infrastructure @debd88b, api-gateway-infrastructure, and user-service @main via `gh api`
 
 ## Artifacts (sha256, revision 4)
@@ -73,7 +73,7 @@ beca16ba9ab95d76cd28ed47ac8e806549b94805ddca9a2d138a790ee0f0ca59  research.md
 608b4f01dfc1d517dd1882fd4cc8a298a7976e18a563f2befd31bf7688cb9e88  prd.md
 019a38fcbbad557396a7f116600b04312102ad5dc7878af33c6f1184af5825c0  architecture.md
 f9044df23a124e5bab8dfeef7653d434f011ea82a3f8cff9916b10cdc183930e  epics-stories.md
-1020a38e45282eae7486191deecad51c7758353ee59408ffc6f242226e766bd0  decisions.md
+beaf6b72a82aa0a61936de4edcf9d9b4eb1c3876962a683d62c827de67051048  decisions.md
 491d1ac1f9251031772ff8d8f9edbffc2facdc0c9cda1fcd43dc3c804955eebb  readiness.md
 ```
 

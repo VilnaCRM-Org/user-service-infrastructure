@@ -42,8 +42,10 @@ bootstrap-infrastructure (governance, CODEOWNERS @Kravalg)
   │        recovery role + grants (test-recovery S5.7, prod-recovery S5.19);
   │        apply-role workload capability; preview + drift read capability
   ├─ GitHub environments with Kravalg as sole reviewer: test, prod,
-  │        test-recovery, test-exercise, governance-evidence (S5.21),
-  │        prod-recovery (S5.19); ruleset check abandon-manifest-approval (S5.22)
+  │        test-recovery, test-exercise (S5.21), prod-recovery (S5.19);
+  │        governance-evidence stays reviewer-less and main-only (BI
+  │        _github_evidence_environment.py); ruleset check
+  │        abandon-manifest-approval (S5.22)
   ├─ KMS (D-4, decided 2026-09-30): runtime CMK (secrets, every workload log
   │        group, flow-log bucket, SNS topic), JWT signing CMK (RSA), 2FA CMK;
   │        key policies name existing roles (roles are created first; AD-15a)
@@ -233,7 +235,8 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     - `Deny secretsmanager:PutSecretValue` and
       `secretsmanager:UpdateSecretVersionStage` unless the app-rotation role.
   - `documentdb_primary`: a `SecretPolicy` created in step 2 and never
-    deleted. The contract field `documentdb_secret_policy` selects its
+    deleted by an apply mode (only the TEST abandon removes it, together with
+    its cluster). The contract field `documentdb_secret_policy` selects its
     document:
     - `deny-other-readers` (initial): `Deny GetSecretValue` unless
       `aws:PrincipalArn` is the bootstrap-job role;
@@ -257,8 +260,9 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     non-role and `AWSService` callers; denied calls). Rules also cover
     policy-change, value-change and rotation-failure events. Each event type
     has its own closed allow-list (PRD §3.2a): `PutResourcePolicy` by the apply
-    role (step 2, `policy-update`); `DeleteSecret`, `RestoreSecret` and
-    `DeleteResourcePolicy` by the TEST recovery role (abandon); `DeleteSecret`
+    role (step 2, `policy-update`); `DeleteSecret` and `DeleteResourcePolicy`
+    by the TEST recovery role (abandon) and `RestoreSecret` by it (rebuild);
+    `DeleteSecret`
     of a managed secret by `rds.amazonaws.com` (cluster deletion). Every other
     caller alarms. The managed-secret match uses the `rds!cluster-` prefix,
     so the rules need no XP-8 value.
@@ -300,19 +304,32 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     below it (A-26). `start_at` is a contract value set in the step-2 PR, no
     earlier than the expected apply end, and the health observation waits
     for it. The action is `create`, so step 2 stays create-only.
-  - **Stop (`rollback-zero`, first deployment):** a plan that creates
-    `<svc>-stop-<seq>` with `min = max = 0` (A-26: scale in to
-    `MaxCapacity`) and updates the target only in
-    `suspendedState.scheduledScalingSuspended` (true). Without that flag the
-    TEST morning action would restore min and restart a stopped service. A
-    later restart creates `<svc>-start-<seq>` and sets the flag back to
-    false. The mode admits nothing else: no other `update`, no `delete`, and
-    no change to the service or to an earlier action. In PROD a stop needs
-    gate 2b, the `prod` environment approval and a recorded incident reason.
-  - **`start_at` window.** Admission refuses a plan whose new start or stop
-    action has an `at()` time earlier than the apply start + 10 min or later
-    than the apply start + 24 h. After an approval delay, a new `start_at`
-    means a new reviewed contract PR and a new saved plan.
+  - **Stop (`rollback-zero`, first deployment), two plans.** Suspending
+    scheduled scaling also blocks one-time actions, so the stop and the
+    suspension cannot share a plan.
+    1. **Stop plan** (`workload_operation.mode: rollback-zero`,
+       `phase: stop`): create-only; it creates `<svc>-stop-<seq>` with
+       `min = max = 0` (A-26: scale in to `MaxCapacity`). The runner waits
+       for the observed scale-in to 0 tasks.
+    2. **Hold plan** (`phase: hold`, TEST only, because only TEST has
+       recurring actions): exactly one `update` per target, changing only
+       `suspendedState.scheduledScalingSuspended` to true, so the TEST
+       morning action cannot restart a stopped service. With `max = 0`,
+       dynamic scaling cannot scale out either.
+
+    A **restart plan** (`phase: start`) updates the flag back to false (TEST)
+    and creates `<svc>-start-<seq>` in the same plan. That works because the
+    un-suspension is applied at apply time and the start action fires at
+    least 10 min later. The mode admits nothing else: no other `update`, no
+    `delete`, no change to the service or to an earlier action. V-23(d)
+    checks live that a suspension blocks one-time actions and that the
+    restart plan fires after the un-suspension. In PROD a stop needs gate
+    2b, the `prod` environment approval and a recorded incident reason.
+  - **`start_at` window.** Replay admission (the `_gate` check that runs
+    immediately before `up --plan`) refuses a plan whose new start or stop
+    action has an `at()` time earlier than the admission time + 10 min or
+    later than the admission time + 24 h. After an approval delay, a new
+    `start_at` means a new reviewed contract PR and a new saved plan.
   - **V-23 (live, S4.6 step 7)** checks three things: (a) whether registering
     the target with `min` above the current `desiredCount` of 0 already
     scales out (if so, the start action is redundant but harmless); (b)
@@ -336,8 +353,9 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     policy in BI; CloudWatch alarms cannot publish to an `alias/aws/sns`
     topic), the topic policy, the alarms and the EventBridge rules.
   - Every workload log group carries `kms_key_id` = the runtime CMK (D-4):
-    ECS web and worker, DocumentDB audit and profiler (USI), and the BI
-    function log groups (S5.3).
+    ECS web and worker, the pre-created Container Insights performance group
+    (S1.8), DocumentDB audit and profiler (USI), and the BI function log
+    groups (S5.3).
   - The runbooks live in `docs/sre-operations.md`.
 - **AD-12 Network.**
   - Components:
@@ -444,9 +462,10 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   execution role.
 - **AD-16 Recovery and admission modes (M-5, M-6, R4-M4; D-7 decided 2026-09-30).**
   - **Diagnostics:** parse the Pulumi event log into an allow-listed summary.
-  - **Admission modes:** `first`, `step2`, `resume`, `rollback-zero`,
-    `policy-update`, `recovery-import`, `recovery-abandon`. S4.2, S4.9 and
-    S4.3 own the admission functions; the runner routes to them (AD-24).
+  - **Admission modes:** `first`, `rebuild-first`, `step2`, `resume`, `rollback-zero`
+    (`stop`, `hold`, `start` phases), `policy-update`, `recovery-import`,
+    `recovery-abandon`. S4.2, S4.9 and S4.3 own the admission functions; the
+    runner routes to them (AD-24).
   - **Every recovery mutation is a saved plan through the classifier.**
     - `import`: the program runs with `import_` options for the listed
       fixed-name or retained resources. `preview --save-plan` must contain
@@ -558,8 +577,13 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     - The manifest PR must be approved by Kravalg: the status check
       `abandon-manifest-approval` (created in S4.3) reads the PR reviews on
       the head SHA and needs an `APPROVED` review by Kravalg's user ID.
-      S5.22 (after S4.3) makes it a required check in the ruleset for PRs
-      that change `recovery/abandon-manifest.json`.
+      S5.22 (after S4.3) makes it a required check in the ruleset. BI
+      required checks are branch-wide (no path condition;
+      `scripts/_github_repository_controls.py` lines 78-98 and 257 @debd88b),
+      so the check reports success without further review on a PR that does
+      not change `recovery/abandon-manifest.json`, and it is pinned to its
+      issuing GitHub Actions integration like the other required checks
+      (`_harden_status_check`).
       CODEOWNERS (`* @Kravalg @dmytrocraft`, USI `.github/CODEOWNERS`) is not
       enough on its own, because either owner can approve.
   - **Rule changes (D-7, decided 2026-09-30; unconditional):**
@@ -575,7 +599,7 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     the S4.6 campaign (step 19), after every other live item (steps 1–17)
     has its evidence. Step 18 prepares it: the Kravalg-approved manifest and
     the BI ENI detach. Then step 20 rebuilds the stack (recovery import of
-    retained resources → `resume` of step 1 → XP-8 refresh for the new
+    retained resources (import receipt) → `rebuild-first` → XP-8 refresh for the new
     managed-secret ARN → S5.5 re-run → step 2 → accepted receipt → clean
     drift). The receipt (step 21) is assembled from the rebuilt stack. So
     the abandon never removes the stack before steps 14–17 run.
@@ -776,7 +800,8 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   | `resume` | latest receipt with `outcome: failed`, or an export receipt | the checkpoint holds registry resources plus a subset of the current step's graph |
   | `step2` | latest receipt: `success` of step 1 (`first` or `resume`) | S5.5 receipt; XP-8 values in the installed contract |
   | `rollback-zero`, `policy-update` | latest receipt: `success` of any mode after step 2 | — |
-  | `recovery-import` | latest receipt or export receipt (after an abandon: the abandon receipt) | import list = the abandon receipt's `retain` set, or the reviewed import list |
+  | `recovery-import` | latest receipt or export receipt (after an abandon: the abandon receipt) | import list = the abandon receipt's `retain` set, or the reviewed import list; writes an **import receipt** |
+  | `rebuild-first` | latest receipt is an import receipt whose predecessor is an abandon receipt | the checkpoint holds exactly the registry resources plus the abandon receipt's `retain` set; creates the rest of the step-1 graph (retained step-2 URNs stay `same`); the step-1 checker runs in its rebuild variant |
   | `recovery-abandon` | latest receipt or export receipt | the Kravalg-approved manifest lists exactly its resources |
   | `drift` | latest `success` receipt, and an accepted-workload receipt in the same lineage (no abandon in between) | read-only |
   | release, release rollback | as `drift`, plus a clean-drift result bound to the latest receipt | — |
@@ -789,7 +814,8 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
      S4.3 issues the export and abandon receipts with the same library.
   2. **S4.12 mode routing.** `execute` and `_gate` dispatch by
      `workload_operation.mode`: `first` → `admit_first_workload_plan`;
-     `step2`, `rollback-zero`, `policy-update` → S4.9; `resume` → S4.2;
+     `step2`, `rollback-zero`, `policy-update` → S4.9; `resume` and
+     `rebuild-first` → S4.2;
      `recovery-import` and `recovery-abandon` → S4.3, only from
      `recovery.yml`. An unknown mode, a mode not allowed for the command, or
      a stale or missing anchor is refused.
@@ -905,7 +931,7 @@ after its predecessor merges.
 
 | Chain | Order |
 | --- | --- |
-| C-BI (IAM/KMS/Lambda/GitHub environments, governance apply) | S5.1 (every central role: execution, task, app-rotation, redeploy, bootstrap-job, restore-operator, restore-reader, exercise; no KMS statements) → S5.2 (apply capability, including the managed-password and log-group KMS describe grants) → S5.17 (preview/drift read without KMS; `iam:SimulatePrincipalPolicy` for the preview role) → S5.4 (CMKs whose key policies name only existing roles, per AD-15a; then the matching identity statements, including the preview/drift KMS read) → S5.3 (functions that use the S5.1 roles; KMS-encrypted function log groups; rules) → S5.21 (Kravalg-only environments `test`, `prod`, `test-recovery`, `test-exercise`, `governance-evidence`) → S5.23 (TEST exercise role) → S5.7 (test-recovery role and grants, derived from the S4.10 graph) → S5.22 (ruleset: `abandon-manifest-approval` required, after S4.3) → S5.18a (grants on the S5.1 restore-operator and restore-reader roles, reader package, no VPC) → [live, after USI step 1] S5.5 (XP-8 metadata, exact-ARN grant, bootstrap-job VPC attach, job run) → S5.18b (restore-reader VPC attach, after XP-8) → S5.6 (conditional) → S5.19 (prod-recovery) |
+| C-BI (IAM/KMS/Lambda/GitHub environments, governance apply) | S5.1 (every central role: execution, task, app-rotation, redeploy, bootstrap-job, restore-operator, restore-reader, exercise; no KMS statements) → S5.2 (apply capability, including the managed-password and log-group KMS describe grants) → S5.17 (preview/drift read without KMS; `iam:SimulatePrincipalPolicy` for the preview role) → S5.4 (CMKs whose key policies name only existing roles, per AD-15a; then the matching identity statements, including the preview/drift KMS read) → S5.3 (functions that use the S5.1 roles; KMS-encrypted function log groups; rules) → S5.21 (Kravalg-only environments `test`, `prod`, `test-recovery`, `test-exercise`; `governance-evidence` checked unchanged) → S5.23 (TEST exercise role) → S5.7 (test-recovery role and grants, derived from the S4.10 graph) → S5.22 (ruleset: `abandon-manifest-approval` required, after S4.3) → S5.18a (grants on the S5.1 restore-operator and restore-reader roles, reader package, no VPC) → [live, after USI step 1] S5.5 (XP-8 metadata, exact-ARN grant, bootstrap-job VPC attach, job run) → S5.18b (restore-reader VPC attach, after XP-8) → S5.6 (conditional) → S5.19 (prod-recovery) |
 | C-contract (`schemas/`, `scripts/poc_contract.py`, secret validators, admission, drift allow-list, receipt schemas, acceptance-receipt validator) | S1.1 → S1.7 → S1.9 → S1.11 → S1.8 → S4.10 → S4.11 → S4.2 → S4.9 → S4.3 → S4.12 → S4.13 → S4.14 → S4.15 → S4.6 → S4.7 |
 | C-topology (`scripts/poc_workload_topology.py`, `scripts/poc_workload_secret_result.py`, the native integration test, the Random/TLS pins, `recovery/delete-actions.json`, the runner-spec topology text) | S4.10 only (AD-25) |
 | C-runner (`scripts/poc_workload_runner.py`, `scripts/service_execution_worker.py`, `.github/workflows/self-deploy.yml`, the admission observation functions, receipt modules, `specs/poc-workload-runner.md` lifecycle text, the README line-127 sentence, `docs/poc-workload-log-health.md`, `test_workload_apply_docs_consistency.py`, `test_service_execution_worker.py`) | S4.4 → S4.5 → S4.11 → S4.12 → S4.13 → S4.14. S4.11–S4.14 also hold the C-contract slot at their position in that chain, because they edit `poc_workload_admission.py`. |
@@ -1008,8 +1034,8 @@ edit `scripts/poc_workload_runner.py`, so they head C-runner.
     `SuspendedState`), `PutScalingPolicy` and `PutScheduledAction` on the two
     service resource IDs (targets, start, stop and TEST schedules);
   - `lambda:InvokeFunction` on the BI function ARNs;
-  - `ec2:CreateFlowLogs`, `DeleteFlowLogs`, `logs:CreateLogDelivery`,
-    `logs:DeleteLogDelivery`;
+  - `ec2:CreateFlowLogs`, `logs:CreateLogDelivery` (the matching deletes
+    belong to the TEST recovery role);
   - `iam:CreateServiceLinkedRole` only with `iam:AWSServiceName` in
     {`ecs.amazonaws.com`, `ecs.application-autoscaling.amazonaws.com`,
     `elasticache.amazonaws.com`, `rds.amazonaws.com`,
@@ -1050,7 +1076,7 @@ edit `scripts/poc_workload_runner.py`, so they head C-runner.
   | V-20 | `aws:PrincipalAccount` semantics for `ecr:GetAuthorizationToken`; the reviewed ECR registry account | docs + live pull | S3.3 | 7 | STOP: as V-14 (`rollback-zero`, reviewed pin fix, `policy-update` plan). |
   | V-21 | `CreateDBCluster` with `ManageMasterUserPassword` needs, under the caller (USI apply role), `secretsmanager:CreateSecret` and `TagResource` on `rds!cluster-*` and `kms:DescribeKey` on `alias/aws/secretsmanager` (documented for RDS and Aurora, A-27; not stated for DocumentDB) | docs + live simulate + live apply (CloudTrail `CreateSecret` event for the managed secret, metadata only) | S5.2 | 3, 4 | STOP: step 1 fails with `AccessDenied` → the BI grant is fixed by a reviewed PR, then S4.3 `resume`. An unneeded grant found by the CloudTrail check is removed in a reviewed PR before gate 2. |
   | V-22 | The restore operator needs `secretsmanager:CreateSecret`/`TagResource` and `kms:DescribeKey` for `ModifyDBCluster(ManageMasterUserPassword)`; `kms:CreateGrant`/`Decrypt`/`DescribeKey` on the DocumentDB storage key for the snapshot restore; and the snapshot and subnet-group resource permissions (A-27) | docs + live simulate + live restore | S5.18a | 3 (simulate); S4.8 step R-1 | STOP: restore or modify denied → BI grant fix, rehearsal re-run; the temporary cluster is deleted first. |
-  | V-23 | ECS service autoscaling at 0 tasks: (a) whether `RegisterScalableTarget` with `min` above `desiredCount=0` scales out by itself; (b) whether the one-time `at()` start action scales 0 → `min` (A-26 documents it); (c) whether a fired one-time action stays listed | docs (A-26, verified 2026-09-30) + live | S2.1 | 7, 7b | STOP: (b) fails → the services stay at 0 tasks, so nothing needs rolling back; the start mechanism is redesigned in a reviewed PR. (c) shows removal → STOP before step 14; the AD-23 conditional entry is added by a reviewed contract PR. |
+  | V-23 | ECS service autoscaling at 0 tasks: (a) whether `RegisterScalableTarget` with `min` above `desiredCount=0` scales out by itself; (b) whether the one-time `at()` start action scales 0 → `min` (A-26 documents it); (c) whether a fired one-time action stays listed; (d) whether `scheduledScalingSuspended` blocks one-time actions, and whether a restart plan that un-suspends and creates a start action fires it | docs (A-26, verified 2026-09-30) + live | S2.1 | 7, 7b, 15 | STOP: (b) fails → the services stay at 0 tasks, so nothing needs rolling back; the start mechanism is redesigned in a reviewed PR. (c) shows removal → STOP before step 14; the two-part fix of AD-10 (`scaling.consumed` contract PR, so the program stops rendering the fired actions, plus the AD-23 entry). (d) differs from AD-10 → STOP at step 15; the stop and hold sequence is redesigned in a reviewed PR. |
   | V-24 | Setting `retain_on_delete` (and `protect=False`, `recovery_window_in_days`, `final_snapshot_identifier`) changes only state in the unprotect plan (`update` steps, no cloud call except `rds:ModifyDBCluster`), and a later `delete` of a retained resource makes no cloud call | engine and provider source + live | S4.2 | 19 | STOP: any cloud delete observed on a retained resource → stop the abandon; recover by S4.3 import. |
   | V-25 | The ECS awslogs driver writes to a log group encrypted with the runtime CMK with no KMS statement for the execution role (A-28) | docs + live | S2.4 | 7 | Fallback: a reviewed AD-15a row for the execution role (`kms:GenerateDataKey` with `kms:ViaService=logs.<r>.amazonaws.com`), then step 7 is re-run. |
   | V-26 | The per-type delete action sets derived from the pinned provider's delete paths are complete (drain and detach calls included) for the recovery role | provider source + live (CloudTrail of the abandon run, no `AccessDenied`) | S4.10, S5.7 | 19 | STOP: an `AccessDenied` stops the removal plan mid-way → S4.3 `export`, reviewed S5.7 grant fix, then `recovery-abandon` again from the export receipt. |

@@ -17,3 +17,16 @@ The user made these decisions explicitly in the Claude Code session on 2026-09-3
 - The SNS alarm topic uses the runtime CMK. CloudWatch alarms cannot publish to a topic encrypted with the AWS-managed `alias/aws/sns` key, and the runtime CMK is the only CMK D-4 provides for runtime data.
 - The ALB access-log bucket stays on SSE-S3, because ALB access logging supports only SSE-S3. DocumentDB storage, ElastiCache and SQS stay on their current AWS-managed encryption. D-4 does not name them, and this plan does not change them.
 - Log groups outside this workload are outside D-4 (for example an AGI stage log group). The AGI owner decides them.
+
+## Confirmed derived details (explicit user confirmation, 2026-09-30)
+
+| ID | Decision |
+|---|---|
+| D-8 | The SNS alarm topic uses the runtime CMK, because CloudWatch alarms cannot publish to a topic on the AWS-managed SNS key. |
+| D-9 | The ALB access-log bucket stays SSE-S3, the only server-side encryption ALB access logging supports. |
+| D-10 | DocumentDB storage, ElastiCache and SQS keep their current AWS-managed encryption. |
+| D-11 | A TEST abandon always retains both log buckets (the ALB access-log bucket and the flow-log bucket). |
+| D-12 | The abandon rehearsal runs at the end of the TEST campaign (S4.6 steps 18–20) and is followed by a rebuild. |
+| D-13 | A new TEST exercise role and a `test-exercise` environment run the live checks (S5.23, S4.16). |
+
+Open ownership item: XP-14 (the PROD registry phase) is outside this plan and blocks gate 2 until someone owns it.

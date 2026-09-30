@@ -2,8 +2,9 @@
 
 `scripts/poc_workload_phase_entrypoint.py` connects the existing typed contract and
 closed native image/config projection to the existing generated-secret settings
-resolver and `WorkloadPhaseStack`. It does not enable workload execution. The
-worker's capability/plan stop and fallback execution stop remain unchanged.
+resolver and `WorkloadPhaseStack`. It grants no execution permission itself: the
+worker routes TEST `plan` and `up-plan` for a `workload` phase contract to the
+protected runner, which calls this bridge after its own admission checks.
 
 The internal caller supplies exact `SourceAdmission` facts, their matching full
 workload contract and the web/worker projection from `inspect_images`. The bridge
@@ -93,11 +94,13 @@ declaration remains attached to the descriptor.
 - `ComputePlane` now maps the declared `runtime.worker_health_command` to an ECS
   `CMD` health check. The command must exist in the admitted image; actual worker
   health remains a native acceptance check.
-- A sealed trusted runner now connects prerequisite observation, the protected
-  materializer and saved-plan dispatch, but the installed worker still rejects
-  workload requests. Complete capability/input admission, accepted-result
-  observation, phase-aware drift and actual health/release/rollback before
-  removing that stop.
+- A sealed trusted runner connects prerequisite observation, the protected
+  materializer and saved-plan dispatch, and the installed worker routes TEST
+  `plan` and `up-plan` for a `workload` phase contract to it; workload drift is
+  still rejected. Complete capability/input admission, accepted-result
+  observation, phase-aware drift and actual health/release/rollback remain
+  acceptance prerequisites, and the committed phase stays `registry` (see
+  `specs/poc/README.md`).
 
 Focused tests use synthetic facts and isolated Pulumi mock registrations. They
 verify exact images, generated-secret references, no IAM registration, unchanged

@@ -1,7 +1,8 @@
 """Internal workload settings bridge; no CLI, admission or execution permission.
 
 The trusted caller must authenticate source, images, capabilities and prior state.
-The existing worker remains disabled until native plan/replay gates are connected.
+The worker reaches this bridge only through the protected runner, which routes TEST
+``plan`` and ``up-plan`` for a workload-phase contract.
 """
 
 from __future__ import annotations

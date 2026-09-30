@@ -52,6 +52,9 @@ RDS_CLUSTER_TYPE_SUFFIX = "rds/cluster:Cluster"
 RDS_INSTANCE_TYPE_SUFFIX = "rds/instance:Instance"
 DOCDB_CLUSTER_TYPE_SUFFIX = "docdb/cluster:Cluster"
 DOCDB_CLUSTER_INSTANCE_TYPE_SUFFIX = "docdb/clusterInstance:ClusterInstance"
+ELASTICACHE_REPLICATION_GROUP_TYPE_SUFFIX = (
+    "elasticache/replicationGroup:ReplicationGroup"
+)
 DOCDB_TYPE_SUFFIXES = (DOCDB_CLUSTER_TYPE_SUFFIX, DOCDB_CLUSTER_INSTANCE_TYPE_SUFFIX)
 PRODUCTION_DATABASE_TYPE_SUFFIXES = (
     RDS_CLUSTER_TYPE_SUFFIX,
@@ -189,6 +192,29 @@ def storage_encryption_violations(
         resource_type, (RDS_CLUSTER_TYPE_SUFFIX, RDS_INSTANCE_TYPE_SUFFIX)
     ) and not _truthy(props.get("storageEncrypted")):
         violations.append("RDS databases must enable storage encryption.")
+
+    violations.extend(_data_store_encryption_violations(resource_type, props))
+
+    return violations
+
+
+def _data_store_encryption_violations(
+    resource_type: str, props: Mapping[str, Any]
+) -> list[str]:
+    """Return encryption issues for DocumentDB clusters and Redis groups."""
+    violations: list[str] = []
+
+    if _matches_resource_type(resource_type, DOCDB_CLUSTER_TYPE_SUFFIX) and not (
+        _truthy(props.get("storageEncrypted"))
+    ):
+        violations.append("DocumentDB clusters must enable storage encryption.")
+
+    if _matches_resource_type(
+        resource_type, ELASTICACHE_REPLICATION_GROUP_TYPE_SUFFIX
+    ) and not _truthy(props.get("atRestEncryptionEnabled")):
+        violations.append(
+            "ElastiCache replication groups must enable at-rest encryption."
+        )
 
     return violations
 
@@ -506,6 +532,7 @@ def production_database_violations(
     ``protect`` is the Pulumi resource option when the engine supplies it.
     DocumentDB instances have no deletion-protection or final-snapshot fields;
     their cluster owns those settings, so instances only require protection.
+    An engine that does not report ``protect`` (``None``) fails closed.
     """
     if not _matches_any_resource_type(
         resource_type, PRODUCTION_DATABASE_TYPE_SUFFIXES
@@ -529,8 +556,8 @@ def _is_production_resource(props: Mapping[str, Any], config: PolicyConfig) -> b
 def _documentdb_protection_violations(
     resource_type: str, protect: bool | None
 ) -> list[str]:
-    """Require Pulumi protection for DocumentDB when the engine reports it."""
-    if protect is False and _matches_any_resource_type(
+    """Require explicit Pulumi protection; an unreported option fails closed."""
+    if protect is not True and _matches_any_resource_type(
         resource_type, DOCDB_TYPE_SUFFIXES
     ):
         return ["Production DocumentDB resources must be Pulumi-protected."]

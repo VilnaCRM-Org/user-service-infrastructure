@@ -1,7 +1,8 @@
 """Installed service worker: authenticate in root, execute Pulumi as UID 2000.
 
-The workflow supplies immutable mounts and its existing credentials. This entry
-point observes workload prerequisites but does not execute a workload graph.
+The workflow supplies immutable mounts and its existing credentials. For a
+workload-phase contract this entry point routes TEST ``plan`` and ``up-plan`` to
+the protected saved-plan runner; workload drift stays rejected.
 """
 
 from __future__ import annotations

@@ -95,6 +95,9 @@ snapshot (`<stack>-docdb-final`). A destroy therefore stops at DocumentDB until 
 separately reviewed change removes that protection; do not unprotect state or
 disable deletion protection out of band.
 
+For a failed or partial first workload apply, follow the
+[PoC workload recovery runbook](poc-workload-recovery.md).
+
 ## Stack Strategy
 
 Recommended stack patterns:

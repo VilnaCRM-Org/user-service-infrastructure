@@ -423,6 +423,9 @@ def _inputs(desired, name):
     return rows[0]["inputs"]
 
 
+DOCUMENTDB_INSTANCE_PREFIX = "user-service-documentdb-instance-"
+
+
 def _dependency_edges(desired):
     """Keep the fixed private network and ECS edges in first-create plans.
 
@@ -464,6 +467,10 @@ def _dependency_edges(desired):
             "user-service-app-subnet-2",
         },
     }
+    instances = {name for name in names if name.startswith(DOCUMENTDB_INSTANCE_PREFIX)}
+    require(instances, "workload-first-topology-dependencies")
+    for service in ("user-service-web-service", "user-service-worker-service"):
+        required[service] |= instances
     for owner, targets in required.items():
         dependencies = desired[names[owner]].get("dependencies")
         require(
@@ -985,6 +992,7 @@ def _container_command(kind):
     bootstrap = (
         "set -eu; install -d -m 700 /srv/app/var/run/secrets; "
         "install -d -m 1777 /srv/app/var/tmp; "
+        "install -d -m 755 /srv/app/var/log /srv/app/var/run; "
         'printf "%s" "$OAUTH_PRIVATE_KEY_PEM"'
         " > /srv/app/var/run/secrets/oauth-private.pem; "
         'printf "%s" "$OAUTH_PUBLIC_KEY_PEM"'

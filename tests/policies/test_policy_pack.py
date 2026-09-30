@@ -2027,6 +2027,7 @@ def test_production_documentdb_requires_retention_and_pulumi_protection(
         cluster,
         {**prod, "deletionProtection": False, "skipFinalSnapshot": True},
         config,
+        protect=True,
     ) == [
         "Production databases must enable deletion protection.",
         "Production databases must keep final snapshots enabled.",
@@ -2043,13 +2044,20 @@ def test_production_documentdb_requires_retention_and_pulumi_protection(
     assert policy_runtime.production_database_violations(
         instance, prod, config, protect=False
     ) == ["Production DocumentDB resources must be Pulumi-protected."]
-    for protect in (True, None):
-        assert (
-            policy_runtime.production_database_violations(
-                instance, prod, config, protect=protect
-            )
-            == []
+    assert (
+        policy_runtime.production_database_violations(
+            instance, prod, config, protect=True
         )
+        == []
+    )
+    # An engine that does not report protect must not silently pass (fail closed).
+    for resource_type, props in ((instance, prod), (cluster, safe_cluster)):
+        assert policy_runtime.production_database_violations(
+            resource_type, props, config, protect=None
+        ) == ["Production DocumentDB resources must be Pulumi-protected."]
+        assert policy_runtime.production_database_violations(
+            resource_type, props, config
+        ) == ["Production DocumentDB resources must be Pulumi-protected."]
     assert (
         policy_runtime.production_database_violations(
             cluster,
@@ -2084,7 +2092,7 @@ def test_production_database_pack_validator_reads_pulumi_protection(
     policy_runtime.require_production_database_safety(args, violations.append)
     assert violations == (
         ["Production DocumentDB resources must be Pulumi-protected."]
-        if protect is False
+        if protect is not True
         else []
     )
 
@@ -2951,3 +2959,37 @@ def test_s3_logging_requires_a_concrete_destination(
         assert bool(
             policy_runtime.logging_violations(bucket.resource_type, bucket.props)
         ) == bool(expected)
+
+
+@pytest.mark.parametrize(
+    "resource_type,field,message",
+    [
+        (
+            "aws:docdb/cluster:Cluster",
+            "storageEncrypted",
+            "DocumentDB clusters must enable storage encryption.",
+        ),
+        (
+            "aws:elasticache/replicationGroup:ReplicationGroup",
+            "atRestEncryptionEnabled",
+            "ElastiCache replication groups must enable at-rest encryption.",
+        ),
+    ],
+)
+def test_documentdb_and_elasticache_require_encryption_at_rest(
+    policy_runtime, resource_type, field, message
+):
+    """Data stores outside RDS must also declare encryption at rest."""
+    assert policy_runtime.storage_encryption_violations(resource_type, {}) == [message]
+    assert policy_runtime.storage_encryption_violations(
+        resource_type, {field: False}
+    ) == [message]
+    assert (
+        policy_runtime.storage_encryption_violations(resource_type, {field: True}) == []
+    )
+    assert (
+        policy_runtime.storage_encryption_violations(
+            "aws:docdb/clusterInstance:ClusterInstance", {}
+        )
+        == []
+    )

@@ -27,6 +27,14 @@ DISABLED_APPLY_CLAIMS = tuple(
         r"does not enable the workload worker",
         r"preview admission is not apply authority",
         r"first-topology gate for previews only",
+        r"does not execute a workload graph",
+        r"worker remains disabled",
+        r"does not enable workload execution",
+        r"stops? remains? unchanged",
+        r"still rejects workload requests",
+        r"no cli or config dispatches to this class",
+        r"before wiring it into the trusted controller",
+        r"before\s+removing that stop",
     )
 )
 HISTORICAL_CLAIMS = (
@@ -40,6 +48,18 @@ HISTORICAL_CLAIMS = (
     "rejects workload apply and drift before invoking that runner",
     "It does not enable the workload worker. Both existing execution stops remain",
     "No workload apply is admitted; a successful preview is not an acceptance result.",
+    # Stale wording found in the worker, bridge, bridge docs and workload stack.
+    "point observes workload prerequisites but does not execute a workload graph.",
+    "The existing worker remains disabled until native plan/replay gates are "
+    "connected.",
+    "It does not enable workload execution. The worker's capability/plan stop and "
+    "fallback execution stop remain unchanged.",
+    "but the installed worker still rejects workload requests. Complete "
+    "capability/input admission",
+    "observation, phase-aware drift and actual health/release/rollback before "
+    "removing that stop.",
+    "No CLI or config dispatches to this class; verified releases",
+    "separate prerequisites before wiring it into the trusted controller.",
 )
 
 
@@ -48,8 +68,12 @@ def _documents():
     for pattern in ("docs/**/*.md", "specs/**/*.md", "*.md"):
         for path in sorted(ROOT.glob(pattern)):
             yield path.relative_to(ROOT), path.read_text(encoding="utf-8")
-    for pattern in ("poc_*.py", "service_execution_*.py"):
-        for path in sorted((ROOT / "scripts").glob(pattern)):
+    for base, pattern in (
+        ("scripts", "poc_*.py"),
+        ("scripts", "service_execution_*.py"),
+        ("pulumi/app", "*.py"),
+    ):
+        for path in sorted((ROOT / base).glob(pattern)):
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 if isinstance(
@@ -138,3 +162,25 @@ def test_documentation_matches_workload_apply_routing(monkeypatch):
         )
     else:
         assert claims, "Documentation must state that workload apply is disabled."
+
+
+def test_documents_scan_the_pulumi_application_docstrings():
+    scanned = {str(path) for path, _ in _documents()}
+    assert "pulumi/app/workload_phase.py" in scanned
+    assert "scripts/service_execution_worker.py" in scanned
+
+
+def test_enabled_routing_is_stated_positively(monkeypatch):
+    routed = [
+        command
+        for command in ("plan", "up-plan")
+        if _routes_workload(monkeypatch, command)
+    ]
+    assert routed == ["plan", "up-plan"]
+    worker_doc = " ".join((worker.__doc__ or "").split())
+    bridge_doc = " ".join(
+        (ROOT / "docs/poc-workload-settings-bridge.md").read_text().split()
+    )
+    for command in routed:
+        assert f"``{command}``" in worker_doc, command
+        assert f"`{command}`" in bridge_doc, command

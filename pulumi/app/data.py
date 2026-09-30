@@ -70,6 +70,9 @@ class DataOutputs:
     redis_endpoint: pulumi.Input[str]
     redis_port: pulumi.Input[int]
     redis_url_secret_arn: pulumi.Input[str]
+    # Resources ECS services must wait for: the cluster endpoint resolves before
+    # any DocumentDB instance exists, so the endpoint alone is not an edge.
+    documentdb_instances: tuple[pulumi.Resource, ...] = ()
 
 
 class DataPlane(pulumi.ComponentResource):
@@ -218,8 +221,9 @@ class DataPlane(pulumi.ComponentResource):
                 "documentDbInstanceCount must be at least 1 for managed deployments."
             )
 
+        documentdb_instances: list[pulumi.Resource] = []
         for index in range(settings.documentdb.instance_count):
-            aws.docdb.ClusterInstance(
+            instance = aws.docdb.ClusterInstance(
                 f"user-service-documentdb-instance-{index + 1}",
                 identifier=build_resource_name(
                     settings.stack_tag,
@@ -232,6 +236,7 @@ class DataPlane(pulumi.ComponentResource):
                 enable_performance_insights=True,
                 opts=pulumi.ResourceOptions(parent=self, protect=True),
             )
+            documentdb_instances.append(instance)
 
         documentdb_url_secret_arn = self._persist_url(
             "document_db_url",
@@ -309,6 +314,7 @@ class DataPlane(pulumi.ComponentResource):
             redis_endpoint=redis_replication_group.primary_endpoint_address,
             redis_port=pulumi.Output.from_input(settings.redis.port),
             redis_url_secret_arn=redis_url_secret_arn,
+            documentdb_instances=tuple(documentdb_instances),
         )
 
     def _persist_url(

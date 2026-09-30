@@ -1,9 +1,10 @@
 """Internal workload composition that retains the complete registry baseline.
 
 This is an ownership prerequisite, not phase admission. Its caller must supply
-admitted settings and registry data. No CLI or config dispatches to this class;
-verified releases, secrets, capabilities and native transition acceptance remain
-separate prerequisites before wiring it into the trusted controller.
+admitted settings and registry data. Only the protected workload runner reaches
+this class, and only for a ``workload`` phase contract; verified releases,
+secrets, capabilities and native transition acceptance remain separate
+prerequisites of that path.
 """
 
 from __future__ import annotations

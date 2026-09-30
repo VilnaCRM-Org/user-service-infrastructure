@@ -1952,6 +1952,13 @@ def test_managed_documentdb_is_protected_retained_and_audited() -> None:
             monitor.options[f"user-service-documentdb-instance-{index}"]["protect"]
             is True
         )
+    instance_urns = {
+        monitor.urns[f"user-service-documentdb-instance-{index}"] for index in (1, 2)
+    }
+    for service in ("web", "worker"):
+        assert instance_urns <= set(
+            monitor.options[f"user-service-{service}-service"]["dependencies"]
+        )
     assert monitor.options["user-service-documentdb-parameters"]["protect"] is False
     assert all(
         monitor.options[f"user-service-documentdb-{export}-logs"]["protect"] is False
@@ -2197,6 +2204,7 @@ def test_managed_containers_run_read_only_with_dropped_capabilities() -> None:
             "-ec",
             "set -eu; install -d -m 700 /srv/app/var/run/secrets; "
             "install -d -m 1777 /srv/app/var/tmp; "
+            "install -d -m 755 /srv/app/var/log /srv/app/var/run; "
             'printf "%s" "$OAUTH_PRIVATE_KEY_PEM"'
             " > /srv/app/var/run/secrets/oauth-private.pem; "
             'printf "%s" "$OAUTH_PUBLIC_KEY_PEM"'
@@ -2207,6 +2215,7 @@ def test_managed_containers_run_read_only_with_dropped_capabilities() -> None:
         ]
         environment = {row["name"]: row["value"] for row in container["environment"]}
         assert environment["TMPDIR"] == "/srv/app/var/tmp"
+        _assert_runtime_paths_precreated(container["command"][-1])
     from app.compute import DEFAULT_CAPABILITIES
 
     assert len(DEFAULT_CAPABILITIES) == len(set(DEFAULT_CAPABILITIES)) == 14
@@ -2215,3 +2224,29 @@ def test_managed_containers_run_read_only_with_dropped_capabilities() -> None:
         "SETGID",
         "SETUID",
     }
+
+
+def _assert_runtime_paths_precreated(script: str) -> None:
+    """Every supervisord -l/-j parent directory exists before the final exec."""
+    prelude, _, runtime = script.partition("; exec ")
+    assert runtime
+    tokens = runtime.split()
+    created = {
+        directory
+        for step in prelude.split("; ")
+        if step.startswith("install -d ")
+        for directory in step.split()[2:]
+        if directory.startswith("/")
+    }
+    for flag in ("-l", "-j"):
+        if flag in tokens:
+            parent = tokens[tokens.index(flag) + 1].rsplit("/", 1)[0]
+            assert parent in created, (flag, parent)
+
+
+def test_runtime_path_check_rejects_missing_parent_directory():
+    script = "set -eu; install -d /srv/app/var/run; exec x -l /srv/app/var/log/a.log"
+    with pytest.raises(AssertionError):
+        _assert_runtime_paths_precreated(script)
+    with pytest.raises(AssertionError):
+        _assert_runtime_paths_precreated("set -eu")

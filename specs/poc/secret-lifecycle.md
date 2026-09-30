@@ -13,6 +13,12 @@ ARN and version from its authenticated prior receipt. Desired secret names and
 keys remain immutable across workload transitions. Rotation needs a separate
 reviewed protocol.
 
+Hard stop: the current source pins secret versions and has no rotation. The
+`workload` phase must not be enabled (`specs/poc/poc-test.json` stays
+`"registry"`) until secret rotation (F-01) and `AWSCURRENT` references instead of
+version pinning (F-02) land in the stacked hardening PR, together with the other
+preconditions listed in `README.md` ("Workload phase hard stop").
+
 This is source validation only. The helper neither queries AWS nor authenticates
 a receipt. The observer must resolve the actual `AWSCURRENT` version from AWS,
 never a caller-selected historical version. The trusted controller must supply the native current observation and

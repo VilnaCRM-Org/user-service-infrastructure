@@ -66,8 +66,9 @@ The internal workload composition generates stable Random/TLS resources and
 persists the ten declared secret purposes under their exact names and KMS keys.
 Database and Redis connection strings use the same generated credentials as the
 services. ECS receives eight distinct consumed secret references through nine
-environment names, pinned to their versions. `REDIS_LOCKOUT_URL` explicitly uses
-the same ARN and version as `REDIS_URL`; compiled application defaults do not
+environment names, currently pinned to their versions (planned change: reference
+`AWSCURRENT`, see the workload phase switch preconditions below).
+`REDIS_LOCKOUT_URL` explicitly uses the same ARN and version as `REDIS_URL`; compiled application defaults do not
 recompute that alias. SES uses task-role credentials; social OAuth is disabled.
 This source path still needs authenticated secret-history checks and workload
 dispatch admission before it can establish first-deployment or rollback acceptance.
@@ -125,3 +126,22 @@ The remaining producer/consumer work and acceptance evidence are:
    workload component, generated configuration and secret-history checks to
    saved-plan/replay. Workload drift remains rejected until an accepted-workload
    receipt exists. No approval flag or phase-file edit replaces these checks.
+
+## Workload phase hard stop (fail closed)
+
+`specs/poc/poc-test.json` `phase` stays `"registry"`. Switching it to
+`"workload"` is allowed only in the stacked hardening PR, and only when every
+precondition below is met and reviewed. Until then a regression test fails any
+change to the phase.
+
+- Secret rotation (F-01) and `AWSCURRENT` references instead of version pinning
+  (F-02); see `secret-lifecycle.md`.
+- Autoscaling (F-03) and alarms with SNS notification (F-04).
+- Network hardening including VPC flow logs and egress restriction (F-08).
+- ALB-to-task TLS decision (F-09) and customer-managed key decision (F-14).
+- Cost and sustainability review (F-15).
+- Worker healthcheck image fix (user-service PR #501) and a non-root image.
+- Bootstrap governance grants for the new resources (N-11), plus N-04 (apply
+  timeout budget, done here) and N-06 (recovery runbook,
+  `docs/poc-workload-recovery.md`, done here) accepted by the reviewers.
+- Live TEST acceptance of the first workload apply, clean drift and rollback.

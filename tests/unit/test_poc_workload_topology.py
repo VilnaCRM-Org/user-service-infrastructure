@@ -184,6 +184,10 @@ def test_exact_composition_topology_admits_preview_without_mutating_inputs(data)
         ("user-service-web-service", "user-service-https-listener"),
         ("user-service-worker-service", "user-service-worker-task"),
         ("user-service-worker-service", "user-service-service-sg"),
+        ("user-service-web-service", "user-service-documentdb-instance-1"),
+        ("user-service-web-service", "user-service-documentdb-instance-2"),
+        ("user-service-worker-service", "user-service-documentdb-instance-1"),
+        ("user-service-worker-service", "user-service-documentdb-instance-2"),
     ],
 )
 def test_first_workload_requires_fixed_private_resource_dependencies(

@@ -29,9 +29,12 @@ __all__ = ["ComputePlane"]
 # rollback; only untagged leftovers (failed or superseded pushes) expire.
 UNTAGGED_IMAGE_EXPIRY_DAYS = 14
 # Apply fails when ECS never reaches steady state instead of reporting success
-# with flapping tasks. Ten minutes leaves headroom inside the 30-minute TEST apply
-# job after the data plane has been created.
-SERVICE_STEADY_STATE_TIMEOUT = "10m"
+# with flapping tasks. The web and worker services each wait up to this bound;
+# the TEST apply job timeout in self-deploy.yml must cover both waits back to
+# back plus first-create provisioning of the whole stack (see the arithmetic
+# there and tests/unit/test_apply_timeout_budget.py).
+SERVICE_STEADY_STATE_MINUTES = 10
+SERVICE_STEADY_STATE_TIMEOUT = f"{SERVICE_STEADY_STATE_MINUTES}m"
 # Docker's default Linux capability set, which Fargate grants unless dropped.
 DEFAULT_CAPABILITIES = (
     "AUDIT_WRITE",
@@ -78,6 +81,9 @@ WORKER_RUNTIME_COMMAND = (
     "/usr/bin/supervisord -c /etc/supervisor/supervisord.conf "
     "-l /srv/app/var/log/supervisord.log -j /srv/app/var/run/supervisord.pid"
 )
+# Parent directories of every path the runtime command writes; the bootstrap
+# creates them before exec because the ephemeral volumes start empty.
+RUNTIME_WRITABLE_DIRECTORIES = ("/srv/app/var/log", "/srv/app/var/run")
 
 
 @dataclass(frozen=True)
@@ -372,7 +378,7 @@ class ComputePlane(pulumi.ComponentResource):
             wait_for_steady_state=True,
             opts=pulumi.ResourceOptions(
                 parent=self,
-                depends_on=[http_listener],
+                depends_on=[http_listener, *data.outputs.documentdb_instances],
                 custom_timeouts=_service_timeouts(),
             ),
         )
@@ -399,7 +405,9 @@ class ComputePlane(pulumi.ComponentResource):
             ),
             wait_for_steady_state=True,
             opts=pulumi.ResourceOptions(
-                parent=self, custom_timeouts=_service_timeouts()
+                parent=self,
+                depends_on=list(data.outputs.documentdb_instances),
+                custom_timeouts=_service_timeouts(),
             ),
         )
 
@@ -928,6 +936,7 @@ class ComputePlane(pulumi.ComponentResource):
             "set -eu; "
             "install -d -m 700 /srv/app/var/run/secrets; "
             f"install -d -m 1777 {APPLICATION_TMPDIR}; "
+            f"install -d -m 755 {' '.join(RUNTIME_WRITABLE_DIRECTORIES)}; "
             'printf "%s" "$OAUTH_PRIVATE_KEY_PEM"'
             " > /srv/app/var/run/secrets/oauth-private.pem; "
             'printf "%s" "$OAUTH_PUBLIC_KEY_PEM"'

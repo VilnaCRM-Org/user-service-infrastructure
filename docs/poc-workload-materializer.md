@@ -2,8 +2,8 @@
 
 `scripts/poc_workload_materializer.py` adds a root-only materialization primitive.
 It does not run Pulumi, select a phase, authenticate AWS evidence or authorize an
-apply. The worker and runner do not call it yet; their unconditional workload
-stops remain unchanged.
+apply. The protected workload runner calls it before saved-plan dispatch for a
+`workload` phase contract; the primitive itself grants no execution authority.
 
 `materialize_workload(area, projection, baseline_config)` accepts the existing
 already-authenticated `WorkloadPhaseProjection` and protected canonical JSON

@@ -1,0 +1,271 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:vilnacrm:poc-workload-export-receipt:v1",
+  "title": "Workload export receipt: recovery export or clear-pending checkpoint",
+  "description": "Local shape only. Publication, issuer, run binding and checkpoint authenticity are established by the receipt library, never by this schema. Metadata only: no secret value, resource input or resource output appears. The hash-only recovery reader records the checkpoint, the pending operation count and the lock presence. A clear-pending receipt names its predecessor receipt and leaves no pending operation.",
+  "$defs": {
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "etag",
+        "sha256"
+      ],
+      "properties": {
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+          "not": {
+            "const": "null"
+          }
+        },
+        "etag": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^\"[0-9a-f]{32}\"$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "operation_phase": {
+      "enum": [
+        "stop",
+        "hold",
+        "start"
+      ]
+    },
+    "positive_integer": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "receipt_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_id",
+        "checkpoint_sha256"
+      ],
+      "properties": {
+        "receipt_id": {
+          "$ref": "#/$defs/positive_integer"
+        },
+        "checkpoint_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "resumed_operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "first",
+            "step2",
+            "rollback-zero",
+            "policy-update",
+            "rebuild-first"
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/operation_phase"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "rollback-zero"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "phase"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "phase"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "sha256": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "stack": {
+      "enum": [
+        "test",
+        "prod"
+      ]
+    },
+    "workload_operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "sequence"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "first",
+            "step2",
+            "resume",
+            "rollback-zero",
+            "policy-update",
+            "rebuild-first",
+            "recovery-import",
+            "recovery-abandon"
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/operation_phase"
+        },
+        "sequence": {
+          "$ref": "#/$defs/positive_integer"
+        },
+        "resumes": {
+          "$ref": "#/$defs/resumed_operation"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "rollback-zero"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "phase"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "phase"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "resume"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "resumes"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "resumes"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "stack",
+    "workload_operation",
+    "cause",
+    "checkpoint",
+    "pending_operations",
+    "lock_present",
+    "run_id",
+    "run_attempt"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "poc-workload-export-receipt-v1"
+    },
+    "stack": {
+      "$ref": "#/$defs/stack"
+    },
+    "workload_operation": {
+      "$ref": "#/$defs/workload_operation"
+    },
+    "cause": {
+      "enum": [
+        "export",
+        "clear-pending"
+      ]
+    },
+    "checkpoint": {
+      "$ref": "#/$defs/checkpoint"
+    },
+    "pending_operations": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "lock_present": {
+      "type": "boolean"
+    },
+    "run_id": {
+      "$ref": "#/$defs/positive_integer"
+    },
+    "run_attempt": {
+      "$ref": "#/$defs/positive_integer"
+    },
+    "predecessor": {
+      "$ref": "#/$defs/receipt_reference"
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "cause": {
+          "const": "export"
+        }
+      },
+      "not": {
+        "required": [
+          "predecessor"
+        ]
+      }
+    },
+    {
+      "properties": {
+        "cause": {
+          "const": "clear-pending"
+        },
+        "pending_operations": {
+          "const": 0
+        }
+      },
+      "required": [
+        "predecessor"
+      ]
+    }
+  ]
+}

@@ -4,7 +4,7 @@ workflow: _bmad/bmm/workflows/1-analysis/bmad-create-product-brief (Create mode,
 task: workload-wa-hardening
 source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa
 date: 2026-09-30
-revision: 5 (decisions D-1…D-13 of 2026-09-30 applied; round-5 m7 alignment)
+revision: 6 (front matter only: decisions D-1…D-14 of 2026-09-30 applied, R6-m1; body unchanged since the revision-5 round-5 m7 alignment)
 inputDocuments: [specs/poc/README.md, specs/poc/secret-lifecycle.md, docs/poc-workload-recovery.md, research.md]
 ---
 

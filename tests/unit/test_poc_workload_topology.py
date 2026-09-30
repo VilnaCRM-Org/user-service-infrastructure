@@ -1095,6 +1095,44 @@ def test_resolved_container_secrets_bind_observed_secret_versions(data, field):
         _inspect_first(data, secrets=secrets)
 
 
+@pytest.mark.parametrize("kind", ["web", "worker"])
+def test_secret_wrapped_checkpoint_container_definitions_fail_closed(data, kind):
+    """A secret-wrapped checkpoint input is refused, never decrypted or trusted."""
+    secrets = _observed_secrets(data)
+    resources = _first_checkpoint(data)
+    row = next(
+        row
+        for row in resources
+        if row["urn"].endswith(f"::user-service-{kind}-task")
+    )
+    row["inputs"]["containerDefinitions"] = {
+        "4dabf18193072939515e22adb298388d": "1b47061264138c4ac30d75fd1eb44270",
+        "ciphertext": "v1:opaque",
+    }
+    with pytest.raises(ValueError, match="workload-task-container-json"):
+        _inspect_first(data, resources, secrets)
+
+
+def test_worker_secret_binding_is_checked_independently_of_web(data):
+    """A worker-only valueFrom mismatch fails even when web is bound correctly."""
+    secrets = _observed_secrets(data)
+    containers = _task_containers(data, "worker")
+    for row in containers[0]["secrets"]:
+        if row["name"] == "APP_SECRET":
+            arn, version = row["valueFrom"].split(":::")
+            replacement = "f" * len(version)
+            assert replacement != version  # nosec B101
+            row["valueFrom"] = f"{arn}:::{replacement}"
+    _set_matching_input(
+        data,
+        "user-service-worker-task",
+        ("containerDefinitions",),
+        json.dumps(containers),
+    )
+    with pytest.raises(ValueError, match="workload-task-container-secrets"):
+        _inspect_first(data, secrets=secrets)
+
+
 def test_result_inspection_requires_an_authenticated_checkpoint_inventory(data):
     resources = _first_checkpoint(data)
     resources.append(copy.deepcopy(resources[-1]))

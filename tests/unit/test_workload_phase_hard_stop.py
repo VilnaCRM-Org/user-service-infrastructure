@@ -41,6 +41,7 @@ README_MARKERS = (
     "#57",
     "OIDC credential issuance to the end of result observation",
     "First-create container hardening before apply",
+    "Checkpoint container form verified",
     "Live TEST acceptance",
 )
 

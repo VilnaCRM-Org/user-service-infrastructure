@@ -42,7 +42,12 @@ post-apply checkpoint (non-secret inputs only) and applies the same container
 checks; every secret `valueFrom` must equal the observed secret ARN and current
 version. An unresolved or non-hardened definition fails the run. This detects a
 deviation after apply, not before: the deviating task definition is already
-registered and the services may already run it. The backend and requester are
+registered and the services may already run it. The check assumes the checkpoint stores
+each `containerDefinitions` input as the resolved plaintext JSON string in the
+saved-plan input form (not wrapped as a Pulumi secret, not normalized by the
+provider). That assumption is unverified: until a live TEST apply confirms it,
+a correctly hardened first apply could still fail closed after its resources
+exist. The backend and requester are
 rechecked before the job reports success. Workload drift and later releases remain closed
 until an authenticated accepted-workload receipt exists. This first-apply result
 is not a success receipt or gateway descriptor; live application acceptance is

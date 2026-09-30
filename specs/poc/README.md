@@ -191,4 +191,10 @@ follow-up (issue #57).
   stop: pre-apply validation of the source-rendered container definitions,
   bound into the execution identity, or an explicit reviewed acceptance of
   post-apply detection.
+  - Checkpoint container form verified (NOT met): the post-apply check assumes
+    the checkpoint holds each `containerDefinitions` input as the resolved
+    plaintext JSON string in the saved-plan input form, neither wrapped as a
+    secret nor normalized by the provider. Verify this on a live TEST apply (or
+    a native `pulumi up --plan` plus `stack export` run) before the `workload`
+    phase and before accepting post-apply detection.
 - Live TEST acceptance of the first workload apply, clean drift and rollback.

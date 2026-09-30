@@ -50,3 +50,35 @@ def test_private_gateway_missing_certificate_cannot_fall_back_to_http():
         object.__new__(ComputePlane)._create_http_listener(
             settings, None, None, private_gateway=True
         )
+
+
+ARN = "arn:aws:secretsmanager:eu-central-1:891377212104:secret:synthetic-AbCdEf"
+
+
+class _Resolved:
+    """Stand-in for a resolved Output: apply runs the callback immediately."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def apply(self, callback):
+        return callback(self.value)
+
+
+def _hardened(arns):
+    resource = object.__new__(RuntimeSecrets)
+    resource._hardened = True
+    resource.references = dict.fromkeys(("app_secret", "oauth_encryption_key"), {})
+    resource.secret_arns = arns
+    return resource
+
+
+def test_hardened_ecs_secrets_use_the_arn_and_refuse_a_version_suffix():
+    arns = {name: _Resolved(ARN) for name in ("app_secret", "oauth_encryption_key")}
+    rows = _hardened(arns).ecs_secrets()
+    assert [row["valueFrom"] for row in rows] == [ARN, ARN]
+    arns["app_secret"] = _Resolved(ARN + ":::" + "1" * 32)
+    with pytest.raises(ValueError, match="version"):
+        _hardened(arns).ecs_secrets()
+    with pytest.raises(ValueError, match="incomplete"):
+        _hardened({}).ecs_secrets()

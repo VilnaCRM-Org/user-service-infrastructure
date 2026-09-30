@@ -2,83 +2,119 @@
 artifact: implementation-readiness
 workflow: _bmad/bmm/workflows/3-solutioning/bmad-check-implementation-readiness (Validate mode)
 task: workload-wa-hardening
-source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa
+source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa (workload source); bundle parent 1ebbd09
 date: 2026-09-30
-revision: 3
-author: the planning agent that wrote revision 3 (NOT an independent reviewer)
-independent_reviewer: none yet for revision 3; round 4 is requested
-status: PENDING independent round-4 review
+revision: 4
+author: the planning agent that wrote revision 4 (NOT an independent reviewer)
+independent_reviewer: none yet for revision 4; round 5 (the last) is requested
+status: PENDING independent round-5 review
 ---
 
 # Implementation readiness
 
 ## Verdict
 
-**PENDING. Not PASS.** This file is written by the author of revision 3. It
-records what was changed and why; it does not grade itself.
+**PENDING. Not PASS.** The author of revision 4 wrote this file. It records
+what changed and the repository source each fix was checked against. It does
+not grade itself.
 
 - Only an independent reviewer's PASS satisfies the planning gate.
-- Revision 3 answers readiness round 3 (FAIL) and records the user decisions of
-  2026-09-30.
-- Round 4 has not run. Until it reports PASS, the stage is BLOCKED.
+- Revision 4 answers readiness round 4 (FAIL) and records the user's D-4 and
+  D-5 clarifications of 2026-09-30.
+- Before this file was written, a fresh-context author-side audit
+  (`claude-router:audit`, read-only) found 33 more defects. All of them are
+  fixed below. A re-check of those fixes was requested but had not returned
+  when the bundle was committed. It is not a review.
+- Round 5 is the last allowed review. Until it reports PASS, the stage is
+  BLOCKED.
 
 ## Review history
 
 | Round | Reviewer | Result | Handled in |
 | --- | --- | --- | --- |
 | 1 | independent `devops-sdlc:fr-nfr-reviewer` | FAIL: 3 blocking, 10 major, minors | revision 2 |
-| 2 | independent reviewer | Result not stored in this bundle. The revision-2 `readiness.md` was written before it arrived and wrongly listed the reviewer as its author; this revision corrects that. | — |
-| 3 | independent reviewer (findings relayed by the coordinator) | FAIL: B-1, B-2, M-1…M-13, m-1…m-12 | revision 3 (this file) |
-| 4 | independent reviewer | requested, not run | — |
+| 2 | independent reviewer | Result not stored in this bundle | — |
+| 3 | independent reviewer (relayed by the coordinator) | FAIL: B-1, B-2, M-1…M-13, m-1…m-12 | revision 3 |
+| 4 | independent reviewer (relayed by the coordinator) | FAIL: R4-B1…B3, R4-M1…M10, m1…m12 | revision 4 (this file) |
+| 5 | independent reviewer | requested, not run (last round) | — |
 
-The round-3 minor findings arrived as one combined list. They are numbered
-m-1…m-12 below in the order the coordinator relayed them.
+## User decisions (all explicit, dated 2026-09-30)
 
-## User decisions recorded 2026-09-30 (from the user in chat)
+`decisions.md` is the source. Every decision is resolved, and none is a
+default.
 
 | ID | Decision | Where recorded |
 | --- | --- | --- |
-| D-1 | IAM auth for Valkey/Redis. The RBAC password and its rotation Lambda are removed; a `default` user with access string `off` stays. | `prd.md:285`, `architecture.md:101` |
-| D-2 | Recorded risk acceptance for ALB→task HTTP in TEST; in-container TLS in PROD before gate 2. | `prd.md` §6 D-2 row, `prd.md:157` (FR-19) |
-| D-3 | REST API + WAF. VPC link V2 directly to the ALB (V-10), NLB only as a reviewed fallback. | `prd.md` §6 D-3 row, `prd.md:176` (FR-28), `architecture.md:537` |
-| D-6 | Two gates approved by the user; `@Kravalg` approval of the README source PR is still required. | `prd.md` §6 D-6 row, `prd.md:293` (§6.1) |
-| D-4, D-5 | Defaults kept, marked "pending explicit user confirmation". Not decided. | `prd.md` §6 |
-| D-7 | No default. An explicit decision is required before any abandon implementation. | `prd.md:291` |
+| D-1 | IAM auth for Valkey/Redis | `decisions.md:7`; `prd.md:319`; `architecture.md` AD-02 |
+| D-2 | TEST risk acceptance; in-container TLS in PROD before gate 2 | `decisions.md:8`; `prd.md:320`, `:189` (FR-19) |
+| D-3 | REST API + WAF, VPC link V2 → ALB | `decisions.md:9`; `prd.md:321`, `:208` (FR-28) |
+| D-4 | Runtime CMK for secrets, every workload log group and the flow-log bucket (SSE-KMS); logs and delivery principals; separate JWT and 2FA CMKs; the DocumentDB master secret on the AWS key | `decisions.md:10`; `prd.md:322`, `:109` (FR-10), `:185` (FR-15); `architecture.md:413` (AD-15a) |
+| D-5 | 90 days for `APP_SECRET` and `OAUTH_ENCRYPTION_KEY`, with forced re-login; `OAUTH_PASSPHRASE` retired by S1.8, not rotated; DocumentDB 7-day managed rotation | `decisions.md:11`; `prd.md:323`, `:104` (FR-05); `epics-stories.md:1254` (S5.15 dropped) |
+| D-6 | Two gates; `@Kravalg` approval of the README PR still required | `prd.md:324` |
+| D-7 | TEST abandon via a Kravalg-approved manifest and a saved-plan destroy | `decisions.md:13`; `prd.md:325`, `:196` (FR-21), `:197` (FR-22) |
 
-## Round-3 finding → resolution map
+## Round-4 finding → resolution map
 
-Line numbers refer to revision 3 of each file.
+Line numbers refer to revision 4. "Source" is the repository file and lines
+each fix was checked against, at `1ebbd09`.
 
-| Finding | Resolution | Location |
-| --- | --- | --- |
-| B-1 Redis rotation Lambda network path; APIs of every VPC Lambda | Resolved by D-1: no Redis secret, rotation Lambda or rotation SG. New table lists every function and task, the APIs it calls and its network path (DocumentDB-managed rotation is AWS-managed; app rotation, seed and redeploy run outside the VPC; the bootstrap job needs only the `secretsmanager` endpoint and the DocumentDB port, no STS or docdb API). | `architecture.md:64`; `prd.md:101` (FR-04); `prd.md:156` (FR-18) |
-| B-2 Preview and drift roles cannot read workload types | New FR-33 and BI story S5.17 in C-BI; S4.6 preconditions and step 3 depend on it; simulator-matrix regression for both roles. | `prd.md:181`; `epics-stories.md:710`; `architecture.md:439`; `epics-stories.md:600`, `:619` |
-| M-1 No closed list of out-of-band fields | FR-32, AD-23 per-type list (ECS `desiredCount`; TEST autoscaling min/max; DocumentDB `masterUserSecrets[*].secretStatus`; none for ElastiCache users), C-contract story S1.11 with N1–N3 tests; V-13 on `--refresh --expect-no-changes`. | `prd.md:180`; `architecture.md:415`; `epics-stories.md:255`; `architecture.md:540` |
-| M-2 Managed-secret ARN and bootstrap-job SG missing from XP-8; wrong claims | XP-8 now carries subnet IDs, bootstrap-job SG ID and the DocumentDB-managed secret ARN; exact-ARN (plus V-19 tag) grant after step 1; the "patterns need no apply output" claim is corrected. | `prd.md:332`; `architecture.md:221`; `epics-stories.md:715` (S5.5) |
-| M-3 C-BI order: keys before roles | S5.1 creates every role with no KMS statements; S5.4 creates keys naming only existing roles, then the KMS identity statements; S5.3 functions reuse S5.1 roles. | `architecture.md:439`; `epics-stories.md:708`, `:711` |
-| M-4 V-items lack method and live placement | V table with method, offline story, live S4.6 step and STOP/fallback for V-1…V-20; S4.6 steps name their V-items and STOP rules. | `architecture.md:521`; `epics-stories.md:597` |
-| M-5 Recovery abandon/import outside saved plans | Import and abandon run as saved plans through the classifier; the removal plan's destructive steps must equal the manifest 1:1; the AGENTS.md rule-14a text, runbook and grants are explicit and happen only if D-7 decides so. | `architecture.md:307`, `:319`, `:328`; `prd.md:164` (FR-21), `:165` (FR-22) |
-| M-6 No per-secret recovery decision | `secret_recovery_decision` per secret (`retain` or `schedule-deletion` 7–30 d; `force-delete` refused), recovery-role grant with condition keys (V-15), P/N/B cases. | `architecture.md:323`; `epics-stories.md:521`; `epics-stories.md:713` (S5.7); `prd.md` §5.1 FR-21 row |
-| M-7 Endpoint policies not pinned; ECR layer bucket missing | AD-12a exact documents per endpoint, including the S3 gateway statement for `prod-<region>-starport-layer-bucket`; pack passes unmodified or through `reviewed_iam_documents` pins extended to `VpcEndpoint`; S3.3 P/N/B tests. | `architecture.md:268`; `prd.md:155` (FR-17); `epics-stories.md:427` |
-| M-8 Seed not idempotent; Invocation replacement not critical | Seed returns `noop` when AWSCURRENT exists; input fixed to `{secret_arn, purpose}`; `aws:lambda/invocation:Invocation` added to `CRITICAL_TYPE_PATTERNS`; V-18. | `architecture.md:165`; `prd.md:102` (FR-05); `epics-stories.md:278` |
-| M-9 No BI identity for PROD recovery and restore rehearsal | S5.18 restore-rehearsal identity, reader Lambda, network and grants; S5.19 `prod-recovery`; both in C-BI and in the ordered list. | `epics-stories.md:714`, `:717`; `architecture.md:64` (reader rows) |
-| M-10 Defaults counted as resolutions; D-6 scope | "Resolved" defined as an explicit dated user decision; no default for D-6 or D-7; FR-31 gate 1 lists the applicable decisions; §6.1 lists what D-6 relaxes and keeps. | `prd.md:276`, `:291`, `:293`; `prd.md:179` (FR-31) |
-| M-11 Gate 2 lacks gate-1 checks and a receipt schema | Gate 2 re-checks every gate-1 condition and requires a schema-validated sanitized receipt (run IDs, SHA, approver ≠ requester, hashes); N test for placeholder links. | `prd.md:179`, `:184`; `architecture.md:398`; `epics-stories.md:686` |
-| M-12 Step-2 admission undefined; admission in non-contract stories | FR-34 and AD-18 define the create-only `step2` mode and its preconditions; new C-contract story S4.9 holds the step-2 and multi-arch admission moved out of S1.3 and S2.6. | `prd.md:182`; `architecture.md:364`; `epics-stories.md:550`; `epics-stories.md:184`, `:391` |
-| M-13 Live-evidence counts wrong; NFR-06 simulate offline only | Recounted from the tables: 45 requirements, 40 offline-testable, 5 evidence-only NFRs, 33 FRs with live evidence (all but FR-29); NFR-06 is offline + live; `test_prd_counts` guards the numbers. | `prd.md:41`; `prd.md:209` (NFR-06) |
-| m-1 Missing boundary and negative cells | Every §5.1 and §5.2 row now has P, N and B cells. | `prd.md` §5 (from line 216), `:260` (§5.2) |
-| m-2 NFR-05 measure undefined | Measure defined: 13 h soak with zero IAM-path auth failures; single-key window W with the 5xx alarm and counted failures. | `prd.md:208` |
-| m-3 Alarm fixtures for `AWSService`, denied calls, name vs ARN | PRD §3.2 matching rules; FR-13 N/B fixtures; S2.5 P1–P4, N1–N2, B1–B2. | `prd.md:134`; `prd.md:237`; `epics-stories.md:374` |
-| m-4 FR-24 margins | 300 s margin: process ≤ 3000 s, window ≤ 3300 s; boundary 3000/3001. | `prd.md:167`; `prd.md:248` |
-| m-5 Flow-log bucket encryption, delivery principal, `DeleteLogDelivery` | FR-15 names SSE-S3 default, SSE-KMS key-policy terms, the delivery bucket policy and `logs:DeleteLogDelivery`; V-16. | `prd.md:153`; `epics-stories.md:413` |
-| m-6 FR-02 N case for unsupported engine | FR-02 raises for non-5.0 or elastic; §5.1 N cell; V-17. | `prd.md:99`, `:226` |
-| m-7 AD-06 vs AD-18 ordering; step-2 health observation | AD-06 step-2 order; task definitions unchanged in step 2; AD-18 item 4 health observation; S4.6 step 7. | `architecture.md:165`, `:381`; `epics-stories.md:634` |
-| m-8 S5.2 details | SLR creation with `iam:AWSServiceName`, attachment quota and policy size, `RotationLambdaARN`, and write denies for non-rotation principals (FR-07 resource policy plus the S5.2 denies). | `epics-stories.md:709`; `architecture.md:507`; `prd.md:104` (FR-07) |
-| m-9 FR-28 live evidence unscheduled | S4.6 step 17; gate 2 requires it if PROD is public. | `epics-stories.md:660`; `prd.md:176` |
-| m-10 `readiness.md` authorship and staleness; run-summary checklist | This file states its author and PENDING status; `run-summary.md` has an acceptance checklist. | this file (front matter); `run-summary.md` |
-| m-11 Brief success metric 2 incoherent | Rewritten: rotation window, 5xx alarm does not fire, forced re-login per D-5. | `brief.md:67` |
-| m-12 "every offline story above" | Replaced by an explicit gate-1 story, BI, decision and prerequisite list. | `epics-stories.md:600` |
-| Added V-items (A-16, `StsGetCallerIdentityCalls`, A-20) | V-10 (REST VPC link V2 → ALB, docs and provider source verified 2026-09-30), V-11, V-12 (SES API endpoint now exists; A-20 corrected). | `architecture.md:537`–`:539` (V-10…V-12); `research.md:266`, `:270`, `:274` |
+| Finding | Resolution | Location | Source checked |
+| --- | --- | --- | --- |
+| R4-B1 D-4/D-5/D-7 not carried; abandon conditional | Every artifact records dated resolutions, and no "pending", "default" or "only if D-7" remains. TEST abandon is unconditional in FR-21, FR-22, NFR-09, AD-16, S4.2, S4.3, S5.7 and the ordered list. S5.15 is dropped. `decisions.md` is hashed in `run-summary.md`. | `prd.md:104,109,196,197,245,322-325`; `architecture.md:47,445,565`; `epics-stories.md:17,298,258,741,826,1236,1238,1254,1284`; `brief.md:142`; `research.md` §4 | `decisions.md` |
+| R4-B2 runner admits only the first apply | FR-35 and AD-24 cover the runner, admission observation, worker, workflow and docs. There is a receipt after every admitted apply (success or failed), plus the export and abandon receipts. The mode → anchor table covers `first`, `resume` (failed or export receipt), `step2`, `rollback-zero`, `policy-update`, recovery and `drift`. The mode comes from the reviewed contract field `workload_operation`. The C-runner chain is S4.4 → S4.5 → S4.11 → S4.12 → S4.13 → S4.14, before S4.6. The reviewed amendment covers README line 127, runner spec lines 37-40, log-health line 57, and test lines 175 and 185. Regression tests are listed. | `prd.md:215`; `architecture.md:720,769,911`; `epics-stories.md:705,879,901,940` | `scripts/poc_workload_runner.py:44-47,53,61,154,170-176`; `scripts/poc_workload_admission.py:150-166,464-475`; `scripts/service_execution_worker.py:5,25-30,90-94,99`; `.github/workflows/self-deploy.yml`; `specs/poc-workload-runner.md:37-40`; `specs/poc/README.md:95,127`; `docs/poc-workload-log-health.md:57`; `tests/unit/test_workload_apply_docs_consistency.py:175,185`; `tests/unit/test_service_execution_worker.py:166` |
+| R4-B3 `secretsmanager` endpoint policy cycle | Two deterministic statements: declared names `-??????`, and `secret:rds!cluster-*` with `aws:PrincipalArn` limited to the bootstrap-job and restore-reader roles (both created in S5.1, row 8) plus `aws:PrincipalAccount`. There is no XP-8 value, so the pin is offline. S3.3 tests: reader allowed; execution role, task role and foreign account denied. | `architecture.md:364,932`; `prd.md:187`; `epics-stories.md:510,1233` | `policy/guardrails.py:487-511` |
+| R4-M1 no topology owner | AD-25 and S4.10 make one C-topology writer for the topology (both stacks), the secret-history checker, the native integration test, the pins and `recovery/delete-actions.json`. The transition rule keeps S1.1's generators and pins in the pre-hardening branch. | `architecture.md:834,884,910`; `epics-stories.md:645,126` | `scripts/poc_workload_topology.py:21-50,61,142-300,859,1058,1099-1170`; `scripts/poc_workload_secret_result.py:121-135`; `specs/poc-workload-runner.md:79-82,89-98`; `tests/integration/test_poc_first_topology_native.py:101,105`; `pyproject.toml:16-17`; `scripts/poc_provider_runtime.py:56,62` |
+| R4-M2/M3 D-4/D-5 scope | FR-10 and FR-15 (SSE-KMS, no SSE-S3 fallback); V-16 STOP; the AD-15a principals; `kms_key_id` on every log group, including the pre-created Container Insights group; the topology | `prd.md:109,185`; `architecture.md:413,1046`; `epics-stories.md:353,258,493,1236` | `pulumi/app/compute.py:213-217` |
+| R4-M4 abandon | Only `delete`/`same` ops are allowed, and every `delete` of every type matches the manifest 1:1 (not `find_destructive_steps`). The identity is `GitHubCiRecovery-user-service-infrastructure-test`, with lock-prefix-only object delete, `rds:ModifyDBCluster` on `user-service-infrastructure-test-docdb`, and provider-derived delete sets (V-26). The log buckets are always `retain`. Kravalg approval is enforced by the sole-reviewer environment (S5.21), the in-run approvals API check and the required check (S5.22). The rehearsal runs at steps 18–20, after 14–17, with BI ENI detach and a rebuild variant. | `prd.md:196,197`; `architecture.md:445,464,482,493,546,574,582,592`; `epics-stories.md:741,826,1149,1156,1166,1238,1242,1243` | `scripts/pulumi_ci_guardrails.py:16-30,115-125`; `scripts/poc_registry_plan.py:21,57`; `.github/CODEOWNERS`; `AGENTS.md:157-159`; BI @debd88b `scripts/_github_repository_controls.py:308-319`, `scripts/_github_environment_controls.py:36-49` |
+| R4-M5 0-task start and stop | V-23; a create-only one-time start action (A-26); `rollback-zero` = stop or start action plus only the target's `suspendedState` update; the `start_at` window; TEST schedules in the step-2 set; the consumed-action fallback | `prd.md:115,214`; `architecture.md:287,316,701,1053`; `epics-stories.md:375,784` | `research.md:276` (AWS docs, 2026-09-30) |
+| R4-M6 V-3 fallback | Three `documentdb_secret_policy` states; update-only `policy-update`; never deleted by an apply mode | `prd.md:106`; `architecture.md:235,1033`; `epics-stories.md:332,784` | — |
+| R4-M7 S5.18 split | S5.18a (grants, no VPC) at row 42; S5.18b after XP-8 (step 5; detach at step 18, re-attach at step 20) | `epics-stories.md:1239,1240`; `architecture.md:908`; `prd.md:367` | — |
+| R4-M8 per-key table | AD-15a: the execution role has `kms:Decrypt` with `kms:ViaService` secretsmanager and a `SecretARN` context. The logs part is checked live by V-25, with a reviewed fallback row. There is an exercise-role S3 row. | `architecture.md:413,1055`; `epics-stories.md:1236` | `research.md:278` |
+| R4-M9 managed-password and restore grants | A-27 (aws-knowledge docs, 2026-09-30: RDS and Aurora document `CreateSecret`, `TagResource` and `kms:DescribeKey`; the DocumentDB page is silent) is checked by V-21 and V-22. The grants are in S5.2, S5.5 and S5.18a. | `architecture.md:80,81,994,1051,1052`; `epics-stories.md:1234,1239` | `research.md:277` |
+| R4-M10 runner prerequisites | XP-9…XP-13 are gate-1 checks; XP-14 (PROD registry) is a gate-2 check | `prd.md:211,391,409`; `architecture.md:671`; `epics-stories.md:1023` | `specs/poc/README.md:107-128`; `scripts/poc_workload_runner.py:170-176`; `specs/poc-workload-runner.md:110-113` |
+| m1 PROD-shaped preview | S3.5-A is at row 25; P-1 is the PROD `plan` under gate 2a | `epics-stories.md:584,1214`; `prd.md:189` | — |
+| m2 state scan; FR-14 | Steps 4a and 7a; FR-14 live evidence is the observed scheduled scale-down | `epics-stories.md:1063`; `prd.md:237` | — |
+| m3 allow-lists per event type | PRD §3.2a (`PutResourcePolicy`, `RotateSecret`, `DeleteResourcePolicy`, `DeleteSecret`, `RestoreSecret`, managed secrets); S2.5 has P/N cases per row | `prd.md:155`; `architecture.md:258`; `epics-stories.md:432` | — |
+| m4 first-deployment rollback | `rollback-zero` until an accepted release exists | `prd.md:210`; `architecture.md:649` | — |
+| m5 V-15 in S5.7 | Cited | `epics-stories.md:1238`; `architecture.md:1045` | — |
+| m6 simulator identity | The preview role, with an S5.17 grant on the exact role ARNs; other live actions use the S5.23 exercise role | `prd.md:207`; `epics-stories.md:1045,1235,1244` | — |
+| m7 KMS read timing | The preview and drift KMS read is in S5.4 on the exact key ARNs | `prd.md:213`; `epics-stories.md:1235,1236` | — |
+| m8 XP-8 dependents | Exactly three BI dependents, plus the USI contract PR (step 5b) | `prd.md:367`; `epics-stories.md:1073` | — |
+| m9 VpcEndpoint pin identity | `aws:ec2/vpcEndpoint:VpcEndpoint|<serviceName>|<tags.Name>`, fail-closed, with one digest per endpoint per environment | `architecture.md:376`; `epics-stories.md:523` | `policy/reviewed_iam.py:29-42,108-132`; `policy/vilnacrm_guardrails.yaml` |
+| m10 run-summary | Parent `1ebbd09` and the `decisions.md` hash are recorded | `run-summary.md` | — |
+| m11 Kravalg-only approvals | S5.21 (sole reviewer, `prevent_self_review`, no bypass); read-only check at step 1 | `epics-stories.md:1242,1035` | BI `scripts/_github_repository_controls.py:308-319`; `AGENTS.md:157-159` |
+| m12 egress inventory | `docs/poc-egress-inventory.md` comes first in S3.4; STOP at step 12 | `prd.md:188`; `epics-stories.md:552,1117` | — |
+
+**Classifier gap found while checking source.** `CRITICAL_TYPE_PATTERNS`
+(`scripts/pulumi_ci_guardrails.py:17-30`) has no `aws:docdb/` and no
+`aws:s3/bucketV2:` pattern. S1.6 adds both (`epics-stories.md:314`;
+`research.md:326`).
+
+**Author-side audit additions (33 defects, all fixed).**
+
+- The admission, worker and workflow scope of the runner lifecycle.
+- Resume from a failed step 1, and per-apply anchors.
+- The rebuild variant with retained secrets.
+- The S1.1 pins kept until S4.10.
+- The ordered-list forward dependencies, removed by the new C-contract
+  order S4.10 → S4.11 → S4.2 → S4.9 → S4.3 → S4.12 … S4.15.
+- The PROD topology (S4.10) and the PROD registry (XP-14).
+- The AD-04 `central` fields.
+- The lock-prefix delete and the real resource names.
+- The provider-derived delete sets (V-26).
+- The TEST schedule vs `rollback-zero` conflict (`suspendedState`).
+- Named identities for every live action (S5.23, S4.16).
+- A STOP rule on every S4.6 step.
+- The receipt validator and the two-gate test (S4.15), with gate 2a/2b and
+  P-1.
+- The V-23(c) consumed-action handling.
+- A single owner for `prod-recovery` (S5.19).
+- The Container Insights log group.
+- The `policy-update` scope.
+- The apply-role delete grants removed.
+- The §3.2a and S2.5 coverage.
+- The research wording, the soak window, the `start_at` window and the step
+  5b contract PR.
 
 ## Unresolved external prerequisites
 
@@ -86,45 +122,43 @@ These are recorded gates, not planning defects.
 
 - **XP-1.** Central roles: the source (`d41c019`) is not in the local
   bootstrap clone.
-- **XP-2.** N-11 apply-role capability; preview and drift read (S5.17).
-- **XP-3.** CMKs, functions, restore-rehearsal identity, CloudTrail read
-  events.
-- **XP-4.** user-service work: #501 (still OPEN), non-root, MONGODB-AWS (V-1),
-  the Redis IAM token provider (V-2), KMS signing and 2FA, in-container TLS
-  for PROD, multi-arch images.
-- **XP-5.** The AGI front door. The repository is still a scaffold.
+- **XP-2 / XP-3.** The BI capability, KMS, function, restore, recovery,
+  exercise and environment stories.
+- **XP-4.** user-service work.
+- **XP-5.** The AGI front door.
 - **XP-6.** The SNS subscription endpoint.
 - **XP-7.** `.claude/devops-sdlc.json` is absent, so `validate-profile`
-  returned BLOCKED. `do-sdlc-setup` must run before implementation.
-- **XP-8.** Post-step-1 subnet IDs, bootstrap-job SG ID and DocumentDB-managed
-  secret ARN for BI.
+  returned BLOCKED.
+- **XP-8.** The post-step-1 metadata.
+- **XP-9 … XP-13.** The existing runner prerequisites.
+- **XP-14.** The PROD registry phase (outside this plan; gate 2).
 
 ## Remaining user decisions
 
-| ID | Needed before | State |
+None are open for planning. Three conditional decisions arise only if a live
+check fails:
+
+| ID | Trigger | State |
 | --- | --- | --- |
-| D-4 CMK scope | gate 1 (S1.9, S5.4) | default pending explicit confirmation |
-| D-5 rotation cadence and impact | gate 1 (S1.6) | default pending explicit confirmation |
-| D-7 abandon authority | any abandon implementation; gate 1 | open, no default |
-| D-6 governance | S4.6 step 1 | user-approved; needs `@Kravalg` approval of the README PR |
-| Conditional: V-1 fails | step 2 retry | would need a new decision (app DB user with a rotated password) |
-| Conditional: V-5 requires a `default` password | step 1 retry | would need a new decision (no Pulumi-generated password allowed) |
+| Conditional: V-1 fails | step-2 health (step 7) | a new decision would be needed (an app DB user with a rotated password) |
+| Conditional: V-5 requires a `default` password | step 1 | a new decision would be needed (no Pulumi-generated password allowed) |
+| Conditional: V-16 fails with SSE-KMS | step 12 | SSE-S3 would contradict D-4, so a new decision would be needed |
 
 ## Skill applicability (devops-sdlc 14)
 
 **Applicable and addressed:**
 
-- security-iam
-- state-migration
-- observability
+- security-iam (AD-15a, S5.x)
+- state-migration (AD-16, AD-25)
+- observability (§3.2a)
 - cost-optimization
-- backup-recovery (S4.8, S5.18)
-- delivery-and-rollback (AD-19)
-- drift-management (FR-32, S1.11, S5.17)
+- backup-recovery (S4.8, S5.18a/b)
+- delivery-and-rollback (AD-19, AD-24)
+- drift-management (FR-32, S1.11, S4.13)
 - python-pulumi
 - infrastructure-quality
 - evidence-and-coverage
-- environment-lifecycle (PROD gate)
+- environment-lifecycle (gate 2a/2b, S4.14)
 - incident-response (runbooks in S2.4)
 - bmad-autonomous-planning
 

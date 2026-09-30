@@ -7,7 +7,7 @@ branch: feat/workload-wa-hardening
 source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa (PR #56 head)
 date: 2026-09-30
 status: planning-only
-revision: 3 (A-16 and A-20 re-verified 2026-09-30; A-23..A-25 added; D-1, D-2, D-3 decided by the user)
+revision: 4 (A-26..A-28 added and verified 2026-09-30; D-1…D-7 decided by the user)
 ---
 
 # Technical research: Well-Architected hardening of the user-service ECS workload
@@ -273,20 +273,23 @@ Constraints on the evidence:
 | A-23 | ElastiCache IAM auth limits (re-verified 2026-09-30): TLS required; token valid 15 min (and not beyond the signing credentials' expiry); connection disconnected after 12 h unless `AUTH`/`HELLO` with a new token; no re-auth inside `MULTI`/`EXEC` or Lua; username = user id; for replication groups only `aws:SourceIp` and `aws:ResourceTag/*` conditions; cache names are lower case. Revoking `elasticache:Connect` does not drop open sessions; removing the user from the group does. | [AWS] AmazonElastiCache/latest/dg/auth-iam.html; connecting-public-endpoint.html |
 | A-24 | DocumentDB publishes `StsGetCallerIdentityCalls` (calls the instance makes to regional STS for `MONGODB-AWS`), and the audit log records `mechanism = MONGODB-AWS`. | [AWS] documentdb/latest/devguide/iam-identity-auth.html |
 | A-25 | With `manage_master_user_password`, DocumentDB rotates the primary secret itself (default 7 days); no customer Lambda is deployed. | [AWS] secretsmanager integrating_how-services-use-secrets_DocDB; CDK docdb README |
+| A-26 | Verified 2026-09-30. An Application Auto Scaling one-time scheduled action (`at(yyyy-mm-ddThh:mm:ss)`) scales out to `MinCapacity` when current capacity is below it, and scales in to `MaxCapacity` when current capacity is above it. When the maximum is below the new minimum, both must be set. Registering a new minimum stops scale-in below it. The docs do not say whether the registration alone scales out a service at 0 tasks, or whether a fired one-time action stays listed; V-23 checks both. Deregistering a target deletes its scheduled actions. | [AWS] autoscaling/application/userguide/create-scheduled-actions.html; PutScheduledAction API; repost ecs-running-task-count-change |
+| A-27 | Verified 2026-09-30. For RDS and Aurora, the principal that sets `ManageMasterUserPassword` on create, modify or restore needs `kms:DescribeKey`, `secretsmanager:CreateSecret` and `secretsmanager:TagResource`, plus `kms:Decrypt`, `kms:GenerateDataKey` and `kms:CreateGrant` when it names a customer-managed key. The DocumentDB page documents the feature (7-day default rotation; deleting the cluster deletes the secret; an `rds:ManageMasterUserPassword` condition key) but not the caller permissions. V-21 and V-22 confirm them live. | [AWS] AmazonRDS/latest/UserGuide/rds-secrets-manager.html; AuroraUserGuide/rds-secrets-manager.html; documentdb/latest/devguide/docdb-secrets-manager.html |
+| A-28 | Verified 2026-09-30. The principal that calls `CreateLogGroup` with `kmsKeyId` (or `AssociateKmsKey`) needs `kms:DescribeKey` on the key, which can be limited with `kms:ViaService=logs.<region>.amazonaws.com`. The key policy must let the CloudWatch Logs service principal use the key, limited by `kms:EncryptionContext:aws:logs:arn`. The docs name no KMS permission for callers of `PutLogEvents`; V-25 checks this live. | [AWS] AmazonCloudWatch/latest/logs/encrypt-log-data-kms.html |
 
 ## 4. Options analysis
 
-| Topic | Options | Recommendation (default until the user decides) |
+| Topic | Options | Recommendation, or the user decision where one exists (all decisions dated 2026-09-30; `decisions.md`) |
 | --- | --- | --- |
 | DocumentDB auth | (a) primary user via secret (today); (b) DocumentDB-managed primary + app user password rotated by Lambda; (c) DocumentDB-managed primary + IAM (`MONGODB-AWS`) app user | (c). No app password exists at all. It needs a reviewed one-time `$external` bootstrap job and a TEST check of ext-mongodb 2.4.1 container credentials. |
 | Redis auth (**D-1**) | (a) IAM auth: phpredis token provider needed (user-service change), 12 h re-auth; (b) RBAC user, password rotated by a reviewed Lambda with dual passwords, URL delivered through a JSON key; (c) keep AUTH token rotation (`ROTATE`/`SET`) | **Decided by the user 2026-09-30: (a) IAM auth.** It removes the Redis secret, the VPC rotation Lambda and its network path. |
-| App secrets | Reviewed rotation Lambda plus a `RotationSucceeded` → ECS force-new-deployment hook | Adopted. The rotation impact on sessions and tokens is recorded (D-5). |
+| App secrets | Reviewed rotation Lambda plus a `RotationSucceeded` → ECS force-new-deployment hook | Adopted. **Decided by the user 2026-09-30 (D-5, clarified):** `APP_SECRET` and `OAUTH_ENCRYPTION_KEY` rotate every 90 days, and forced re-login is accepted. `OAUTH_PASSPHRASE` is retired by the KMS JWT move, not rotated. |
 | JWT keys, 2FA key | Stay in Secrets Manager (not rotatable without breakage), or KMS asymmetric sign and KMS encrypt | KMS. This needs user-service stories. |
 | Function ownership | This repo, or bootstrap-infrastructure | bootstrap-infrastructure, because of R-16 and the no-IAM rule. |
 | ALB→task TLS (**D-2**) | (a) HTTPS target group with in-container TLS (Caddy internal cert, port 8443); (b) recorded acceptance citing A-14 | **Decided by the user 2026-09-30:** (b) for TEST; (a) required in PROD before gate 2. |
-| WAF (**D-3**) | (a) REST API + WAF + VPC link V2 → ALB; (b) HTTP API, with WAF on the internal ALB; (c) CloudFront + WAF → HTTP API | **Decided by the user 2026-09-30: (a)**, with VPC link V2 directly to the ALB (A-16), no NLB. Under (b) the ALB sees the VPC-link ENI IPs, so IP reputation and rate rules need `forwarded_ip_config` and a spoofing analysis. (c) is rejected, because origin lock-down needs a long-lived shared header secret. |
-| CMK scope (**D-4**) | (a) AWS-managed keys; (b) one bootstrap-owned symmetric CMK per environment for runtime secrets, plus an asymmetric JWT CMK and a symmetric 2FA CMK; (c) per-purpose CMKs | (b), a default pending explicit user confirmation. The DocumentDB-managed secret stays on `aws/secretsmanager` until the provider supports `master_user_secret_kms_key_id` (A-05). |
-| Flow logs | S3 or CloudWatch Logs | S3, because no IAM role is needed (A-18). |
+| WAF (**D-3**) | (a) REST API + WAF + VPC link V2 → ALB; (b) HTTP API, with WAF on the internal ALB; (c) CloudFront + WAF → HTTP API | **Decided by the user 2026-09-30: (a)**, with VPC link V2 directly to the ALB (A-16). An NLB → ALB integration is used only as the reviewed V-10 fallback. Under (b) the ALB sees the VPC-link ENI IPs, so IP reputation and rate rules need `forwarded_ip_config` and a spoofing analysis. (c) is rejected, because origin lock-down needs a long-lived shared header secret. |
+| CMK scope (**D-4**) | (a) AWS-managed keys; (b) one bootstrap-owned symmetric CMK per environment for runtime secrets, plus an asymmetric JWT CMK and a symmetric 2FA CMK; (c) per-purpose CMKs | **Decided by the user 2026-09-30 (D-4, clarified): (b)**, with the runtime CMK also encrypting every workload CloudWatch log group and the flow-log bucket (SSE-KMS). The DocumentDB-managed secret stays on `aws/secretsmanager` (A-05). |
+| Flow logs | S3 or CloudWatch Logs | S3, because no IAM role is needed (A-18). Encryption is SSE-KMS with the runtime CMK (D-4). |
 | Egress | SG-only tightening; Network Firewall or DNS Firewall | SG tightening plus VPC endpoints, including the SES API endpoint if V-12 passes, which removes the last `0.0.0.0/0` rule. FQDN filtering is deferred for cost reasons and recorded. |
 
 ## 5. Risks discovered
@@ -314,6 +317,19 @@ Constraints on the evidence:
    Until FR-33 lands, no workload preview or drift check can be relied on.
 9. **Managed-secret ARN.** The DocumentDB-managed secret name is not
    deterministic, so the bootstrap-job grant must wait for XP-8.
-10. **Non-root image.** Moving to non-root needs the port moved to ≥1024 and the
+10. **Runner lifecycle (readiness round 4).** The installed
+    `scripts/poc_workload_runner.py` admits only the first apply. It binds the
+    checkpoint to the registry anchor (lines 44-47), calls only
+    `admit_first_workload_plan` (line 61), is TEST-only (line 53) and refuses
+    drift (line 154). Step 2, resume, rollback and drift need the FR-35
+    C-runner chain.
+11. **Classifier gaps (readiness round 4).** `CRITICAL_TYPE_PATTERNS` in
+    `scripts/pulumi_ci_guardrails.py` (lines 17-30) has `aws:rds/` but not
+    `aws:docdb/`, and has `aws:s3/bucket:Bucket` but not
+    `aws:s3/bucketV2:BucketV2`. So a DocumentDB or access-log bucket delete is
+    not classified critical today. Pulumi `protect` still blocks it. S1.6 adds
+    both patterns, and the abandon comparison does not rely on the classifier
+    (FR-21).
+12. **Non-root image.** Moving to non-root needs the port moved to ≥1024 and the
    supervisor socket re-owned. This is a coordinated change across
    user-service and this repository.

@@ -4,7 +4,7 @@ workflow: _bmad/bmm/workflows/1-analysis/bmad-create-product-brief (Create mode,
 task: workload-wa-hardening
 source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa
 date: 2026-09-30
-revision: 3 (success metric 2 corrected; user decisions of 2026-09-30 applied)
+revision: 4 (decisions D-1…D-7 of 2026-09-30 applied, including the D-4 and D-5 clarifications)
 inputDocuments: [specs/poc/README.md, specs/poc/secret-lifecycle.md, docs/poc-workload-recovery.md, research.md]
 ---
 
@@ -66,8 +66,9 @@ safe to deploy. The main problems:
    resource. USI owns no `SecretVersion` at all.
 2. **Rotation works with no downtime.**
    - Every remaining app secret (`APP_SECRET`, `OAUTH_ENCRYPTION_KEY`) has
-     rotation enabled; the DocumentDB primary password rotates under
-     DocumentDB management.
+     rotation enabled every 90 days (D-5); the DocumentDB primary password
+     rotates under DocumentDB management (7 days); `OAUTH_PASSPHRASE` no
+     longer exists (retired by the KMS JWT move).
    - A forced rotation in TEST completes (`RotationSucceeded`) and produces a
      new ECS deployment.
    - In the rotation window (from `RotationSucceeded` to deployment
@@ -83,9 +84,10 @@ safe to deploy. The main problems:
    and fires in a controlled TEST exercise.
 6. **Network hardening.** Flow logs are delivered. The default SG has no rules.
    Security groups have no `0.0.0.0/0` all-protocol egress.
-7. **Recovery rehearsal.** In TEST, a deliberately interrupted first apply is
-   recovered or abandoned through the reviewed command, with before and after
-   evidence.
+7. **Recovery rehearsal.** In TEST, a deliberately interrupted apply is
+   resumed through the reviewed command. At the end of the campaign, the stack
+   is abandoned through a Kravalg-approved manifest (D-7) and rebuilt. Both
+   runs have before and after evidence.
 8. **Timing.** A measured first create finishes ≤ 3300 s process time and
    ≤ 3600 s from OIDC issuance to observation with a 300 s margin
    (≤ 3000 s and ≤ 3300 s, PRD FR-24), or the bootstrap `MaxSessionDuration`
@@ -137,9 +139,21 @@ Each assumption is recorded and none changes scope.
   (≥7.2) move keeps IAM auth (D-1).
 - **AS-3.** The service stays on the private gateway topology: internal ALB
   behind an API Gateway VPC link.
-- **AS-4.** User decisions are recorded in `prd.md` §6. On 2026-09-30 the user
-  resolved D-1 (IAM auth), D-2 (TEST risk acceptance; in-container TLS in
-  PROD before gate 2) and D-3 (REST API + WAF), and approved D-6 (two gates,
-  pending `@Kravalg` approval of the README PR). D-4 and D-5 are defaults
-  pending explicit confirmation; D-7 is open with no default. A default is not
-  a resolution and never authorizes a live action.
+- **AS-4.** User decisions are recorded in `decisions.md` and `prd.md` §6.
+  On 2026-09-30 the user made these decisions:
+  - D-1: IAM auth.
+  - D-2: TEST risk acceptance; in-container TLS in PROD before gate 2.
+  - D-3: REST API + WAF.
+  - D-4 (clarified the same day): the runtime CMK encrypts the secrets, every
+    workload CloudWatch log group and the flow-log bucket; separate JWT and
+    2FA CMKs; the DocumentDB master secret stays on the AWS key.
+  - D-5 (clarified the same day): `APP_SECRET` and `OAUTH_ENCRYPTION_KEY`
+    rotate every 90 days, and forced re-login is accepted. `OAUTH_PASSPHRASE`
+    is retired by the KMS JWT move, not rotated. The DocumentDB master
+    password keeps the AWS-managed 7-day rotation.
+  - D-6: two gates approved. `@Kravalg` approval of the README PR is still
+    required.
+  - D-7: TEST-only abandon through a Kravalg-approved manifest.
+
+  No decision is left at a default. A recorded decision never authorizes a
+  live action on its own.

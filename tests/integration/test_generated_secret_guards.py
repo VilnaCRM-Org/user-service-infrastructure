@@ -146,7 +146,8 @@ def test_hardened_redis_url_engine_and_lockout_guards():
     url = {"name": "REDIS_URL", "value": "rediss://a:6379"}
     same = [url, {"name": "REDIS_LOCKOUT_URL", "value": "rediss://a:6379"}]
     plain = [{"environment": same, "secrets": []}]
-    assert ComputePlane._serialize_container(plain) == json.dumps(plain)
+    serialized = ComputePlane._serialize_container(plain, unversioned=True)
+    assert serialized == json.dumps(plain)
     with pytest.raises(ValueError, match="REDIS_LOCKOUT_URL must equal"):
         ComputePlane._serialize_container(
             [
@@ -157,7 +158,8 @@ def test_hardened_redis_url_engine_and_lockout_guards():
                     ],
                     "secrets": [],
                 }
-            ]
+            ],
+            unversioned=True,
         )
 
 
@@ -185,12 +187,20 @@ def test_plain_environment_and_hardened_scale_guards(monkeypatch):
     with pytest.raises(ValueError, match="overlap"):
         compute.require_plain_environment(rows, [{"name": "APP_SECRET"}])
     # The native preview leaves the container JSON unknown, so serialize here.
-    plain = [{"environment": rows, "secrets": [{"name": "OTHER"}]}]
-    assert compute.ComputePlane._serialize_container(plain) == json.dumps(plain)
-    with pytest.raises(ValueError, match="overlap"):
-        compute.ComputePlane._serialize_container(
-            [{"environment": rows, "secrets": [{"name": "APP_SECRET"}]}]
-        )
+    plain = [{"environment": rows, "secrets": [{"name": "OTHER", "valueFrom": "x"}]}]
+    for unversioned in (False, True):
+        serialize = compute.ComputePlane._serialize_container
+        if unversioned:
+            with pytest.raises(ValueError, match="must not pin a version"):
+                serialize(plain, unversioned=unversioned)
+        else:
+            assert serialize(plain, unversioned=unversioned) == json.dumps(plain)
+        overlap = [{"environment": rows, "secrets": [{"name": "APP_SECRET"}]}]
+        with pytest.raises(ValueError, match="closed name pairs"):
+            serialize(overlap, unversioned=unversioned)
+        overlap[0]["secrets"][0]["valueFrom"] = SECRET_ARN
+        with pytest.raises(ValueError, match="overlap"):
+            serialize(overlap, unversioned=unversioned)
     fake = SimpleNamespace(apply=lambda callback: callback("https://sqs/queue"))
     monkeypatch.setattr(compute.pulumi.Output, "from_input", lambda _: fake)
     plane = object.__new__(compute.ComputePlane)
@@ -232,13 +242,15 @@ def _task(engine, environment, secrets=None):
 
 @pytest.mark.parametrize("engine", [False, True])
 def test_task_definition_property_check_reads_resolved_definitions(engine):
-    """The guard checks a resolved JSON string and defers an unresolved value."""
+    """The guard checks a resolved JSON string and refuses a plain map (F-01)."""
     from app.workload_phase import _reject_secret_material
 
     plain = [{"name": "APP_ENV", "value": "prod"}]
     secret = [{"name": "APP_SECRET", "valueFrom": SECRET_ARN}]
     assert _reject_secret_material(_task(engine, plain, secret)) is None
-    assert _reject_secret_material(_task(engine, None)) is None
+    # A map is no JSON string: it was never a deferral and now fails closed.
+    with pytest.raises(ValueError, match="unreviewed property"):
+        _reject_secret_material(_task(engine, None))
     for environment, secrets in (
         ([{"name": "APP_SECRET", "value": "x"}], secret),
         (plain, [{"name": "B", "valueFrom": SECRET_ARN + ":::" + "1" * 32}]),
@@ -279,3 +291,71 @@ def test_step_two_and_elastic_types_are_refused(step):
     for kind in STEP_TWO_TYPES:
         with pytest.raises(ValueError, match=message):
             _reject_secret_material(args(kind), step)
+
+
+@pytest.mark.parametrize("engine", [False, True])
+def test_s13_gate_property_checks_fail_closed(engine):
+    """F-01..F-03: the listener, secret, service and volume checks at the guard."""
+    from app.workload_phase import _reject_secret_material
+    from pulumi.runtime import rpc
+
+    import pulumi
+
+    def args(kind, props):
+        if not engine:
+            return _sdk_args(kind, props)
+        return pulumi.ResourceTransformArgs(
+            custom=True, type_=kind, name="probe", props=props, opts=None
+        )
+
+    listener, secret = "aws:lb/listener:Listener", "aws:secretsmanager/secret:Secret"
+    service, task = "aws:ecs/service:Service", "aws:ecs/taskDefinition:TaskDefinition"
+    plain = json.dumps([{"name": "f", "secrets": []}])
+    for kind, props in (
+        (listener, {}),
+        (listener, {"defaultActions": [{"type": "forward"}]}),
+        (service, {}),
+        (secret, {"name": "fixture"}),
+        (task, {"containerDefinitions": plain, "volumes": [{"name": "a"}]}),
+    ):
+        assert _reject_secret_material(args(kind, props)) is None
+    for kind, props in (
+        (listener, {"defaultActions": rpc.wrap_rpc_secret([])}),
+        (listener, {"defaultActions": [object()]}),
+        (listener, {"defaultActions": [{"authenticateOidc": {}}]}),
+        (service, {"serviceConnectConfiguration": {}}),
+        (secret, {"policy": "{}"}),
+        (task, {"containerDefinitions": plain, "volumes": [{"hostPath": "/"}]}),
+        (task, {"containerDefinitions": '[{"name": "a", "NAME": "b"}]'}),
+    ):
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _reject_secret_material(args(kind, props))
+    # An Output with no settled futures is opaque on the engine path only.
+    opaque = args(task, {"containerDefinitions": object.__new__(pulumi.Output)})
+    if engine:
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _reject_secret_material(opaque)
+    else:
+        assert _reject_secret_material(opaque) is None
+
+
+def _sdk_args(kind, props):
+    import pulumi
+
+    return pulumi.ResourceTransformationArgs(
+        resource=None, type_=kind, name="probe", props=props, opts=None
+    )
+
+
+def test_s13_gate_serializer_refuses_unreviewed_shapes():
+    """F-01: ComputePlane refuses what the guard refuses before it serializes."""
+    from app.compute import ComputePlane
+
+    for containers, message in (
+        ({"name": "f"}, "must be a list"),
+        ([{"name": "f", "Name": "g"}], "unreviewed key"),
+        ([{"logConfiguration": {"options": {}, "Options": {}}}], "repeats a key"),
+        ([{"command": ["AKIA" + "SYNTHETIC0000000"]}], "access key"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            ComputePlane._serialize_container(containers, unversioned=True)

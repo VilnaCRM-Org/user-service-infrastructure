@@ -23,7 +23,7 @@ from app.environment import (
 from app.messaging import MessagingPlane
 from app.network import NetworkPlane
 from app.registry import RegistryOutputs
-from app.runtime_secrets import RuntimeSecrets
+from app.runtime_secrets import RuntimeSecrets, require_unversioned_reference
 
 __all__ = ["ComputePlane"]
 
@@ -163,6 +163,83 @@ def require_plain_environment(
         values["REDIS_LOCKOUT_URL"] != values.get("REDIS_URL")
     ):
         raise ValueError("REDIS_LOCKOUT_URL must equal REDIS_URL (FR-08)")
+
+
+# The exact keys ``_container_definitions_json`` emits for one container. ECS
+# decodes container definitions with case-insensitive JSON key matching, so a
+# key outside this exact-case set, or two keys that differ only in case, could
+# reach a field no check reads (FR-03, FR-08).
+CONTAINER_KEYS = frozenset(
+    {
+        "command",
+        "environment",
+        "essential",
+        "healthCheck",
+        "image",
+        "linuxParameters",
+        "logConfiguration",
+        "mountPoints",
+        "name",
+        "portMappings",
+        "readonlyRootFilesystem",
+        "secrets",
+    }
+)
+ENVIRONMENT_ROW_KEYS = frozenset({"name", "value"})
+SECRET_ROW_KEYS = frozenset({"name", "valueFrom"})
+
+
+def _closed_rows(rows: Any, keys: frozenset[str]) -> list[dict[str, Any]]:
+    """Accept only a list of exact-key rows with a plain string name."""
+    if type(rows) is not list or not all(
+        type(row) is dict and set(row) == keys and type(row["name"]) is str
+        for row in rows
+    ):
+        raise ValueError("Workload container rows must be closed name pairs")
+    return rows
+
+
+def _require_credential_free_tree(value: Any, exempt: str = "") -> None:
+    """Scan every map key and string leaf; skip only the value under ``exempt``."""
+    if type(value) is str:
+        require_credential_free(value)
+    elif type(value) is list:
+        for item in value:
+            _require_credential_free_tree(item)
+    elif type(value) is dict:
+        folded = {require_credential_free(key).casefold() for key in value}
+        if len(folded) != len(value):
+            raise ValueError("Workload container repeats a key in another case")
+        for key, item in value.items():
+            if key != exempt:
+                _require_credential_free_tree(item)
+
+
+def require_plain_containers(containers: Any, *, unversioned: bool) -> None:
+    """Refuse container definitions that could carry secret material (FR-03).
+
+    Keys are the closed exact-case set the compute plane emits; environment
+    and secret rows are closed name pairs with disjoint names; every key and
+    string leaf except ``secrets[].valueFrom`` is credential-free. With
+    ``unversioned`` (the hardened shape) each ``valueFrom`` must be a bare
+    secret ARN (S1.7); the pre-hardening shape stays version-pinned (AD-25).
+    The guard and ``ComputePlane`` apply this one check, so they agree.
+    """
+    if type(containers) is not list:
+        raise ValueError("Workload container definitions must be a list")
+    for container in containers:
+        if type(container) is not dict or not set(container) <= CONTAINER_KEYS:
+            raise ValueError("Workload container holds an unreviewed key")
+        environment = _closed_rows(
+            container.get("environment", []), ENVIRONMENT_ROW_KEYS
+        )
+        secrets = _closed_rows(container.get("secrets", []), SECRET_ROW_KEYS)
+        require_plain_environment(environment, secrets)
+        _require_credential_free_tree({**container, "secrets": None})
+        for row in secrets:
+            _require_credential_free_tree(row, exempt="valueFrom")
+            if unversioned:
+                require_unversioned_reference(row["valueFrom"])
 
 
 @dataclass(frozen=True)
@@ -830,7 +907,8 @@ class ComputePlane(pulumi.ComponentResource):
             log_group_name,
         ).apply(
             lambda parts: self._serialize_container(
-                [
+                unversioned=self._hardened,
+                containers=[
                     {
                         "name": name,
                         "image": parts[0],
@@ -861,15 +939,16 @@ class ComputePlane(pulumi.ComponentResource):
                             },
                         },
                     }
-                ]
+                ],
             )
         )
 
     @staticmethod
-    def _serialize_container(containers: list[dict[str, Any]]) -> str:
-        """Serialize after proving each environment is plain (FR-03, FR-08)."""
-        for container in containers:
-            require_plain_environment(container["environment"], container["secrets"])
+    def _serialize_container(
+        containers: list[dict[str, Any]], *, unversioned: bool
+    ) -> str:
+        """Serialize after the checks the guard repeats on the JSON (FR-03)."""
+        require_plain_containers(containers, unversioned=unversioned)
         return json.dumps(containers)
 
     def _common_environment(

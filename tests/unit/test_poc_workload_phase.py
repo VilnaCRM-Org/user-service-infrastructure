@@ -224,6 +224,8 @@ def _fixture_builders(options):
     import pulumi_aws as aws
     import pulumi_random as random
 
+    import pulumi
+
     task_definitions = json.dumps(
         [
             {
@@ -233,6 +235,27 @@ def _fixture_builders(options):
                 ],
             }
         ]
+    )
+    pascal_definitions = json.dumps(
+        [
+            {
+                "name": "fixture",
+                "Environment": [
+                    {"Name": "DSN", "Value": "https://user:synthetic@host"}
+                ],
+            }
+        ]
+    )
+    oidc = aws.lb.ListenerDefaultActionArgs(
+        type="authenticate-oidc",
+        authenticate_oidc=aws.lb.ListenerDefaultActionAuthenticateOidcArgs(
+            authorization_endpoint="https://idp.example/authorize",
+            client_id="fixture",
+            client_secret="synthetic-not-a-secret",
+            issuer="https://idp.example",
+            token_endpoint="https://idp.example/token",
+            user_info_endpoint="https://idp.example/userinfo",
+        ),
     )
     return {
         "random-password": lambda: random.RandomPassword(
@@ -282,6 +305,31 @@ def _fixture_builders(options):
             family="fixture",
             container_definitions=task_definitions,
             opts=options,
+        ),
+        # F-01 (a): a secret-marked definition reaches the engine as a map.
+        "secret-task": lambda: aws.ecs.TaskDefinition(
+            "fixture-task",
+            family="fixture",
+            container_definitions=pulumi.Output.secret(task_definitions),
+            opts=options,
+        ),
+        # F-01 (b): ECS would read PascalCase keys; the guard refuses them.
+        "pascal-task": lambda: aws.ecs.TaskDefinition(
+            "fixture-task",
+            family="fixture",
+            container_definitions=pascal_definitions,
+            opts=options,
+        ),
+        # F-02: an OIDC listener action carries a client secret.
+        "oidc-listener": lambda: aws.lb.Listener(
+            "fixture-listener",
+            load_balancer_arn="arn:aws:fixture",
+            default_actions=[oidc],
+            opts=options,
+        ),
+        # F-03: an inline policy bypasses the step-1 SecretPolicy refusal.
+        "policy-secret": lambda: aws.secretsmanager.Secret(
+            "fixture-secret", name="fixture", policy="{}", opts=options
         ),
         # N1: an allowlisted SES identity still refuses a BYODKIM private key.
         "byodkim-identity": lambda: aws.sesv2.EmailIdentity(
@@ -357,6 +405,7 @@ class EngineTransforms:
         self.registered = []
         self.invokes = []
         self.applied = []
+        self.task_definitions = {}
 
     def register_stack_transform(self, transform):
         self.registered.append(transform)
@@ -370,12 +419,17 @@ class EngineTransforms:
 
         import pulumi
 
+        props = rpc.deserialize_properties(request.object)
+        if request.type == "aws:ecs/taskDefinition:TaskDefinition":
+            # Non-vacuity: record what the engine-path check inspected.
+            value = props.get("containerDefinitions")
+            self.task_definitions[request.name] = type(value).__name__
         for transform in self.registered:
             args = pulumi.ResourceTransformArgs(
                 custom=request.custom,
                 type_=request.type,
                 name=request.name,
-                props=rpc.deserialize_properties(request.object),
+                props=props,
                 opts=pulumi.ResourceOptions(),
             )
             assert transform(args) is None
@@ -610,6 +664,7 @@ def _probe(root, mode, mutation, coverage_path):
                 "aws_config": aws_config,
                 "engine_transforms": len(engine.registered),
                 "engine_applied": engine.applied,
+                "engine_task_definitions": engine.task_definitions,
                 "invoke_transforms": len(engine.invokes),
                 "exports": exports,
             },

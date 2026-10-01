@@ -153,6 +153,57 @@ elif hardened:
                 auth_token="x" * 16 if kind == "redis-auth-token" else None,
                 opts=options,
             )
+    # F-01 (a): a secret-marked definition reaches the engine as a secret map.
+    if kind == "secret-task":
+        import pulumi_aws as aws
+
+        definitions = [{"name": "fixture", "environment": []}]
+        aws.ecs.TaskDefinition(
+            "fixture-task",
+            family="fixture",
+            container_definitions=pulumi.Output.secret(json.dumps(definitions)),
+            opts=options,
+        )
+    # F-01 (b): ECS reads PascalCase keys case-insensitively; the guard refuses.
+    if kind == "pascal-task":
+        import pulumi_aws as aws
+
+        row = {"Name": "DSN", "Value": "https://user:synthetic@host"}
+        aws.ecs.TaskDefinition(
+            "fixture-task",
+            family="fixture",
+            container_definitions=json.dumps([{"name": "f", "Environment": [row]}]),
+            opts=options,
+        )
+    # F-02: an OIDC listener action carries a client secret.
+    if kind == "oidc-listener":
+        import pulumi_aws as aws
+
+        aws.lb.Listener(
+            "fixture-listener",
+            load_balancer_arn="arn:aws:fixture",
+            default_actions=[
+                {
+                    "type": "authenticate-oidc",
+                    "authenticate_oidc": {
+                        "authorization_endpoint": "https://idp.example/authorize",
+                        "client_id": "fixture",
+                        "client_secret": "synthetic-not-a-secret",
+                        "issuer": "https://idp.example",
+                        "token_endpoint": "https://idp.example/token",
+                        "user_info_endpoint": "https://idp.example/userinfo",
+                    },
+                }
+            ],
+            opts=options,
+        )
+    # F-03: an inline secret policy bypasses the step-1 SecretPolicy refusal.
+    if kind == "policy-secret":
+        import pulumi_aws as aws
+
+        aws.secretsmanager.Secret(
+            "fixture-secret", name="fixture", policy="{}", opts=options
+        )
     # N2: the engine invoke guard refuses a provider function call.
     if kind == "random-password-invoke":
         import pulumi_aws as aws

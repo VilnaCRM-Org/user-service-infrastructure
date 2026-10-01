@@ -7,10 +7,12 @@ type and its services start at zero tasks) and XP-8 (the subnet IDs, the
 bootstrap-job SG ID and the managed secret ARN).
 """
 
+import asyncio
 import json
 from pathlib import Path
 
 import jsonschema
+import pulumi_aws as aws
 import pytest
 from app.workload_phase import (
     ELASTIC_DOCUMENTDB_TYPE,
@@ -19,8 +21,12 @@ from app.workload_phase import (
     STEP_TWO_TYPES,
     _reject_secret_material,
 )
+from pulumi.output import Unknown
+from pulumi.runtime import rpc, settings
 from test_poc_workload_phase import graph
 from test_runtime_secrets import _transform_args
+
+import pulumi
 
 ROOT = Path(__file__).parents[2]
 CLUSTER = "aws:docdb/cluster:Cluster"
@@ -32,6 +38,21 @@ SECRET_ARN = (
     "arn:aws:secretsmanager:eu-central-1:891377212104:secret:"
     "/user-service-infrastructure/runtime/test/synthetic-app_secret-AbCdEf"
 )
+LISTENER = "aws:lb/listener:Listener"
+SECRET = "aws:secretsmanager/secret:Secret"
+SERVICE = "aws:ecs/service:Service"
+ACCESS_KEY = "AKIA" + "SYNTHETIC0000000"
+USERINFO = "https://user:synthetic@host.example"
+
+
+def _secret(value):
+    """The engine path's view of a secret-marked input (``wrap_rpc_secret``)."""
+    return {rpc._special_sig_key: rpc._special_secret_sig, "value": value}
+
+
+def _unresolved():
+    """An SDK ``Output`` that is never awaited, so no event loop is needed."""
+    return object.__new__(pulumi.Output)
 
 
 @pytest.fixture(scope="module")
@@ -112,12 +133,147 @@ def _definitions(environment=None, secrets=None, **extra):
     return json.dumps([container])
 
 
+# Every key ``ComputePlane._container_definitions_json`` emits for a container.
+FULL_CONTAINER = {
+    "name": "fixture",
+    "image": "891377212104.dkr.ecr.eu-central-1.amazonaws.com/fixture:sha-1",
+    "essential": True,
+    "command": ["/bin/sh", "-ec", "exec /synthetic/run"],
+    "environment": [{"name": "APP_ENV", "value": "prod"}],
+    "secrets": [{"name": "APP_SECRET", "valueFrom": SECRET_ARN}],
+    "portMappings": [{"containerPort": 80, "hostPort": 80, "protocol": "tcp"}],
+    "readonlyRootFilesystem": True,
+    "mountPoints": [
+        {"sourceVolume": "app-var", "containerPath": "/srv/app/var", "readOnly": False}
+    ],
+    "linuxParameters": {"capabilities": {"drop": ["ALL"]}},
+    "healthCheck": {"command": ["CMD", "/synthetic/check"], "interval": 30},
+    "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+            "awslogs-group": "/aws/ecs/fixture",
+            "awslogs-region": "eu-central-1",
+        },
+    },
+}
+
+
 @pytest.mark.parametrize("engine", [False, True])
-def test_a_plain_task_environment_passes_the_guard(engine):
+def test_a_plain_or_deferred_task_definition_passes_the_guard(engine):
+    """F-01: a str is inspected; an SDK Output or a preview Unknown is deferred."""
     key = "containerDefinitions" if engine else "container_definitions"
-    for value in (_definitions(), json.dumps([{"name": "fixture"}]), object()):
+    deferred = Unknown() if engine else _unresolved()
+    for value in (
+        _definitions(),
+        json.dumps([{"name": "fixture"}]),
+        json.dumps([FULL_CONTAINER]),
+        deferred,
+    ):
         args = _transform_args(engine, TASK, {key: value})
         assert _reject_secret_material(args) is None
+
+
+@pytest.mark.parametrize("engine", [False, True])
+def test_an_unreviewed_task_definition_value_fails_closed(engine):
+    """F-01 (a): a secret wrapper, a map, a list or any other object fails."""
+    key = "containerDefinitions" if engine else "container_definitions"
+    dirty = _definitions([{"name": "DSN", "value": USERINFO}])
+    for value in (
+        # The engine path deserializes a secret-marked input to this map.
+        _secret(dirty),
+        _secret(_definitions()),
+        json.loads(_definitions())[0],
+        json.loads(_definitions()),
+        object(),
+        None,
+        b"[]",
+        # An Output is deferred only on the SDK path, Unknown only on the engine.
+        _unresolved() if engine else Unknown(),
+    ):
+        args = _transform_args(engine, TASK, {key: value})
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _reject_secret_material(args)
+    with pytest.raises(ValueError, match="unreviewed property"):
+        _reject_secret_material(_transform_args(engine, TASK, {}))
+    # Reading an opaque Output never lifts a new pending output (a later
+    # in-process program would wait on it forever).
+    assert not settings.SETTINGS.outputs
+
+
+def _engine_output_check(key, **fields):
+    """Run the guard on an engine-path output value, as the engine sends it.
+
+    The real engine serializes an unknown or secret input as an output value
+    (``deserialize_output_value``); the transform runs before the loop does.
+    """
+    loop = asyncio.new_event_loop()
+
+    async def probe():
+        value = rpc.deserialize_output_value(fields)
+        try:
+            return _reject_secret_material(_transform_args(True, TASK, {key: value}))
+        finally:
+            await value.is_known()
+
+    try:
+        return loop.run_until_complete(probe())
+    finally:
+        loop.close()
+
+
+@pytest.mark.parametrize("key", ["containerDefinitions", "container_definitions"])
+def test_an_engine_output_value_is_deferred_only_while_unknown(key):
+    """F-01: the native preview sends the definition as an output value."""
+    assert _engine_output_check(key) is None
+    assert _engine_output_check(key, value=_definitions()) is None
+    for fields in (
+        {"value": _definitions([{"name": "DSN", "value": USERINFO}])},
+        {"value": json.loads(_definitions())},
+        # A secret output value fails, known or unknown.
+        {"secret": True},
+        {"value": _definitions(), "secret": True},
+    ):
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _engine_output_check(key, **fields)
+
+
+def test_an_unresolved_engine_output_value_fails_closed():
+    """F-01: an output whose futures are pending is opaque on the engine path."""
+    loop = asyncio.new_event_loop()
+
+    async def probe():
+        pending = loop.create_future()
+        value = pulumi.Output(set(), pending, pending, pending)
+        args = _transform_args(True, TASK, {"containerDefinitions": value})
+        try:
+            with pytest.raises(ValueError, match="unreviewed property"):
+                _reject_secret_material(args)
+        finally:
+            pending.set_result(None)
+            await value.is_known()
+
+    try:
+        loop.run_until_complete(probe())
+    finally:
+        loop.close()
+
+
+@pytest.mark.parametrize("engine", [False, True])
+def test_a_secret_reference_is_exempt_only_from_the_credential_scan(engine):
+    """F-01: ``secrets[].valueFrom`` keeps the bare-ARN check, not the scan."""
+    key = "containerDefinitions" if engine else "container_definitions"
+    arn = SECRET_ARN.replace("synthetic-app_secret", ACCESS_KEY)
+    accepted = _definitions(secrets=[{"name": "APP_SECRET", "valueFrom": arn}])
+    assert (
+        _reject_secret_material(_transform_args(engine, TASK, {key: accepted})) is None
+    )
+    for refused in (
+        _definitions([{"name": "A", "value": arn}]),
+        _definitions(secrets=[{"name": "A", "valueFrom": "plain-secret-material"}]),
+    ):
+        args = _transform_args(engine, TASK, {key: refused})
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _reject_secret_material(args)
 
 
 @pytest.mark.parametrize("engine", [False, True])
@@ -146,6 +302,33 @@ def test_a_plain_task_environment_passes_the_guard(engine):
         json.dumps(["fixture"]),
         json.dumps([{"environment": {"name": "A"}}]),
         "not-json",
+        # F-01 (b): ECS matches keys case-insensitively; only exact case passes.
+        json.dumps(
+            [{"name": "f", "Environment": [{"Name": "DSN", "Value": USERINFO}]}]
+        ),
+        json.dumps([{"name": "f", "Secrets": [{"Name": "A", "ValueFrom": "plain"}]}]),
+        _definitions(
+            secrets=[{"name": "A", "valueFrom": SECRET_ARN, "ValueFrom": "x"}]
+        ),
+        _definitions([{"name": "A", "value": "x", "Value": USERINFO}]),
+        '[{"name": "fixture", "name": "other"}]',
+        json.dumps(
+            [{"name": "f", "logConfiguration": {"options": {}, "Options": {"a": "b"}}}]
+        ),
+        # F-01 (c): a key outside the emitted set fails, whatever it holds.
+        _definitions(dockerLabels={"label": "plain"}),
+        _definitions(entryPoint=["/bin/sh"]),
+        _definitions(repositoryCredentials={"credentialsParameter": SECRET_ARN}),
+        _definitions(environmentFiles=[{"type": "s3", "value": "arn:aws:s3:::f/e"}]),
+        # F-01 (c): every other string leaf is scanned for a credential.
+        _definitions(command=["/bin/sh", "-ec", f"export KEY={ACCESS_KEY}"]),
+        _definitions(healthCheck={"command": ["CMD", ACCESS_KEY]}),
+        _definitions(logConfiguration={"options": {"awslogs-endpoint": USERINFO}}),
+        _definitions(logConfiguration={"options": {ACCESS_KEY: "x"}}),
+        _definitions(image="https://user:synthetic@registry.example/app:1"),
+        _definitions(mountPoints=[{"containerPath": "/x?token=synthetic"}]),
+        _definitions(name=f"{USERINFO}/fixture"),
+        _definitions(secrets=[{"name": ACCESS_KEY, "valueFrom": SECRET_ARN}]),
     ],
 )
 def test_the_task_property_check_refuses_secret_shaped_environment(engine, definitions):
@@ -156,12 +339,15 @@ def test_the_task_property_check_refuses_secret_shaped_environment(engine, defin
 
 
 def test_property_checks_cover_every_secret_bearing_rendered_type():
+    """F-02: the typed-input audit (pulumi-aws 7.23.0) names these types."""
     assert set(HARDENED_PROPERTY_CHECKS) == {
         CLUSTER,
         TASK,
         REPLICATION_GROUP,
         USER,
+        LISTENER,
         SECRET,
+        SERVICE,
         "aws:sesv2/emailIdentity:EmailIdentity",
     }
     assert set(HARDENED_PROPERTY_CHECKS) <= HARDENED_TYPES
@@ -298,6 +484,139 @@ def test_a_declared_redis_secret_fails_the_guard(engine, name, accepted):
             _reject_secret_material(args)
 
 
+OIDC = {
+    "authorization_endpoint": "https://idp.example/authorize",
+    "client_id": "fixture",
+    "client_secret": "synthetic-not-a-secret",
+    "issuer": "https://idp.example",
+    "token_endpoint": "https://idp.example/token",
+    "user_info_endpoint": "https://idp.example/userinfo",
+}
+OIDC_CAMEL = {
+    "authorizationEndpoint": OIDC["authorization_endpoint"],
+    "clientId": OIDC["client_id"],
+    "clientSecret": OIDC["client_secret"],
+    "issuer": OIDC["issuer"],
+    "tokenEndpoint": OIDC["token_endpoint"],
+    "userInfoEndpoint": OIDC["user_info_endpoint"],
+}
+FORWARD = {"type": "forward", "targetGroupArn": "arn:aws:fixture"}
+
+
+def _oidc_action():
+    return aws.lb.ListenerDefaultActionArgs(
+        type="authenticate-oidc",
+        authenticate_oidc=aws.lb.ListenerDefaultActionAuthenticateOidcArgs(**OIDC),
+    )
+
+
+@pytest.mark.parametrize(
+    ("engine", "actions"),
+    [
+        (False, None),
+        (True, None),
+        (
+            False,
+            [aws.lb.ListenerDefaultActionArgs(type="forward", target_group_arn="x")],
+        ),
+        (False, [{"type": "forward", "target_group_arn": "arn:aws:fixture"}]),
+        (True, [FORWARD]),
+        (
+            True,
+            [{"type": "redirect", "redirect": {"port": "443", "protocol": "HTTPS"}}],
+        ),
+    ],
+)
+def test_a_listener_without_an_oidc_action_passes(engine, actions):
+    args = _transform_args(engine, LISTENER, {"port": 443, "defaultActions": actions})
+    assert _reject_secret_material(args) is None
+
+
+@pytest.mark.parametrize(
+    ("engine", "actions"),
+    [
+        # F-02: an OIDC action carries ``clientSecret``, in either casing.
+        (False, [_oidc_action()]),
+        (False, [{"type": "authenticate-oidc", "authenticate_oidc": OIDC}]),
+        (False, [{"type": "authenticate-oidc", "authenticateOidc": OIDC_CAMEL}]),
+        (True, [{"type": "authenticate-oidc", "authenticateOidc": OIDC_CAMEL}]),
+        (True, [{"type": "authenticate-oidc", "authenticate_oidc": OIDC_CAMEL}]),
+        (True, [FORWARD, {"type": "authenticate-oidc", "AuthenticateOidc": {}}]),
+        # Opaque values fail closed: secret, Output, Unknown or another type.
+        (True, _secret([{"type": "authenticate-oidc", "authenticateOidc": {}}])),
+        (True, [_secret({"type": "authenticate-oidc", "authenticateOidc": {}})]),
+        (True, [_secret(FORWARD)]),
+        (True, Unknown()),
+        (True, [Unknown()]),
+        (False, _unresolved()),
+        (False, [_unresolved()]),
+        (False, (FORWARD,)),
+        (False, [aws.lb.ListenerRuleActionArgs(type="forward", target_group_arn="x")]),
+    ],
+)
+def test_a_listener_oidc_action_or_opaque_action_fails(engine, actions):
+    for key in ("defaultActions", "default_actions"):
+        args = _transform_args(engine, LISTENER, {key: actions})
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _reject_secret_material(args)
+
+
+@pytest.mark.parametrize("engine", [False, True])
+@pytest.mark.parametrize("step", [1, 2])
+def test_an_inline_secret_policy_is_refused_at_every_step(engine, step):
+    """F-03 (FR-34 B, AD-08): no inline ``policy`` bypasses SecretPolicy."""
+    plain = _transform_args(engine, SECRET, {"name": "fixture"})
+    assert _reject_secret_material(plain, step=step) is None
+    for policy in ("{}", _secret("{}"), Unknown() if engine else _unresolved()):
+        args = _transform_args(engine, SECRET, {"name": "fixture", "policy": policy})
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _reject_secret_material(args, step=step)
+
+
+@pytest.mark.parametrize("engine", [False, True])
+def test_a_service_connect_log_secret_option_is_refused(engine):
+    """F-02 audit: ``serviceConnectConfiguration`` carries ``secretOptions``."""
+    assert _reject_secret_material(_transform_args(engine, SERVICE, {})) is None
+    log = {"logDriver": "awslogs", "secretOptions": [{"name": "A", "valueFrom": "x"}]}
+    for key in ("serviceConnectConfiguration", "service_connect_configuration"):
+        args = _transform_args(engine, SERVICE, {key: {"logConfiguration": log}})
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _reject_secret_material(args)
+
+
+@pytest.mark.parametrize("engine", [False, True])
+def test_task_volumes_hold_only_a_name(engine):
+    """F-02 audit: FSx ``credentialsParameter`` and driver options fail."""
+    key = "containerDefinitions" if engine else "container_definitions"
+
+    def args(volumes):
+        props = {key: _definitions(), "volumes": volumes}
+        return _transform_args(engine, TASK, props)
+
+    accepted = [{"name": "app-var"}]
+    if not engine:
+        accepted.append(aws.ecs.TaskDefinitionVolumeArgs(name="run"))
+    for volumes in (None, [], accepted):
+        assert _reject_secret_material(args(volumes)) is None
+    fsx = {
+        "fileSystemId": "fs-0123",
+        "rootDirectory": "/",
+        "authorizationConfig": {"credentialsParameter": SECRET_ARN, "domain": "d"},
+    }
+    for volumes in (
+        [{"name": "a", "fsxWindowsFileServerVolumeConfiguration": fsx}],
+        [{"name": "a", "dockerVolumeConfiguration": {"driverOpts": {"o": "x"}}}],
+        [{"name": "a", "hostPath": "/"}],
+        [aws.ecs.TaskDefinitionVolumeArgs(name="a", host_path="/")],
+        [_secret({"name": "a"})],
+        _secret([{"name": "a"}]),
+        [object()],
+        Unknown() if engine else _unresolved(),
+    ):
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _reject_secret_material(args(volumes))
+
+
 def test_the_step_one_graph_holds_no_step_two_type(hardened):
     """B (FR-34): no seed, rotation, secret policy or autoscaling target."""
     types = {row["type"] for row in hardened["registrations"].values()}
@@ -310,6 +629,14 @@ def test_the_step_one_graph_holds_no_step_two_type(hardened):
         "aws:secretsmanager/secret:Secret",
         "aws:ec2/securityGroup:SecurityGroup",
     } <= types
+
+
+def test_the_engine_stand_in_inspected_both_container_definitions(hardened):
+    """F-01 non-vacuity: the engine path checked a resolved JSON string."""
+    assert hardened["engine_task_definitions"] == {
+        "user-service-web-task": "str",
+        "user-service-worker-task": "str",
+    }
 
 
 def test_the_cluster_uses_the_managed_password_on_engine_5(hardened):
@@ -410,13 +737,13 @@ def test_xp8_values_are_exported_in_the_contract_shape(hardened):
 
 @pytest.mark.parametrize("version", ["4.0.0", "8.0.0"])
 def test_a_non_iam_engine_fails_the_hardened_composition(tmp_path, version):
-    """N (V-17): the composed stack refuses engine 4.0.0 before DocumentDB."""
+    """N (V-17, F-04): the stack refuses engine 4.0.0 before any resource."""
     receipt = graph(tmp_path, "hardened", f"engine-{version}")
     assert "V-17" in receipt["error"]
     assert not [
         row
         for row in receipt["registrations"].values()
-        if row["type"].startswith("aws:docdb/")
+        if row["type"].startswith("aws:")
     ]
 
 
@@ -532,6 +859,16 @@ def test_a_redis_engine_without_iam_fails_the_hardened_composition(tmp_path):
         ("stack:secret-policy", "step-2 resource"),
         ("root:secret-policy", "step-2 resource"),
         ("root:userinfo-task", "unreviewed property"),
+        # F-01 (a, b): a secret-marked or PascalCase container definition.
+        ("root:secret-task", "unreviewed property"),
+        ("stack:secret-task", "unreviewed property"),
+        ("root:pascal-task", "unreviewed property"),
+        # F-02: a listener OIDC action carries a client secret.
+        ("root:oidc-listener", "unreviewed property"),
+        ("stack:oidc-listener", "unreviewed property"),
+        # F-03: an inline secret policy bypasses the step-1 SecretPolicy refusal.
+        ("root:policy-secret", "unreviewed property"),
+        ("stack:policy-secret", "unreviewed property"),
     ],
 )
 def test_a_readded_credential_or_step_two_resource_fails(tmp_path, addition, message):
@@ -540,3 +877,29 @@ def test_a_readded_credential_or_step_two_resource_fails(tmp_path, addition, mes
     assert not [
         name for name in receipt["registrations"] if name.startswith("fixture-")
     ]
+
+
+def test_the_lifecycle_doc_records_the_s13_gate_fixes():
+    """F-05/F-06 (NFR-10): the doc states the real deferral and the residuals."""
+    text = " ".join((ROOT / "specs/poc/secret-lifecycle.md").read_text().split())
+    for marker in (
+        "defers only a value it cannot inspect yet",
+        "unknown, non-secret output value",
+        "secret-marked input (`Output.secret(...)`",
+        "case-insensitively",
+        "require_plain_containers",
+        "`authenticate_oidc` in any casing",
+        "inline `policy` at any step",
+        "Typed-input audit",
+        "are no longer residuals",
+        "before any resource registers, and the data plane repeats that check",
+        "S3.4 replaces both with security-group references",
+        "test_the_bootstrap_job_sg_reaches_documentdb_and_stays_in_the_vpc",
+    ):
+        assert marker in text, marker
+    for stale in (
+        "passes that check only",
+        "checks the same environment rules",
+        "raises before the data plane registers",
+    ):
+        assert stale not in text, stale

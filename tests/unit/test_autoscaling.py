@@ -1,10 +1,11 @@
-"""S2.1 web autoscaling: FR-11 rows, N, B1, B2 and B3 (AD-10, D-16).
+"""S2.1 web and S2.2 worker autoscaling: FR-11 and FR-12 rows (AD-10, D-16).
 
 The contract holds the D-16 capacity and target-tracking values. The step-2
 projection renders, per service, the scalable target and the one-time start
-and stop actions, plus the two web target-tracking policies. Every resource
-and ``ignore_changes`` of this story renders only for a ``workload_step``
-projection (AD-25), so the pre-hardening graph is unchanged.
+and stop actions, plus the two web target-tracking policies (S2.1) and the
+worker backlog policy (S2.2). Every resource and ``ignore_changes`` of these
+stories renders only for a ``workload_step`` 2 projection (AD-25), so the
+step-1 and pre-hardening graphs are unchanged.
 """
 
 import copy
@@ -271,7 +272,9 @@ def test_each_service_has_one_target_at_its_start_capacity(render, service):
 def test_the_web_service_has_the_two_d16_target_tracking_policies(render):
     """FR-11: CPU 60 % and ALB requests 1000 per target; 60 s out, 300 s in."""
     rows = render("step2")
-    policies = _of(rows, POLICY)
+    policies = {
+        name: row for name, row in _of(rows, POLICY).items() if name.startswith("web-")
+    }
     assert set(policies) == {"web-cpu-tracking", "web-request-tracking"}
     metrics = {
         "web-cpu-tracking": (
@@ -341,7 +344,8 @@ def test_start_and_stop_actions_render_their_entry_times(render, service):
         assert target["urn"] in row["dependencies"]
         if not stop:
             assert set(policies) <= set(row["dependencies"])
-    assert len(policies) == (2 if service == "web" else 0)
+    # S2.2: the worker start also waits for the worker backlog policy.
+    assert len(policies) == (2 if service == "web" else 1)
 
 
 def _actions(rows):
@@ -432,6 +436,12 @@ def test_step_two_changes_no_step_one_resource(render):
     added = set(step_two) - set(step_one)
     assert set(step_one) <= set(step_two)
     assert added == {"autoscaling"} | set(_of(step_two, *AUTOSCALING))
+    # S2.2 adds only the worker backlog policy to the step-2 set.
+    assert set(_of(step_two, POLICY)) == {
+        "web-cpu-tracking",
+        "web-request-tracking",
+        "worker-backlog-tracking",
+    }
     assert not _of(step_one, *AUTOSCALING)
     for name, row in step_one.items():
         assert options(step_two[name]) == options(row), name
@@ -445,3 +455,210 @@ def test_the_cpu_policy_carries_no_resource_label(render):
     requests = rows["web-request-tracking"]["inputs"][configuration]
     assert "resourceLabel" not in cpu["predefinedMetricSpecification"]
     assert requests["predefinedMetricSpecification"]["resourceLabel"] == (REQUEST_LABEL)
+
+
+# Worker backlog rows (S2.2, FR-12, AD-10, A-17, D-16).
+
+QUEUE = "aws:sqs/queue:Queue"
+BACKLOG_POLICY = "worker-backlog-tracking"
+CONFIGURATION = "targetTrackingScalingPolicyConfiguration"
+# The guarded divisor: never below one task, so no division by zero (FR-12 B).
+GUARDED_TASKS = "IF(running_tasks > 1, running_tasks, 1)"
+
+
+def _queue_names(rows):
+    """The rendered queues: ``(work, other)`` by whether they redrive.
+
+    messaging.py gives each work queue a redrive policy to its own dead-letter
+    queue; the dead-letter and health-check queues have none.
+    """
+    queues = _of(rows, QUEUE).values()
+    work = {row["inputs"]["name"] for row in queues if "redrivePolicy" in row["inputs"]}
+    other = {row["inputs"]["name"] for row in queues} - work
+    return work, other
+
+
+def _backlog_metrics(rows):
+    configuration = rows[BACKLOG_POLICY]["inputs"][CONFIGURATION]
+    return configuration["customizedMetricSpecification"]["metrics"]
+
+
+def _visible(metric_id, queue):
+    return {
+        "id": metric_id,
+        "metricStat": {
+            "metric": {
+                "metricName": "ApproximateNumberOfMessagesVisible",
+                "namespace": "AWS/SQS",
+                "dimensions": [{"name": "QueueName", "value": queue}],
+            },
+            "stat": "Sum",
+        },
+        "returnData": False,
+    }
+
+
+def test_the_worker_backlog_policy_tracks_visible_messages_per_running_task(render):
+    """FR-12 P: the three work queues' visible messages over ``RunningTaskCount``
+    (A-17, Container Insights), target 100 per task; 60 s out, 300 s in (D-16).
+    """
+    rows = render("step2")
+    work, _ = _queue_names(rows)
+    assert work == {"send-email", "insert-user-batch", "domain-events"}
+    cluster = rows["user-service-ecs-cluster"]["inputs"]["name"]
+    service = rows["user-service-worker-service"]["inputs"]["name"]
+    policy = rows[BACKLOG_POLICY]
+    assert policy["type"] == POLICY
+    assert policy["parent"] == rows["autoscaling"]["urn"]
+    assert policy["ignore_changes"] == []
+    assert rows["worker-scaling-target"]["urn"] in policy["dependencies"]
+    assert policy["inputs"] == {
+        "name": "user-service-infrastructure-test-worker-backlog",
+        "policyType": "TargetTrackingScaling",
+        "resourceId": _resource_id(rows, "worker"),
+        "scalableDimension": "ecs:service:DesiredCount",
+        "serviceNamespace": "ecs",
+        CONFIGURATION: {
+            "targetValue": 100,
+            "customizedMetricSpecification": {
+                "metrics": [
+                    _visible("send_email", "send-email"),
+                    _visible("insert_user_batch", "insert-user-batch"),
+                    _visible("domain_events", "domain-events"),
+                    {
+                        "id": "running_tasks",
+                        "metricStat": {
+                            "metric": {
+                                "metricName": "RunningTaskCount",
+                                "namespace": "ECS/ContainerInsights",
+                                "dimensions": [
+                                    {"name": "ClusterName", "value": cluster},
+                                    {"name": "ServiceName", "value": service},
+                                ],
+                            },
+                            "stat": "Average",
+                        },
+                        "returnData": False,
+                    },
+                    {
+                        "id": "backlog",
+                        "expression": "send_email + insert_user_batch + domain_events",
+                        "returnData": False,
+                    },
+                    {"id": "tasks", "expression": GUARDED_TASKS, "returnData": False},
+                    {
+                        "id": "backlog_per_task",
+                        "expression": "backlog / tasks",
+                        "returnData": True,
+                    },
+                ]
+            },
+            "scaleOutCooldown": 60,
+            "scaleInCooldown": 300,
+            "disableScaleIn": False,
+        },
+    }
+
+
+def test_the_backlog_math_holds_no_dead_letter_or_health_queue(render):
+    """FR-12 N: no dead-letter or health-check queue enters the math."""
+    rows = render("step2")
+    work, other = _queue_names(rows)
+    assert other == {
+        "failed-send-email",
+        "failed-insert-user-batch",
+        "failed-domain-events",
+        "health-check-queue",
+    }
+    named = {
+        dimension["value"]
+        for metric in _backlog_metrics(rows)
+        if "metricStat" in metric
+        for dimension in metric["metricStat"]["metric"]["dimensions"]
+        if dimension["name"] == "QueueName"
+    }
+    assert named == work
+    assert not named & other
+
+
+def test_a_dead_letter_queue_in_the_backlog_math_fails(tmp_path):
+    """FR-12 N: a dead-letter queue configured as a work queue fails the render."""
+    receipt = graph(tmp_path, "hardened", "step2-dlq-backlog")
+    assert "work queues" in receipt["error"]
+    assert not _of(receipt["registrations"], POLICY)
+
+
+@pytest.mark.parametrize(
+    ("field", "name"),
+    [
+        ("send_email", "failed-send-email"),
+        ("insert_user_batch", "failed-insert-user-batch"),
+        ("domain_events", "health-check-queue"),
+        ("domain_events", "send-email"),
+    ],
+)
+def test_the_work_queue_names_refuse_a_non_work_or_repeated_queue(field, name):
+    """FR-12 N: each work queue is distinct and is no dead-letter or health queue."""
+    from app.autoscaling import work_queue_names
+    from app.environment import QueueSettings
+
+    defaults = {
+        "send_email": "send-email",
+        "failed_send_email": "failed-send-email",
+        "insert_user_batch": "insert-user-batch",
+        "failed_insert_user_batch": "failed-insert-user-batch",
+        "domain_events": "domain-events",
+        "failed_domain_events": "failed-domain-events",
+        "health_check": "health-check-queue",
+    }
+    assert work_queue_names(QueueSettings(**defaults)) == (
+        ("send_email", "send-email"),
+        ("insert_user_batch", "insert-user-batch"),
+        ("domain_events", "domain-events"),
+    )
+    with pytest.raises(ValueError, match="work queues"):
+        work_queue_names(QueueSettings(**{**defaults, field: name}))
+
+
+def test_zero_running_tasks_never_divide_by_zero(render):
+    """FR-12 B: the only division is by the guarded task count, which is
+    ``max(RunningTaskCount, 1)``; both IF branches are at least 1, and a
+    missing or zero task count falls to the scalar 1 (CloudWatch IF).
+    """
+    metrics = {metric["id"]: metric for metric in _backlog_metrics(render("step2"))}
+    expressions = {
+        name: metric["expression"]
+        for name, metric in metrics.items()
+        if "expression" in metric
+    }
+    assert expressions["tasks"] == GUARDED_TASKS
+    divisions = [text for text in expressions.values() if "/" in text]
+    assert divisions == ["backlog / tasks"]
+    # The raw task count is read only inside the guard.
+    readers = [name for name, text in expressions.items() if "running_tasks" in text]
+    assert readers == ["tasks"]
+    # Exactly one series feeds the policy: the guarded backlog per task.
+    returned = [name for name, metric in metrics.items() if metric["returnData"]]
+    assert returned == ["backlog_per_task"]
+
+
+def test_the_backlog_policy_renders_only_at_step_two(render):
+    """AD-25: no step-1 or pre-hardening graph holds the backlog policy."""
+    for rows in (render("none"), render("none", "workload")):
+        assert BACKLOG_POLICY not in rows
+    for mutation in ("step2", "step2-stop", "step2-hold", "step2-restart"):
+        assert render(mutation)[BACKLOG_POLICY]["type"] == POLICY
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [("step2", "step2-stop"), ("step2-stop", "step2-restart")],
+)
+def test_appending_an_entry_leaves_the_backlog_policy_unchanged(render, before, after):
+    """B: an appended entry adds no policy and changes no backlog input."""
+    old, new = render(before), render(after)
+    assert set(_of(new, POLICY)) == set(_of(old, POLICY))
+    assert _canonical(new[BACKLOG_POLICY]["inputs"]) == _canonical(
+        old[BACKLOG_POLICY]["inputs"]
+    )
+    assert new[BACKLOG_POLICY]["urn"] == old[BACKLOG_POLICY]["urn"]

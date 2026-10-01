@@ -16,7 +16,8 @@ secret policy, autoscaling or scheduled action) may join it. Step 2 adds only
 those types, each with its own story (S1.5, S1.6, S2.1, S2.2, S2.6); its
 create-only admission is S4.9. After step 1 the XP-8 values are exported. S2.1
 adds the autoscaling plane: the scalable targets, the web target-tracking
-policies and the one-time start and stop actions (AD-10).
+policies and the one-time start and stop actions (AD-10). S2.2 adds the worker
+backlog policy to that plane (FR-12).
 """
 
 from __future__ import annotations

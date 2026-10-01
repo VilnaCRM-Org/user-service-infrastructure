@@ -18,6 +18,7 @@ if os.environ.get("COVERAGE_PROCESS_START"):
     coverage.process_startup()
 
 from app.compute import ComputePlane  # noqa: E402
+from app.data import DataPlane  # noqa: E402
 from app.environment import resolve_stack_settings  # noqa: E402
 from app.registry_phase import RegistryPhaseStack  # noqa: E402
 from app.runtime_secrets import RuntimeSecrets, RuntimeSecretsDescriptor  # noqa: E402
@@ -52,6 +53,18 @@ elif hardened:
         registries=registries,
         secrets=RuntimeSecretsDescriptor(contract),
     )
+    if mode.startswith("hardened-data"):
+        # S1.2 seam: S1.3 wires the data plane into the hardened composition.
+        if mode == "hardened-data-password":
+            pulumi.runtime.set_config(
+                "user-service-infrastructure:documentDbPassword", "synthetic"
+            )
+        DataPlane(
+            "data",
+            settings=workload.settings,
+            network=workload.network,
+            runtime_secrets=workload.runtime_secrets,
+        )
     if mode == "hardened-secret-material":
         import pulumi_random as random
 

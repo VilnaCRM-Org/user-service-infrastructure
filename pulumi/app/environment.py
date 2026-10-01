@@ -317,6 +317,27 @@ def _access_logs_bucket(
     )
 
 
+DOCUMENTDB_PASSWORD_CONFIG_KEYS: Final[tuple[str, ...]] = (
+    "documentDbPassword",
+    "documentDbMasterPassword",
+)
+
+
+def reject_documentdb_password_config() -> None:
+    """Refuse any configured DocumentDB primary password (S1.2, FR-01).
+
+    The hardened cluster uses the DocumentDB-managed primary password, so a
+    configured one would be ignored silently; fail instead.
+    """
+    config = pulumi.Config()
+    for key in DOCUMENTDB_PASSWORD_CONFIG_KEYS:
+        if config.get(key) is not None:
+            raise ValueError(
+                f"{key} must not be configured: the hardened DocumentDB cluster "
+                "uses a DocumentDB-managed primary password."
+            )
+
+
 def _secret_value(
     config: pulumi.Config,
     key: str,

@@ -276,6 +276,29 @@ def test_native_hardened_workload_renders_no_secret_material(native_stack):
     assert "aws:lambda/function:Function" not in types
 
 
+def test_native_hardened_data_plane_uses_the_managed_password(native_stack):
+    """S1.2: managed primary password, no password input, no CMK argument (A-05)."""
+    stack, work = native_stack
+    (work / "scenario.json").write_text('{"mode":"hardened-data"}')
+    events = []
+    stack.preview(on_event=events.append)
+    rows = resources(events)
+    assert not [row.type for row in rows if row.type.startswith(SECRET_MATERIAL)]
+    (cluster,) = [row for row in rows if row.type == "aws:docdb/cluster:Cluster"]
+    inputs = cluster.new.inputs
+    assert inputs["manageMasterUserPassword"] is True
+    assert "masterPassword" not in inputs
+    assert "masterUserSecretKmsKeyId" not in inputs
+
+
+def test_native_hardened_data_plane_rejects_a_password_config_key(native_stack):
+    stack, work = native_stack
+    (work / "scenario.json").write_text('{"mode":"hardened-data-password"}')
+    with pytest.raises(AutomationRuntimeError) as failure:
+        stack.preview(on_event=[].append)
+    assert "documentDbPassword must not be configured" in str(failure.value)
+
+
 def test_native_hardened_workload_rejects_readded_secret_material(native_stack):
     stack, work = native_stack
     (work / "scenario.json").write_text('{"mode":"hardened-secret-material"}')

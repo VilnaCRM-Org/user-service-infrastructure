@@ -168,6 +168,17 @@ def test_hardened_redis_url_engine_and_lockout_guards():
             [],
             "must be a rediss:// URL",
         ),
+        # N1: a host is required and a port must be a valid number.
+        (
+            [{**row, "value": "rediss://:6379"} for row in same],
+            [],
+            "must be a rediss:// URL",
+        ),
+        (
+            [{**row, "value": "rediss://a:abc"} for row in same],
+            [],
+            "must be a rediss:// URL",
+        ),
     ):
         with pytest.raises(ValueError, match=message):
             ComputePlane._serialize_container(
@@ -191,6 +202,44 @@ def test_hardened_redis_url_engine_and_lockout_guards():
             ],
             unversioned=True,
         )
+
+
+def test_redis_group_engine_and_user_group_members_are_bound_to_the_identity():
+    """N4 and F11 at the guard: engine, version and declared members only."""
+    from app.workload_phase import _reject_secret_material
+
+    identity = ("g", "synthetic-app", "synthetic-default", "synthetic-users")
+
+    def args(kind, props):
+        return _sdk_args(f"aws:elasticache/{kind}", props)
+
+    group = {
+        "engine": "redis",
+        "engine_version": "7.1",
+        "transit_encryption_enabled": True,
+        "transit_encryption_mode": "required",
+        "user_group_ids": ["synthetic-users"],
+    }
+    members = {
+        "engine": "redis",
+        "user_group_id": "synthetic-users",
+        "user_ids": ["synthetic-default", "synthetic-app"],
+    }
+    for kind, props in (
+        ("replicationGroup:ReplicationGroup", group),
+        ("userGroup:UserGroup", members),
+    ):
+        assert (
+            _reject_secret_material(args(kind, props), redis_identity=identity) is None
+        )
+    for kind, props in (
+        ("replicationGroup:ReplicationGroup", {**group, "engine_version": "6.2"}),
+        ("replicationGroup:ReplicationGroup", {**group, "engine": "valkey"}),
+        ("userGroup:UserGroup", {**members, "user_ids": ["legacy", "synthetic-app"]}),
+        ("userGroup:UserGroup", {**members, "user_group_id": "foreign"}),
+    ):
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _reject_secret_material(args(kind, props), redis_identity=identity)
 
 
 @pytest.mark.parametrize(

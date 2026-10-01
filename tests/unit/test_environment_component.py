@@ -1994,7 +1994,9 @@ def test_documentdb_identifiers_respect_the_63_character_limit() -> None:
     )
 
 
-@pytest.mark.parametrize("environment", ["dev", "test", "prod"])
+# The legacy managed path refuses test and prod (S1.10, FR-29, AD-22; see
+# test_stack.py), so it is exercised on non-shared environments only.
+@pytest.mark.parametrize("environment", ["dev", "qa", "staging"])
 def test_documentdb_retention_does_not_depend_on_environment(environment) -> None:
     role = "arn:aws:iam::123456789012:role/user-service-infrastructure-{}-Ecs{}"
     resources, monitor = _managed_registrations(

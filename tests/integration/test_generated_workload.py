@@ -490,26 +490,25 @@ def test_native_hardened_workload_refuses_provider_function_calls(
     assert set(local_sts[1]) <= {"GetCallerIdentity", "GetUser"}
 
 
-def test_native_legacy_workload_program_registers_managed_planes(native_stack):
-    """Cover the legacy managed topology without widening the installed entrypoint."""
+def test_native_legacy_workload_program_fails_closed_on_the_test_stack(native_stack):
+    """P (S1.10, FR-29, AD-22): legacy managed TEST fails before any AWS resource.
+
+    The legacy composition writes config-supplied material into SecretVersions,
+    so on a shared stack it must refuse natively, not only under mocks. The
+    dev topology stays covered by the unit suite and the managed lifecycle
+    preview, whose environment is not shared.
+    """
     stack, work = native_stack
     (work / "scenario.json").write_text('{"mode":"legacy-workload"}')
     events = []
-    result = stack.preview(on_event=events.append)
+    with pytest.raises(AutomationRuntimeError) as failure:
+        stack.preview(on_event=events.append)
 
-    assert result.change_summary
+    assert "Legacy managed path is closed for shared stacks" in str(failure.value)
     types = [row.type for row in resources(events)]
-    assert "user-service-infrastructure:stack:UserService" in types
-    assert "user-service-infrastructure:network:Plane" in types
-    assert "user-service-infrastructure:data:Plane" in types
-    assert "user-service-infrastructure:messaging:Plane" in types
-    assert "user-service-infrastructure:compute:Plane" in types
-    assert types.count("aws:ec2/vpc:Vpc") == 1
-    # Four work/health queues plus three dead-letter queues.
-    assert types.count("aws:sqs/queue:Queue") == 7
-    assert types.count("aws:docdb/clusterParameterGroup:ClusterParameterGroup") == 1
-    assert types.count("aws:ecs/service:Service") == 2
-    assert not any(kind.startswith("aws:iam/") for kind in types)
+    assert not any(kind.startswith(("aws:", "pulumi:providers:")) for kind in types)
+    assert "user-service-infrastructure:data:Plane" not in types
+    assert "user-service-infrastructure:compute:Plane" not in types
 
 
 def test_native_legacy_workload_program_uses_preview_placeholders(native_stack):

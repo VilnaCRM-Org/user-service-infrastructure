@@ -13,6 +13,7 @@ from app.environment import (
     EnvironmentSettings,
     StackSettings,
     has_aws_credentials,
+    require_legacy_target,
     resolve_stack_settings,
 )
 from app.messaging import MessagingPlane
@@ -49,6 +50,9 @@ class UserServiceStack(pulumi.ComponentResource):
             opts=pulumi.ResourceOptions(parent=self),
         )
         self.settings = resolve_stack_settings(self.environment_settings)
+        # No RuntimeSecrets here: refuse test and prod before the provider or
+        # any plane registers (S1.10, FR-29, AD-22).
+        require_legacy_target(self.settings)
 
         provider = self._build_provider()
         component_opts = (

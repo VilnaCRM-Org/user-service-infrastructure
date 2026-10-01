@@ -397,3 +397,38 @@ Residual risks and advisories (S1.4 gate F10):
   exact strings the guard requires.
 - Advisory for S5.13: S5.13 must test against the exact access string
   `on ~* +@all -@dangerous`, the one the guard admits for the IAM app user.
+
+## Legacy managed path fails closed (S1.10, FR-29, AD-22)
+
+The legacy managed path is `UserServiceStack`, or `DataPlane` and
+`ComputePlane` composed directly, without `RuntimeSecrets`. It writes
+config-supplied material into `SecretVersion`s.
+`ComputePlane._create_runtime_secrets` writes the mailer DSN, the application,
+OAuth and two-factor keys, the OAuth PEMs and the GitHub, Google, Facebook and
+Twitter client secrets. The `DataPlane._persist_url` fallback writes the
+DocumentDB and Redis connection URLs.
+
+`require_legacy_target` refuses this path in managed mode when the configured
+environment or the selected stack name is in `SHARED_ENVIRONMENTS` (`test` and
+`prod`). `UserServiceStack` calls it right after it resolves its settings,
+before the AWS provider, the registries or any plane registers. Both planes
+refuse again through `require_application_secrets` before their own
+registration, and the `_persist_url` fallback checks it before it writes. A
+managed test or prod graph on this path therefore fails before any AWS resource
+registers (only the `UserServiceStack` and `EnvironmentSettings` components
+exist), and it holds no `Secret` and no `SecretVersion`. Dev and preview
+placeholders are unchanged: a managed dev stack keeps the legacy writers, and
+preview mode registers no AWS resource for any environment or stack name.
+
+Shared stacks compose `WorkloadPhaseStack` with `RuntimeSecrets` instead. Its
+pre-hardening branch still writes generated `SecretVersion`s through
+`RuntimeSecrets.persist_url` until S4.10 deletes that branch (AD-25); S1.10
+leaves that branch unchanged. A `workload_step` projection already refuses any
+`SecretVersion` (see "Hardened (seeded) declarations").
+
+Social-login secrets (future work, FR-29): the workload sets
+`SOCIAL_OAUTH_ENABLED` to `false` and injects no social client secret. If social
+login is ever enabled, a governance secret-write path writes its client secrets
+outside Pulumi, into secrets that the reviewed contract declares, and the
+program only references them. Pulumi never holds or writes their values. That
+path needs its own reviewed story.

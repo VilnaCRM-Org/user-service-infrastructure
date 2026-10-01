@@ -349,15 +349,88 @@ def test_hardened_secret_must_use_the_runtime_cmk(key, purpose):
         _validate_document(contract)
 
 
-@pytest.mark.parametrize(
-    ("first", "second"),
-    [("runtime", "jwt"), ("runtime", "two_factor"), ("jwt", "two_factor")],
-)
-def test_hardened_cmk_arns_are_pairwise_distinct(first, second):
+# D-17: the previous JWT key of a key-change window; synthetic, not a real key.
+PREVIOUS_JWT = {
+    "arn": (
+        "arn:aws:kms:eu-central-1:891377212104:key/00000000-0000-4000-8000-000000000013"
+    ),
+    "alias": "alias/synthetic-poc-jwt-previous",
+}
+CMK_PAIRS = [
+    ("runtime", "jwt"),
+    ("runtime", "two_factor"),
+    ("jwt", "two_factor"),
+    ("runtime", "jwt_previous"),
+    ("jwt", "jwt_previous"),
+    ("two_factor", "jwt_previous"),
+]
+
+
+def windowed():
+    """A hardened contract inside a D-17 JWT key-change window."""
     contract = hardened()
+    contract["workload"]["central"]["cmk"]["jwt_previous"] = copy.deepcopy(PREVIOUS_JWT)
+    return contract
+
+
+def test_the_previous_jwt_key_is_optional_central_metadata():
+    """D-17 (S1.9): ``cmk.jwt_previous`` is absent outside a key-change window."""
+    assert "jwt_previous" not in hardened()["workload"]["central"]["cmk"]
+    _validate_document(hardened())
+    _validate_document(windowed())
+
+
+@pytest.mark.parametrize(
+    ("member", "value"),
+    [
+        # FR-10 N: an unknown key in the D-4 metadata fails.
+        ("storage", PREVIOUS_JWT),
+        ("jwt_previous", {"arn": PREVIOUS_JWT["arn"]}),
+        ("jwt_previous", {**PREVIOUS_JWT, "rotation": True}),
+        ("jwt_previous", {**PREVIOUS_JWT, "alias": "synthetic-poc-jwt-previous"}),
+        ("jwt_previous", {**PREVIOUS_JWT, "alias": "alias/aws/kms\n"}),
+        (
+            "jwt_previous",
+            {
+                **PREVIOUS_JWT,
+                "arn": PREVIOUS_JWT["arn"].replace("891377212104", "9" * 12),
+            },
+        ),
+        ("jwt_previous", {**PREVIOUS_JWT, "arn": PREVIOUS_JWT["arn"] + "\n"}),
+    ],
+)
+def test_unknown_or_malformed_cmk_metadata_fails(member, value):
+    contract = hardened()
+    contract["workload"]["central"]["cmk"][member] = copy.deepcopy(value)
+    with pytest.raises(ValueError, match="poc-test-v1 schema|fully match"):
+        _validate_document(contract)
+
+
+@pytest.mark.parametrize(("first", "second"), CMK_PAIRS)
+def test_hardened_cmk_arns_are_pairwise_distinct(first, second):
+    contract = windowed()
     cmk = contract["workload"]["central"]["cmk"]
     cmk[second]["arn"] = cmk[first]["arn"]
     with pytest.raises(ValueError, match="CMK ARNs must be distinct"):
+        _validate_document(contract)
+
+
+@pytest.mark.parametrize(("first", "second"), CMK_PAIRS)
+def test_hardened_cmk_aliases_are_pairwise_distinct(first, second):
+    """FR-10 N: a wrong alias, one that names another D-4 key, fails."""
+    contract = windowed()
+    cmk = contract["workload"]["central"]["cmk"]
+    cmk[second]["alias"] = cmk[first]["alias"]
+    with pytest.raises(ValueError, match="CMK aliases must be distinct"):
+        _validate_document(contract)
+
+
+@pytest.mark.parametrize("purpose", ["app_secret", "oauth_passphrase"])
+def test_a_secret_on_the_previous_jwt_key_is_refused(purpose):
+    """D-4: the previous JWT key is not the runtime CMK either."""
+    contract = windowed()
+    references(contract)[purpose]["kms_key_arn"] = PREVIOUS_JWT["arn"]
+    with pytest.raises(ValueError, match="runtime CMK"):
         _validate_document(contract)
 
 

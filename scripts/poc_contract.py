@@ -271,15 +271,18 @@ def _central_semantics(workload: dict[str, Any]) -> None:
     """Bind secrets to reviewed central functions, distinct roles and the D-4 key.
 
     D-4: one runtime CMK encrypts every declared secret; the JWT and 2FA CMKs
-    are separate keys. S1.9 extends this binding to the other runtime data.
+    are separate keys. The optional previous JWT key (D-17) is a fourth key.
+    No two keys share an ARN or an alias. S1.9 binds the DocumentDB log groups
+    to the runtime CMK in the program.
     """
     central = workload["central"]
     roles = [value for key, value in central.items() if key.endswith("_role_arn")]
     if len(set(roles)) != len(roles):
         raise ValueError("central role ARNs must be distinct")
-    keys = [key["arn"] for key in central["cmk"].values()]
-    if len(set(keys)) != len(keys):
-        raise ValueError("central CMK ARNs must be distinct")
+    for field, label in (("arn", "ARNs"), ("alias", "aliases")):
+        values = [key[field] for key in central["cmk"].values()]
+        if len(set(values)) != len(values):
+            raise ValueError(f"central CMK {label} must be distinct")
     functions = central["rotation_function_arns"]
     for secret in workload["secret_lifecycle"]["references"].values():
         if secret["kms_key_arn"] != central["cmk"]["runtime"]["arn"]:

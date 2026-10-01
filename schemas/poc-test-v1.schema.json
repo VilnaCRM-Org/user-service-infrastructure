@@ -1099,6 +1099,9 @@
                 "jwt": {
                   "$ref": "#/$defs/cmk_key"
                 },
+                "jwt_previous": {
+                  "$ref": "#/$defs/cmk_key"
+                },
                 "two_factor": {
                   "$ref": "#/$defs/cmk_key"
                 }

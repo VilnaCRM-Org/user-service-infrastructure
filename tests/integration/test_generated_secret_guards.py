@@ -299,6 +299,13 @@ def test_s13_gate_property_checks_fail_closed(engine):
     ):
         with pytest.raises(ValueError, match="unreviewed property"):
             _reject_secret_material(args(kind, props))
+    # An Output with no settled futures is opaque on the engine path only.
+    opaque = args(task, {"containerDefinitions": object.__new__(pulumi.Output)})
+    if engine:
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _reject_secret_material(opaque)
+    else:
+        assert _reject_secret_material(opaque) is None
 
 
 def _sdk_args(kind, props):

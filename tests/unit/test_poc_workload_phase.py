@@ -109,6 +109,8 @@ SCALING_VARIANTS = {
         ("start-1",),
         False,
     ),
+    # S2.2 FR-12 N: a dead-letter queue configured as a work queue.
+    "step2-dlq-backlog": ({"mode": "step2", "sequence": 2}, ("start-1",), (), False),
 }
 
 
@@ -296,7 +298,8 @@ def _bridge(contract, config, aws_config, mutation, *, generated_child=False):
 
 
 def _mutation_config(mutation):
-    """Composition-level N cases: a non-IAM engine or a configured password."""
+    """Composition-level N cases: a non-IAM engine, a configured password or a
+    dead-letter queue configured as a work queue (S2.2)."""
     if mutation.startswith("engine-"):
         return {"documentDbEngineVersion": mutation.removeprefix("engine-")}
     if mutation == "password-config":
@@ -305,6 +308,8 @@ def _mutation_config(mutation):
         return {"redisEngineVersion": mutation.removeprefix("redis-engine-")}
     if mutation == "redis-token-config":
         return {"redisAuthToken": "synthetic-redis-token"}
+    if mutation == "step2-dlq-backlog":
+        return {"sendEmailQueueName": "failed-send-email"}
     return {}
 
 

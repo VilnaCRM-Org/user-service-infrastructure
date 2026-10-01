@@ -345,7 +345,23 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     floor.
   - Web: target tracking on `ALBRequestCountPerTarget` (resource label) and
     CPU.
-  - Worker: metric math (A-17) with a zero-task guard.
+  - Worker: metric math (A-17) with a zero-task guard. As implemented in S2.2
+    (`pulumi/app/autoscaling.py`; gates S22-M1, S22-M2):
+    - Three `AWS/SQS` `ApproximateNumberOfMessagesVisible` queries (`Sum`),
+      one for each work queue: `send_email`, `insert_user_batch` and
+      `domain_events`.
+    - One `ECS/ContainerInsights` `RunningTaskCount` query (`Average`) for the
+      worker service.
+    - `tasks = IF(running_tasks > 1, running_tasks, 1)`.
+    - `backlog_per_task = (sum of the three queues) / tasks`, the only series
+      returned.
+    - The floor of 1 is a planning choice that meets the AD-10 zero-task guard
+      (there is no division by zero).
+    - **Missing data:** if any input has no datapoint, the returned series has
+      none either, so the policy stays in `INSUFFICIENT_DATA`. It never divides
+      by zero.
+    - S4.6 step 12 observes whether `RunningTaskCount` publishes 0 or no data
+      at zero tasks. `FILL()` is considered only after that observation.
   - The ECS services use `ignore_changes=["desiredCount"]` (AD-23).
   - **Per-action times (R5-M3).** The contract lists every one-time action
     with its own time: `scaling.starts: [{seq, at}]` and
@@ -615,7 +631,10 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   - a 2FA key (symmetric, encryption-context `user_id`);
   - the task-role grants.
 
-  USI passes the key ARNs as plain environment values.
+  USI passes the key ARNs as plain environment values, under the names the
+  user-service stories S5.11 and S5.12 define: `JWT_KMS_KEY_ID` (the current
+  JWT key), `JWT_KMS_PREVIOUS_KEY_ID` (the previous JWT key during a key change,
+  D-17; empty otherwise), `TWO_FACTOR_KMS_KEY_ID` (the 2FA key) and `AWS_REGION`.
 - **AD-15a Per-key grant table (D-4, R4-M8, m7).** No key policy has an
   `arn:aws:iam::<acct>:root` `kms:*` statement. Every principal is named. Each
   row is both a key-policy statement and, for IAM roles, a matching identity

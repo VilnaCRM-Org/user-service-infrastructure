@@ -325,6 +325,23 @@ This file is the execution ledger. It is not a planning input.
   scope, S2.1 B1 wording). The manifest below hashes those versions; the
   revision number is unchanged.
 
+- **S2.2 and gate follow-ups (planning consequences, no new user
+  decision).**
+  1. S22-M1 and S22-M2: `architecture.md` AD-10 records the worker metric
+     math as implemented (three SQS `Sum` queries, `RunningTaskCount`
+     `Average`, floor of 1, `backlog_per_task` the only series, missing data
+     keeps `INSUFFICIENT_DATA`, `FILL()` only after S4.6 step 12). The
+     comments in `pulumi/app/autoscaling.py` and the docstring in
+     `tests/unit/test_autoscaling.py` match (comment-only).
+  2. X-1: new story S5.25, DocumentDB `auth_failure` emitter (NFR-05).
+  3. New story S5.26, early IAM-env fail-fast (S5.10 G-4, S5.12 L-1).
+  4. S5.22 (and S5.21 scope): every required check pinned to the GitHub
+     Actions app (`integration_id` 15368); api-gateway-infrastructure PR #40
+     (G22-F01).
+  5. S21 nit: S1.6 and S1.5 edge tests in Acceptance criteria.
+  6. S22-N1: queue-name distinctness also validated in `environment.py`
+     (S2.2 follow-up).
+
 ## Artifacts (sha256, revision 14)
 
 `run-summary.md` is not hashed here, because it contains the hashes. `decisions.md` is a planning input and is hashed. Commit `68584e1` added its D-14 row after revision 5; revision 6 changed only that row's label (a user decision, not a planning default); revisions 7, 8 and 9 do not change it; revision 10 adds the D-15 row (a user decision of 2026-09-30); revision 11 changes only D-15's note text (R11-n3); revisions 12, 13 and 14 do not change it. `research.md` is unchanged since revision 4; `brief.md` changed last in revision 10 (front matter and AS-4, D-15).
@@ -334,9 +351,9 @@ Check with `sha256sum -c` over the block below, from `specs/workload-wa-hardenin
 beca16ba9ab95d76cd28ed47ac8e806549b94805ddca9a2d138a790ee0f0ca59  research.md
 5d7d1e37b9417de7cbe7b4fa0bcafe28ed723da997c22be7ef5902b384e302e4  brief.md
 18228d0075defe4cd689cc070cc648c94e49bd68a52ebae92e80b8939c750a0a  prd.md
-d12a6b436cc5b2a9e1de69088afac3f82cd404ebec9e15a31d0e1966bd55216a  architecture.md
-1e73a9d9053a61cebfdee9677ab246271369ade33c4847c44a64939517089807  epics-stories.md
-7701cd7163b87744087b78d8d01abad0fcb2a11dbe0468d5b3559d975488b119  decisions.md
+bf835cca30d34d24192ab6a95952ff5dd4f056a46561eef9d2f5b53f1769aac9  architecture.md
+64b9deff013e2bf30a15d232b4b2acf104114f6075c70ac175c65b2a48035f1b  epics-stories.md
+de34e52f30780e89e01e2c459049f6373ac2ab0abcca9ffd86d53a262fec2cf0  decisions.md
 45553cbd61f1ae16c238cba9f3ee4f555ede5e06d5e9aaa9199670f0ad81046a  readiness.md
 ```
 

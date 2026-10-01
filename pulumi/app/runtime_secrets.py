@@ -87,6 +87,11 @@ class RuntimeSecretsDescriptor:
         return "workload_step" in self._contract
 
     @property
+    def workload_step(self) -> int:
+        """Return the hardened step (FR-34); a pre-hardening contract has none."""
+        return self._contract["workload_step"]
+
+    @property
     def references(self) -> dict[str, dict[str, Any]]:
         """Return a detached copy of the exact declared secret identities."""
         return copy.deepcopy(

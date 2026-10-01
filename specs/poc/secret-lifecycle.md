@@ -61,36 +61,116 @@ children of a packaged component. The component-level transformation on the
 secret, network and messaging planes stays as a second layer. The guard fails
 the program on any Random, TLS or `SecretVersion` type and on any type outside
 the closed allowlist of the hardened graph. `HARDENED_TYPES` is exactly the set
-the hardened graph renders: nine tagged types (VPC, subnet, route table,
-internet gateway, EIP, NAT gateway, security group, Secrets Manager secret and
-SQS queue), four untagged or self-tagged types (route-table association, ECR
-repository, Route 53 record and SES identity) and the six component tokens.
-`TAGGABLE_TYPES` only selects what the planes tag; it admits no type. Widening
-the allowlist is a reviewed change.
+the hardened graph renders. S1.1 rendered nine tagged types (VPC, subnet, route
+table, internet gateway, EIP, NAT gateway, security group, Secrets Manager
+secret and SQS queue), four untagged or self-tagged types (route-table
+association, ECR repository, Route 53 record and SES identity) and six
+component tokens. S1.3 adds the data and compute planes: twelve tagged types
+(log group, DocumentDB cluster, instance, cluster parameter group and subnet
+group, ECS cluster, service and task definition, load balancer, listener,
+target group and the ALB log bucket), seven untagged types (the ECR lifecycle
+policy and the six ALB log bucket settings) and three component tokens (data
+plane, compute plane and ALB access logs). ElastiCache stays outside it until
+S1.4. `TAGGABLE_TYPES` only selects what the planes tag; it admits no type.
+Widening the allowlist is a reviewed change.
 
 The guard is type-level plus the listed property checks
 (`HARDENED_PROPERTY_CHECKS`). The SES identity's `dkimSigningAttributes` may
 hold only `nextSigningKeyLength`; a BYODKIM `domainSigningPrivateKey` or
 selector fails before registration. The check reads both key casings:
 snake_case on the SDK transformation path and camelCase on the engine path.
-An opaque value, such as an input type or an `Output`, fails closed.
+An opaque value fails closed, with two reviewed exceptions: the guard reads
+the input types `ListenerDefaultActionArgs` and `TaskDefinitionVolumeArgs`
+field by field. An SDK `Output` for a task definition is not refused but
+deferred (see below), because the engine transform re-checks it once resolved.
+Each check reads the casing of its path (snake_case on the SDK path, camelCase
+on the engine path); an input present in both casings is refused as an
+unreviewed property.
 
 `WorkloadPhaseStack` also registers a deny-all engine invoke transform through
 `pulumi.runtime.register_invoke_transform`. Its allowlist is empty: no hardened
 module calls a provider function, and any call fails the program before the
 provider runs it. A story that needs an invoke adds a reviewed allowlist.
 
-When the data and compute planes rejoin the hardened graph (S1.3, S4.10), that
-story widens the allowlist with property checks of its own: DocumentDB
-`manageMasterUserPassword` must be true with no `masterPassword` or
-`masterPasswordWo`; ElastiCache carries no `authToken`; and TaskDefinition
-environment names must not overlap the declared secret names.
+S1.3 added property checks with the data and compute planes. A DocumentDB
+`Cluster` must have `manageMasterUserPassword` literally true, no
+`masterPassword` or `masterPasswordWo`, engine `docdb` and engine version
+`5.0.0`. A `TaskDefinition`'s container definitions must hold only the
+exact-case keys `ComputePlane` emits (`name`, `image`, `essential`, `command`,
+`environment`, `secrets`, `portMappings`, `readonlyRootFilesystem`,
+`mountPoints`, `linuxParameters`, `healthCheck`, `logConfiguration`). ECS
+matches JSON keys case-insensitively, so a PascalCase key or two keys that
+differ only in case fail. Environment rows are exactly `{name, value}` and
+secret rows exactly `{name, valueFrom}`; environment names must not overlap
+secret names. Every key and string leaf except `secrets[].valueFrom` must be
+credential-free (no AWS access key, URL userinfo or credential query
+parameter), so `command`, `image`, `healthCheck.command` and
+`logConfiguration.options` are scanned too, and every `valueFrom` must be a
+bare secret ARN. `logConfiguration` is closed to the shape `ComputePlane`
+emits: `logDriver` is `awslogs`, `options` keys lie within `awslogs-group`,
+`awslogs-region` and `awslogs-stream-prefix`, and `secretOptions` is refused.
+Any `valueFrom` found outside `secrets[]` also gets the bare-ARN check as
+defence in depth; the closed keys leave none reachable today. `ComputePlane` applies the same check when it serializes
+(`require_plain_containers`), so both layers agree. The pre-hardening shape
+keeps its version-pinned `valueFrom` (AD-25). The pre-hardening serializer
+now also runs the closed-key, closed-log-configuration and credential-scan
+checks. That is an extra refusal only: the rendered output is unchanged and
+validation is stricter.
+
+The task definition check inspects a JSON string and defers only a value it
+cannot inspect yet. An SDK `Output` on the SDK transformation path is
+deferred: it reaches the engine transform once the SDK serializes it. On the
+engine path an unknown preview value is deferred, whether it arrives as a
+preview `Unknown` or as an unknown, non-secret output value: a preview never
+writes the definition, and the `up` that writes it sends the resolved string,
+which the engine transform inspects. A known output value is inspected as its
+string. Anything else fails as an unreviewed property: a secret-marked input
+(`Output.secret(...)`, which reaches the engine as a secret map or a secret
+output value), a map, a list or any other object. The task
+volumes may only name ephemeral storage, so an FSx `credentialsParameter` or
+Docker `driverOpts` fails. A `Listener` default action must not carry
+`authenticate_oidc` in any casing, since its `clientSecret` is a secret
+input, and an opaque action (an `Output`, a secret map, an `Unknown` or an
+unreviewed input type) fails closed. A Secrets Manager `Secret` must not carry
+an inline `policy` at any step: a resource policy joins only as the step-2
+`SecretPolicy` (FR-34 B, AD-08). An ECS `Service` must not carry
+`serviceConnectConfiguration`, whose log configuration has `secretOptions`.
+An elastic DocumentDB cluster (`aws:docdb/elasticCluster:ElasticCluster`)
+fails at every step (V-17). Redis joins in S1.4 with its own check:
+ElastiCache carries no `authToken`.
+
+Typed-input audit (S1.3, F-02): the args classes of every allowlisted type in
+pulumi-aws 7.23.0, nested input types included, were searched for `secret`,
+`password`, `token`, `private_key`, `client_secret` and `credential`. The
+sensitive inputs found are the DocumentDB `masterPassword` and
+`masterPasswordWo`, the task definition FSx `credentialsParameter`, the
+listener OIDC `clientSecret`, the Service Connect `secretOptions` and the SES
+`domainSigningPrivateKey`; each has a check above. The other hits carry no
+secret material: OIDC `tokenEndpoint` is a URL, the SES DKIM `tokens` are
+public DNS values, ECR `kmsKey` is a key ARN, the Secrets Manager
+`forceOverwriteReplicaSecret` is a flag, and the S3, SQS and ECR `policy`
+inputs are resource policies left to source review.
+
+The guard is bound to the contract's `workload_step` (FR-34, AD-18). Step 1
+refuses every step-2 type: the seed `Invocation`, `SecretRotation`,
+`SecretPolicy`, autoscaling targets and policies, and `ScheduledAction`. Step 2
+still refuses each one until its own story adds it to the allowlist; the
+create-only step-2 admission is S4.9.
 
 Residuals the guard does not inspect: free-form inputs of allowed types (for
 example a secret description, a tag value, a queue policy or a DNS record
 value), values passed to `pulumi.export` or `register_outputs`, which are not
 resource inputs, and default-provider config. Review of the program source and
-of the stack config remains the control for these.
+of the stack config remains the control for these. The listener OIDC
+`clientSecret` and the container fields other than `environment` (`command`,
+`image`, `healthCheck`, `logConfiguration` and the rest) are no longer
+residuals: the checks above inspect them. The credential scan is a shape heuristic (access key, URL
+userinfo, credential query parameter): an arbitrary plaintext secret in an
+environment value, `command` or a log option is not recognised, so source
+review remains the control for it. Two further residuals are recorded: on a
+first create, container content is checked only at `up`, not in the saved
+preview (R-1), and there is no native `up` observation until S4.6 step 4
+(R-2).
 
 The stack that renders no hardened contract registers no such guard.
 
@@ -165,14 +245,35 @@ On the hardened path the DocumentDB cluster is declared with
 `manage_master_user_password=True` and no `master_password`, so DocumentDB owns
 and rotates the primary password in its own managed secret. Pulumi never holds
 or generates it. A `documentDbPassword` (or `documentDbMasterPassword`) config
-key makes `DataPlane` raise before it registers anything, instead of being
-ignored. The hardened `WorkloadPhaseStack` does not compose the data plane yet,
-so that refusal applies to a workload stack only once S1.3 composes it. Until
-then the seam is exercised by a `DataPlane` built outside the stack guard. S1.3
-owns the composition-level N test: a native preview of the hardened workload
-with a secret `documentDbPassword` must fail without echoing its value. The
+key is refused instead of being ignored. Since S1.3 the hardened
+`WorkloadPhaseStack` composes the data plane under its stack-wide guard and
+refuses that key itself, before any resource registers; `DataPlane` refuses it
+again before its own registration. A native preview of the hardened workload
+with a secret `documentDbPassword` fails without echoing its value. The
 pre-hardening shape keeps its generated password until S4.10 removes that
 branch (AD-25).
+
+The application authenticates as the ECS task role with `MONGODB-AWS` (S1.3,
+FR-02). `MONGODB_URL` is a plain environment value with no userinfo:
+`mongodb://<endpoint>:<port>/<db>?tls=true&tlsCAFile=<ca>&replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false&authSource=%24external&authMechanism=MONGODB-AWS`,
+with the database and CA path URL-encoded. No `document_db_url` secret exists
+on the hardened path. IAM authentication exists only on instance-based
+DocumentDB 5.0 clusters (V-17, from the AWS DocumentDB IAM identity
+authentication guide, A-01), so `WorkloadPhaseStack` refuses any other engine
+version beside the password refusal, before any resource registers, and the
+data plane repeats that check. An elastic cluster fails the guard. The live
+check is S4.6 step 4.
+
+After step 1 the stack exports the XP-8 values in the contract's shape:
+`lambda_network` (`subnet_ids`, the app subnets, and
+`bootstrap_job_security_group_id`) and `documentdb_managed_secret_arn`. The
+bootstrap-job security group has no ingress and egresses only inside the VPC,
+to the DocumentDB port and to 443 for the Secrets Manager interface endpoint;
+the DocumentDB security group admits it beside the service group. S3.3 and S3.4
+narrow those egress rules to the endpoint and DocumentDB groups (FR-18). The
+two CIDR egress rules are an interim: S3.4 replaces both with security-group
+references and must update
+`test_the_bootstrap_job_sg_reaches_documentdb_and_stays_in_the_vpc`.
 
 Exception A-05 (D-4): pulumi-aws 7.23.0 exposes `manage_master_user_password`
 and `master_user_secrets` but no `master_user_secret_kms_key_id`. The managed

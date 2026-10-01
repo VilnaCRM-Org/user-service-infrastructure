@@ -26,6 +26,9 @@ class NetworkOutputs:
     documentdb_security_group_id: pulumi.Input[str]
     redis_security_group_id: pulumi.Input[str]
     vpc_link_security_group_id: pulumi.Input[str] | None = None
+    # Hardened graph only (S1.3, XP-8): the BI DocumentDB bootstrap job and the
+    # restore-rehearsal reader run in the app subnets with this group.
+    bootstrap_job_security_group_id: pulumi.Input[str] | None = None
 
 
 class NetworkPlane(pulumi.ComponentResource):
@@ -39,29 +42,39 @@ class NetworkPlane(pulumi.ComponentResource):
         *,
         settings: StackSettings,
         private_gateway: bool = False,
+        bootstrap_job: bool = False,
         opts: Optional[pulumi.ResourceOptions] = None,
     ) -> None:
-        """Build preview-safe outputs or provision the managed network topology."""
+        """Build preview-safe outputs or provision the managed network topology.
+
+        ``bootstrap_job`` adds the hardened bootstrap-job SG and its DocumentDB
+        ingress (S1.3); the pre-hardening graph never sets it (AD-25).
+        """
         super().__init__("user-service-infrastructure:network:Plane", name, None, opts)
 
         self.outputs = (
-            self._build_managed_network(settings, private_gateway=private_gateway)
+            self._build_managed_network(
+                settings, private_gateway=private_gateway, bootstrap_job=bootstrap_job
+            )
             if settings.is_managed
             else self._build_preview_outputs(settings)
         )
-        self.register_outputs(
-            {
-                "vpcId": self.outputs.vpc_id,
-                "publicSubnetIds": self.outputs.public_subnet_ids,
-                "appSubnetIds": self.outputs.app_subnet_ids,
-                "dataSubnetIds": self.outputs.data_subnet_ids,
-                "albSecurityGroupId": self.outputs.alb_security_group_id,
-                "vpcLinkSecurityGroupId": self.outputs.vpc_link_security_group_id,
-                "serviceSecurityGroupId": self.outputs.service_security_group_id,
-                "documentDbSecurityGroupId": self.outputs.documentdb_security_group_id,
-                "redisSecurityGroupId": self.outputs.redis_security_group_id,
-            }
-        )
+        outputs = {
+            "vpcId": self.outputs.vpc_id,
+            "publicSubnetIds": self.outputs.public_subnet_ids,
+            "appSubnetIds": self.outputs.app_subnet_ids,
+            "dataSubnetIds": self.outputs.data_subnet_ids,
+            "albSecurityGroupId": self.outputs.alb_security_group_id,
+            "vpcLinkSecurityGroupId": self.outputs.vpc_link_security_group_id,
+            "serviceSecurityGroupId": self.outputs.service_security_group_id,
+            "documentDbSecurityGroupId": self.outputs.documentdb_security_group_id,
+            "redisSecurityGroupId": self.outputs.redis_security_group_id,
+        }
+        if bootstrap_job:
+            outputs["bootstrapJobSecurityGroupId"] = (
+                self.outputs.bootstrap_job_security_group_id
+            )
+        self.register_outputs(outputs)
 
     def _build_preview_outputs(self, settings: StackSettings) -> NetworkOutputs:
         """Expose deterministic placeholders for credential-free previews."""
@@ -102,7 +115,11 @@ class NetworkPlane(pulumi.ComponentResource):
         )
 
     def _build_managed_network(
-        self, settings: StackSettings, *, private_gateway: bool = False
+        self,
+        settings: StackSettings,
+        *,
+        private_gateway: bool = False,
+        bootstrap_job: bool = False,
     ) -> NetworkOutputs:
         """Provision the VPC, subnets, routes, and security groups."""
         vpc = aws.ec2.Vpc(
@@ -290,27 +307,11 @@ class NetworkPlane(pulumi.ComponentResource):
             opts=pulumi.ResourceOptions(parent=self),
         )
 
-        documentdb_security_group = aws.ec2.SecurityGroup(
-            "user-service-documentdb-sg",
-            vpc_id=vpc.id,
-            description="Allow ECS tasks to reach the DocumentDB cluster.",
-            ingress=[
-                aws.ec2.SecurityGroupIngressArgs(
-                    protocol="tcp",
-                    from_port=settings.documentdb.port,
-                    to_port=settings.documentdb.port,
-                    security_groups=[service_security_group.id],
-                )
-            ],
-            egress=[
-                aws.ec2.SecurityGroupEgressArgs(
-                    protocol="-1",
-                    from_port=0,
-                    to_port=0,
-                    cidr_blocks=[settings.network.vpc_cidr],
-                )
-            ],
-            opts=pulumi.ResourceOptions(parent=self),
+        bootstrap_job_security_group = self._bootstrap_job_security_group(
+            settings, vpc, enabled=bootstrap_job
+        )
+        documentdb_security_group = self._documentdb_security_group(
+            settings, vpc, service_security_group, bootstrap_job_security_group
         )
 
         redis_security_group = aws.ec2.SecurityGroup(
@@ -350,4 +351,68 @@ class NetworkPlane(pulumi.ComponentResource):
                 if vpc_link_security_group is not None
                 else None
             ),
+            bootstrap_job_security_group_id=getattr(
+                bootstrap_job_security_group, "id", None
+            ),
+        )
+
+    def _documentdb_security_group(
+        self,
+        settings: StackSettings,
+        vpc: aws.ec2.Vpc,
+        *sources: aws.ec2.SecurityGroup | None,
+    ) -> aws.ec2.SecurityGroup:
+        """Admit only the service and, if present, bootstrap-job groups."""
+        return aws.ec2.SecurityGroup(
+            "user-service-documentdb-sg",
+            vpc_id=vpc.id,
+            description="Allow ECS tasks to reach the DocumentDB cluster.",
+            ingress=[
+                aws.ec2.SecurityGroupIngressArgs(
+                    protocol="tcp",
+                    from_port=settings.documentdb.port,
+                    to_port=settings.documentdb.port,
+                    security_groups=[
+                        group.id for group in sources if group is not None
+                    ],
+                )
+            ],
+            egress=[
+                aws.ec2.SecurityGroupEgressArgs(
+                    protocol="-1",
+                    from_port=0,
+                    to_port=0,
+                    cidr_blocks=[settings.network.vpc_cidr],
+                )
+            ],
+            opts=pulumi.ResourceOptions(parent=self),
+        )
+
+    def _bootstrap_job_security_group(
+        self, settings: StackSettings, vpc: aws.ec2.Vpc, *, enabled: bool
+    ) -> aws.ec2.SecurityGroup | None:
+        """Create the BI bootstrap-job SG: no ingress, in-VPC egress only (S1.3).
+
+        The job reaches the DocumentDB port and the in-VPC Secrets Manager
+        interface endpoint (443); it never egresses outside the VPC. S3.3 and
+        S3.4 narrow both rules to the DocumentDB and endpoint SGs (FR-18). Only
+        the hardened graph enables it; the pre-hardening graph is unchanged.
+        """
+        if not enabled:
+            return None
+        return aws.ec2.SecurityGroup(
+            "user-service-bootstrap-job-sg",
+            vpc_id=vpc.id,
+            description="DocumentDB bootstrap job and restore reader (BI Lambda).",
+            ingress=[],
+            egress=[
+                aws.ec2.SecurityGroupEgressArgs(
+                    protocol="tcp",
+                    from_port=port,
+                    to_port=port,
+                    cidr_blocks=[settings.network.vpc_cidr],
+                )
+                for port in (settings.documentdb.port, 443)
+            ],
+            opts=pulumi.ResourceOptions(parent=self),
         )

@@ -1,12 +1,13 @@
-"""Hardened DocumentDB primary password: AWS-managed, never configured (S1.2)."""
+"""Hardened DocumentDB: managed password (S1.2) and MONGODB-AWS URL (S1.3)."""
 
 import ast
 import re
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from app.data import DataPlane
+from app.data import DataPlane, _managed_secret_arn, documentdb_iam_url
 from app.environment import (
     DOCUMENTDB_PASSWORD_CONFIG_KEYS,
     reject_documentdb_password_config,
@@ -22,9 +23,26 @@ import pulumi
 
 CLUSTER = "user-service-documentdb-cluster"
 ARN = "arn:aws:secretsmanager:eu-central-1:891377212104:secret:synthetic-AbCdEf"
+MANAGED_ARN = (
+    "arn:aws:secretsmanager:eu-central-1:891377212104:secret:"
+    "rds!cluster-00000000-0000-4000-8000-000000000003-AbCdEf"
+)
+ENDPOINT = "synthetic.cluster-abc.eu-central-1.docdb.amazonaws.com"
 
 
-def _settings():
+class DocumentDbMocks(RecordingMocks):
+    """Report the cluster endpoint and its one managed secret, as DocumentDB does."""
+
+    def new_resource(self, args):
+        resource_id, outputs = super().new_resource(args)
+        if args.typ == "aws:docdb/cluster:Cluster":
+            outputs["endpoint"] = ENDPOINT
+            if args.inputs.get("manageMasterUserPassword") is True:
+                outputs["masterUserSecrets"] = [{"secretArn": MANAGED_ARN}]
+        return resource_id, outputs
+
+
+def _settings(engine_version="5.0.0"):
     return SimpleNamespace(
         is_managed=True,
         stack_tag="user-service-dev",
@@ -32,7 +50,7 @@ def _settings():
         documentdb=SimpleNamespace(
             username="synthetic",
             port=27017,
-            engine_version="5.0.0",
+            engine_version=engine_version,
             instance_class="db.t3.medium",
             instance_count=1,
             backup_retention_days=7,
@@ -61,16 +79,18 @@ def _network():
     )
 
 
-def _secrets(hardened):
+def _secrets(hardened, database="user_service"):
     return SimpleNamespace(
-        descriptor=SimpleNamespace(hardened=hardened),
+        descriptor=SimpleNamespace(
+            hardened=hardened, database_name=database, ca_bundle_path="/etc/ca.pem"
+        ),
         secret_arns={"document_db_url": ARN, "redis_url": ARN},
         values={},
     )
 
 
-def _register(secrets, config=None, material=False):
-    recorder = RecordingMocks()
+def _register(secrets, config=None, material=False, engine_version="5.0.0"):
+    recorder = DocumentDbMocks()
     monitor = OptionRecordingMonitor(recorder)
     captured = {}
 
@@ -82,24 +102,44 @@ def _register(secrets, config=None, material=False):
             }
         plane = DataPlane(
             "data",
-            settings=_settings(),
+            settings=_settings(engine_version),
             network=_network(),
             runtime_secrets=secrets,
         )
         captured["plane"] = plane
+        if hasattr(plane, "documentdb"):
+            for field in ("mongodb_url", "managed_secret_arn"):
+                getattr(plane.documentdb, field).apply(
+                    lambda value, field=field: captured.__setitem__(field, value)
+                )
 
     with mocked_pulumi_context(config or {}):
         _run_pulumi_program(program, test_mocks=recorder, monitor=monitor)
     resources = {str(row["name"]): row for row in recorder.resources}
-    return resources, captured["plane"]
+    return resources, captured
+
+
+def _password_inputs(inputs):
+    """Every cluster input naming a password, except the managed-password flag."""
+    return {
+        key
+        for key in inputs
+        if "password" in key.lower() and key != "manageMasterUserPassword"
+    }
 
 
 def test_hardened_cluster_uses_the_managed_password_without_a_master_password():
     resources, _ = _register(_secrets(hardened=True))
     cluster = resources[CLUSTER]["inputs"]
     assert cluster["manageMasterUserPassword"] is True
-    assert "masterPassword" not in cluster
+    # F-10: no masterPassword, masterPasswordWo or any other password input.
+    assert _password_inputs(cluster) == set()
     assert cluster["masterUsername"] == "synthetic"
+
+
+def test_the_password_input_scan_finds_a_write_only_password():
+    inputs = {"manageMasterUserPassword": True, "masterPasswordWo": "synthetic"}
+    assert _password_inputs(inputs) == {"masterPasswordWo"}
 
 
 def test_hardened_cluster_keeps_the_aws_managed_key_under_exception_a05():
@@ -112,28 +152,85 @@ def test_hardened_cluster_keeps_the_aws_managed_key_under_exception_a05():
 
 
 def test_hardened_data_plane_holds_no_generated_secret_material():
-    resources, plane = _register(_secrets(hardened=True))
+    resources, captured = _register(_secrets(hardened=True))
     assert not any(
         row["type"].startswith(("random:", "tls:"))
         or row["type"] == "aws:secretsmanager/secretVersion:SecretVersion"
         for row in resources.values()
     )
-    assert plane._runtime_secrets.values == {}
+    assert captured["plane"]._runtime_secrets.values == {}
 
 
-def test_hardened_outputs_expose_only_documentdb_until_s13():
-    _, plane = _register(_secrets(hardened=True))
+def test_hardened_outputs_expose_the_iam_url_and_no_url_secret():
+    """S1.3: MONGODB_URL is plain; ``document_db_url`` and Redis are absent."""
+    resources, captured = _register(_secrets(hardened=True))
+    plane = captured["plane"]
     assert not hasattr(plane, "outputs")
-    assert plane.documentdb.port is not None
     assert len(plane.documentdb.instances) == 1
+    assert captured["managed_secret_arn"] == MANAGED_ARN
+    assert captured["mongodb_url"] == (
+        f"mongodb://{ENDPOINT}:27017/user_service?tls=true"
+        "&tlsCAFile=%2Fetc%2Fca.pem&replicaSet=rs0"
+        "&readPreference=secondaryPreferred&retryWrites=false"
+        "&authSource=%24external&authMechanism=MONGODB-AWS"
+    )
+    assert not [
+        row
+        for row in resources.values()
+        if row["type"].startswith(("aws:secretsmanager/", "aws:elasticache/"))
+    ]
+
+
+def test_iam_url_carries_mechanism_source_tls_and_ca():
+    """FR-02 P: the URL names MONGODB-AWS, ``$external``, TLS and the CA."""
+    url = documentdb_iam_url(ENDPOINT, 27017, "user_service", "/etc/ca.pem")
+    parts = urlsplit(url)
+    query = parse_qs(parts.query)
+    assert (parts.scheme, parts.hostname, parts.port) == ("mongodb", ENDPOINT, 27017)
+    assert (parts.username, parts.password) == (None, None)
+    assert query["authMechanism"] == ["MONGODB-AWS"]
+    assert query["authSource"] == ["$external"]
+    assert (query["tls"], query["tlsCAFile"]) == (["true"], ["/etc/ca.pem"])
+    assert query["retryWrites"] == ["false"]
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["user@" + ENDPOINT, "user:synthetic@" + ENDPOINT, "@" + ENDPOINT],
+)
+def test_userinfo_in_the_iam_url_raises(endpoint):
+    """FR-02 N: the URL never carries userinfo."""
+    with pytest.raises(ValueError, match="userinfo"):
+        documentdb_iam_url(endpoint, 27017, "user_service", "/etc/ca.pem")
+
+
+def test_the_database_name_is_url_encoded():
+    """FR-02 B: a database name cannot alter the path or the query."""
+    url = documentdb_iam_url(ENDPOINT, 27017, "app/db?x=1 &y", "/etc/ca.pem")
+    assert urlsplit(url).path == "/app%2Fdb%3Fx%3D1%20%26y"
+    assert "x" not in parse_qs(urlsplit(url).query)
+
+
+@pytest.mark.parametrize("version", ["4.0.0", "3.6.0", "5.0", "8.0.0", None])
+def test_a_non_iam_engine_version_raises(version):
+    """N (V-17): only instance-based DocumentDB 5.0.0 supports IAM auth."""
+    with pytest.raises(ValueError, match="V-17"):
+        _register(_secrets(hardened=True), engine_version=version)
+
+
+def test_the_managed_secret_must_be_exactly_one():
+    assert _managed_secret_arn([SimpleNamespace(secret_arn=MANAGED_ARN)]) == (
+        MANAGED_ARN
+    )
+    for secrets in (None, [], [SimpleNamespace(secret_arn=MANAGED_ARN)] * 2):
+        with pytest.raises(ValueError, match="exactly one managed secret"):
+            _managed_secret_arn(secrets)
 
 
 def test_pre_hardening_cluster_keeps_the_generated_master_password():
-    secrets = _secrets(hardened=False)
-    secrets.descriptor.database_name = "app"
-    secrets.descriptor.ca_bundle_path = "/etc/ca.pem"
+    secrets = _secrets(hardened=False, database="app")
     secrets.persist_url = lambda purpose, value: pulumi.Output.from_input(ARN)
-    resources, _ = _register(secrets, material=True)
+    resources, _ = _register(secrets, material=True, engine_version="4.0.0")
     cluster = resources[CLUSTER]["inputs"]
     assert "masterPassword" in cluster
     assert "manageMasterUserPassword" not in cluster
@@ -170,7 +267,8 @@ def test_password_config_is_refused_before_any_resource_registers():
     assert not [row for row in recorder.resources if row["type"].startswith("aws:")]
 
 
-PASSWORD_KEY = re.compile(r"documentDb\w*Password\w*")
+# F-09: case-insensitive, so ``documentDBPassword`` is caught as well.
+PASSWORD_KEY = re.compile(r"documentdb\w*password\w*", re.IGNORECASE)
 
 
 def _password_key_literals(source):
@@ -185,21 +283,26 @@ def _password_key_literals(source):
 
 
 def test_every_documentdb_password_config_key_is_refused_on_the_hardened_path():
-    """F-03: a new password config key cannot bypass the hardened refusal."""
+    """F-03/F-09: a new password config key cannot bypass the hardened refusal."""
+    root = Path(__file__).parents[2]
     found = set()
-    for path in sorted((Path(__file__).parents[2] / "pulumi").rglob("*.py")):
-        found |= _password_key_literals(path.read_text())
+    for directory in ("pulumi", "scripts", "policy"):
+        for path in sorted((root / directory).rglob("*.py")):
+            found |= _password_key_literals(path.read_text())
     assert found, "the scan must see at least the existing password keys"
     assert found <= set(DOCUMENTDB_PASSWORD_CONFIG_KEYS), found
 
 
-def test_the_password_key_scan_finds_an_unlisted_key():
-    source = 'config.get("documentDbRotatedPassword")\nx = "documentDbHost"'
-    assert _password_key_literals(source) == {"documentDbRotatedPassword"}
+@pytest.mark.parametrize(
+    "key", ["documentDbRotatedPassword", "documentDBPassword", "DocumentDbPassword"]
+)
+def test_the_password_key_scan_finds_an_unlisted_key(key):
+    source = f'config.get("{key}")\nx = "documentDbHost"'
+    assert _password_key_literals(source) == {key}
 
 
-def test_lifecycle_doc_qualifies_the_refusal_until_s13_composes_the_data_plane():
-    """F-04: the doc does not claim the workload stack refuses it yet."""
+def test_lifecycle_doc_records_the_composed_refusal_and_the_iam_url():
+    """F-04: S1.3 composes the data plane, so the stack-level refusal is real."""
     text = " ".join(
         (Path(__file__).parents[2] / "specs/poc/secret-lifecycle.md")
         .read_text()
@@ -207,8 +310,15 @@ def test_lifecycle_doc_qualifies_the_refusal_until_s13_composes_the_data_plane()
     )
     section = text[text.index("### DocumentDB primary password") :]
     for marker in (
-        "only once S1.3 composes it",
-        "S1.3 owns the composition-level N test",
+        "composes the data plane under its stack-wide guard",
+        "before any resource registers",
         "without echoing its value",
+        "MONGODB-AWS",
+        "authSource=%24external",
+        "V-17",
+        "document_db_url",
+        "lambda_network",
+        "documentdb_managed_secret_arn",
     ):
         assert marker in section, marker
+    assert "only once S1.3 composes it" not in section

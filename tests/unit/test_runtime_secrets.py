@@ -412,8 +412,8 @@ def test_hardened_projection_renders_seeded_metadata_and_no_secret_material(tmp_
     component = rows["runtime-secrets"]["urn"]
     assert receipt["outputs"][component]["versionIds"] == {}
     assert set(receipt["outputs"][component]["secretArns"]) == set(declarations)
-    assert {"network", "messaging"} <= set(rows)
-    assert not {"data", "compute"} & set(rows)
+    # S1.3: the data and compute planes join the hardened graph.
+    assert {"network", "messaging", "data", "compute"} <= set(rows)
 
 
 def test_pre_hardening_projection_keeps_its_generators_until_s4_10(tmp_path):
@@ -453,10 +453,6 @@ def test_readding_secret_material_to_the_hardened_graph_fails(tmp_path, mutation
         ("ssm-parameter", "aws:ssm/parameter:Parameter"),
         ("stack:ssm-parameter", "aws:ssm/parameter:Parameter"),
         ("root:ssm-parameter", "aws:ssm/parameter:Parameter"),
-        # N1: a taggable data-plane type is not allowlisted before its story;
-        # a DocumentDB master password must never reach a hardened graph.
-        ("stack:docdb-cluster", "aws:docdb/cluster:Cluster"),
-        ("root:docdb-cluster", "aws:docdb/cluster:Cluster"),
     ],
 )
 def test_unlisted_type_in_the_hardened_graph_fails(tmp_path, addition, kind):
@@ -670,19 +666,20 @@ def test_hardened_allowlist_is_exactly_the_rendered_graph(tmp_path):
         row["type"] for row in graph(tmp_path, "hardened")["registrations"].values()
     } - {"pulumi:pulumi:Stack"}
     assert rendered == HARDENED_TYPES
+    # S1.3 added the data and compute planes: 12 tagged, 7 untagged and 3
+    # component types over S1.1's (9, 4, 6).
     assert (
         len(HARDENED_TAGGED_TYPES),
         len(HARDENED_UNTAGGED_TYPES),
         len(HARDENED_COMPONENT_TYPES),
-    ) == (9, 4, 6)
+    ) == (21, 11, 9)
     assert HARDENED_TAGGED_TYPES < TAGGABLE_TYPES
     assert not HARDENED_UNTAGGED_TYPES & TAGGABLE_TYPES
-    for kind in (
-        "aws:docdb/cluster:Cluster",
+    # Redis joins with S1.4 (D-1), so ElastiCache stays outside the allowlist.
+    assert TAGGABLE_TYPES - HARDENED_TAGGED_TYPES == {
         "aws:elasticache/replicationGroup:ReplicationGroup",
-        "aws:ecs/taskDefinition:TaskDefinition",
-    ):
-        assert kind in TAGGABLE_TYPES and kind not in HARDENED_TYPES
+        "aws:elasticache/subnetGroup:SubnetGroup",
+    }
     assert not [kind for kind in HARDENED_TYPES if kind.startswith(SECRET_MATERIAL)]
 
 
@@ -772,14 +769,13 @@ def test_ses_identity_holds_only_the_easy_dkim_key_length(engine, attributes, ac
 
 
 @pytest.mark.parametrize("engine", [False, True])
-def test_unrendered_data_and_compute_types_are_refused_on_both_paths(engine):
-    """N1: no master password, auth token or task environment before S1.3/S4.10."""
+def test_unrendered_redis_types_are_refused_on_both_paths(engine):
+    """N1: no ElastiCache type, so no ``authToken``, before S1.4 (D-1)."""
     from app.workload_phase import _reject_secret_material
 
     for kind, props in (
-        ("aws:docdb/cluster:Cluster", {"masterPassword": "synthetic"}),
         ("aws:elasticache/replicationGroup:ReplicationGroup", {"authToken": "x"}),
-        ("aws:ecs/taskDefinition:TaskDefinition", {"containerDefinitions": "[]"}),
+        ("aws:elasticache/subnetGroup:SubnetGroup", {}),
     ):
         with pytest.raises(ValueError, match="unreviewed type"):
             _reject_secret_material(_transform_args(engine, kind, props))

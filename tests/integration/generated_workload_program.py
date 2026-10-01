@@ -18,9 +18,7 @@ if os.environ.get("COVERAGE_PROCESS_START"):
     coverage.process_startup()
 
 from app.compute import ComputePlane  # noqa: E402
-from app.data import DataPlane  # noqa: E402
 from app.environment import resolve_stack_settings  # noqa: E402
-from app.network import NetworkPlane  # noqa: E402
 from app.registry_phase import RegistryPhaseStack  # noqa: E402
 from app.runtime_secrets import RuntimeSecrets, RuntimeSecretsDescriptor  # noqa: E402
 from app.stack import UserServiceStack  # noqa: E402
@@ -47,25 +45,10 @@ metadata = SimpleNamespace(
 )
 if mode == "registry":
     RegistryPhaseStack(registries=registries)
-elif mode.startswith("hardened-data"):
-    # S1.2 seam, built outside WorkloadPhaseStack and so outside its stack-wide
-    # closed type guard: S1.3 composes the data plane into the hardened graph
-    # and widens that allowlist then. S1.2 does not widen it.
-    settings = resolve_stack_settings(metadata, generated_secrets=True)
-    # hardened-data-password: the stack holds a secret documentDbPassword, set
-    # by the test through stack config, never through this program.
-    runtime_secrets = RuntimeSecrets(
-        "runtime-secrets", descriptor=RuntimeSecretsDescriptor(contract)
-    )
-    network = NetworkPlane("network", settings=settings, private_gateway=True)
-    DataPlane(
-        "data",
-        settings=settings,
-        network=network,
-        runtime_secrets=runtime_secrets,
-    )
 elif hardened:
-    # A workload_step contract renders the hardened composition (AD-25).
+    # A workload_step contract renders the hardened composition (AD-25). Since
+    # S1.3 it composes the data and compute planes under the stack-wide guard;
+    # a documentDbPassword or engine version arrives only through stack config.
     workload = WorkloadPhaseStack(
         settings=resolve_stack_settings(metadata, generated_secrets=True),
         registries=registries,
@@ -98,7 +81,7 @@ elif hardened:
         aws.ssm.Parameter(
             "fixture-parameter", type="String", value="synthetic", opts=options
         )
-    # N1: a credential-bearing data-plane type is refused before its story.
+    # N1: an allowlisted DocumentDB cluster still refuses a primary password.
     if kind == "docdb-cluster":
         import pulumi_aws as aws
 
@@ -107,6 +90,26 @@ elif hardened:
             master_username="synthetic",
             master_password="synthetic-not-a-secret",
             opts=options,
+        )
+    # N (V-17): an elastic cluster has no IAM authentication.
+    if kind == "docdb-elastic-cluster":
+        import pulumi_aws as aws
+
+        aws.docdb.ElasticCluster(
+            "fixture-elastic-cluster",
+            admin_user_name="synthetic",
+            admin_user_password="synthetic-not-a-secret",
+            auth_type="PLAIN_TEXT",
+            shard_capacity=2,
+            shard_count=1,
+            opts=options,
+        )
+    # B (FR-34): a step-2 type never joins the step-1 graph.
+    if kind == "secret-policy":
+        import pulumi_aws as aws
+
+        aws.secretsmanager.SecretPolicy(
+            "fixture-policy", secret_arn="synthetic", policy="{}", opts=options
         )
     # N1: an allowlisted SES identity still refuses a BYODKIM private key.
     if kind == "byodkim-identity":
@@ -121,6 +124,57 @@ elif hardened:
                 "domain_signing_selector": "fixture",
             },
             opts=options,
+        )
+    # F-01 (a): a secret-marked definition reaches the engine as a secret map.
+    if kind == "secret-task":
+        import pulumi_aws as aws
+
+        definitions = [{"name": "fixture", "environment": []}]
+        aws.ecs.TaskDefinition(
+            "fixture-task",
+            family="fixture",
+            container_definitions=pulumi.Output.secret(json.dumps(definitions)),
+            opts=options,
+        )
+    # F-01 (b): ECS reads PascalCase keys case-insensitively; the guard refuses.
+    if kind == "pascal-task":
+        import pulumi_aws as aws
+
+        row = {"Name": "DSN", "Value": "https://user:synthetic@host"}
+        aws.ecs.TaskDefinition(
+            "fixture-task",
+            family="fixture",
+            container_definitions=json.dumps([{"name": "f", "Environment": [row]}]),
+            opts=options,
+        )
+    # F-02: an OIDC listener action carries a client secret.
+    if kind == "oidc-listener":
+        import pulumi_aws as aws
+
+        aws.lb.Listener(
+            "fixture-listener",
+            load_balancer_arn="arn:aws:fixture",
+            default_actions=[
+                {
+                    "type": "authenticate-oidc",
+                    "authenticate_oidc": {
+                        "authorization_endpoint": "https://idp.example/authorize",
+                        "client_id": "fixture",
+                        "client_secret": "synthetic-not-a-secret",
+                        "issuer": "https://idp.example",
+                        "token_endpoint": "https://idp.example/token",
+                        "user_info_endpoint": "https://idp.example/userinfo",
+                    },
+                }
+            ],
+            opts=options,
+        )
+    # F-03: an inline secret policy bypasses the step-1 SecretPolicy refusal.
+    if kind == "policy-secret":
+        import pulumi_aws as aws
+
+        aws.secretsmanager.Secret(
+            "fixture-secret", name="fixture", policy="{}", opts=options
         )
     # N2: the engine invoke guard refuses a provider function call.
     if kind == "random-password-invoke":

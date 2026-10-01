@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Optional, cast
+from urllib.parse import parse_qsl, urlsplit
 
 import pulumi_aws as aws
 
@@ -21,7 +23,7 @@ from app.environment import (
 from app.messaging import MessagingPlane
 from app.network import NetworkPlane
 from app.registry import RegistryOutputs
-from app.runtime_secrets import RuntimeSecrets
+from app.runtime_secrets import RuntimeSecrets, require_unversioned_reference
 
 __all__ = ["ComputePlane"]
 
@@ -87,6 +89,195 @@ WORKER_RUNTIME_COMMAND = (
 # Parent directories of every path the runtime command writes; the bootstrap
 # creates them before exec because the ephemeral volumes start empty.
 RUNTIME_WRITABLE_DIRECTORIES = ("/srv/app/var/log", "/srv/app/var/run")
+# Step 1 creates both hardened services at zero tasks; only the step-2 one-time
+# start action scales them, after the seed and rotation exist (FR-34, AD-18).
+INITIAL_SERVICE_SCALE = 0
+# AWS access key IDs (long-term, temporary and service-specific prefixes).
+_ACCESS_KEY_ID = re.compile(
+    r"(?<![A-Z0-9])(?:AKIA|ASIA|ABIA|ACCA|AGPA|AIDA|AROA)[A-Z0-9]{16}(?![A-Z0-9])"
+)
+# DSN query parameters that would carry a credential, such as the Symfony SQS
+# ``access_key`` and ``secret_key`` or a SigV4 presigned ``X-Amz-Credential``.
+CREDENTIAL_QUERY_KEYS = frozenset(
+    {
+        "access_key",
+        "access_key_id",
+        "accesskey",
+        "api_key",
+        "apikey",
+        "passwd",
+        "password",
+        "pwd",
+        "secret",
+        "secret_access_key",
+        "secret_key",
+        "secretkey",
+        "security_token",
+        "session_token",
+        "token",
+        "x_amz_credential",
+        "x_amz_security_token",
+        "x_amz_signature",
+    }
+)
+
+
+def require_credential_free(value: Any) -> str:
+    """Refuse an environment value or DSN that carries a credential (FR-03, AD-20).
+
+    AWS clients use the task role, so no value may hold an access key, URL
+    userinfo or a credential query parameter. A value that is not a plain
+    string fails closed.
+    """
+    if type(value) is not str:
+        raise ValueError("Workload environment value must be a plain string")
+    if _ACCESS_KEY_ID.search(value):
+        raise ValueError("Workload environment value carries an AWS access key")
+    parts = urlsplit(value)
+    if "@" in parts.netloc:
+        raise ValueError("Workload DSN must not carry userinfo")
+    if any(
+        key.lower().replace("-", "_") in CREDENTIAL_QUERY_KEYS
+        for key, _ in parse_qsl(parts.query, keep_blank_values=True)
+    ):
+        raise ValueError("Workload DSN must not carry a credential parameter")
+    return value
+
+
+def require_plain_environment(
+    environment: list[dict[str, Any]], secrets: list[dict[str, Any]]
+) -> None:
+    """Keep plain environment names apart from secret names (FR-03, FR-08).
+
+    Only ``secrets[].valueFrom`` may reference secret material (a log-driver
+    ``secretOptions`` reference is refused by ``require_plain_containers``);
+    every plain value must be credential-free and no name may be both plain and secret.
+    """
+    names = [row["name"] for row in environment]
+    if len(set(names)) != len(names) or set(names) & {row["name"] for row in secrets}:
+        raise ValueError("Workload environment names overlap secret names")
+    for row in environment:
+        require_credential_free(row["value"])
+
+
+# The exact keys ``_container_definitions_json`` emits for one container. ECS
+# decodes container definitions with case-insensitive JSON key matching, so a
+# key outside this exact-case set, or two keys that differ only in case, could
+# reach a field no check reads (FR-03, FR-08).
+CONTAINER_KEYS = frozenset(
+    {
+        "command",
+        "environment",
+        "essential",
+        "healthCheck",
+        "image",
+        "linuxParameters",
+        "logConfiguration",
+        "mountPoints",
+        "name",
+        "portMappings",
+        "readonlyRootFilesystem",
+        "secrets",
+    }
+)
+ENVIRONMENT_ROW_KEYS = frozenset({"name", "value"})
+SECRET_ROW_KEYS = frozenset({"name", "valueFrom"})
+# The log configuration ``_container_definitions_json`` emits: the awslogs
+# driver with its three options, and no ``secretOptions`` (FR-03).
+LOG_DRIVER = "awslogs"
+LOG_CONFIGURATION_KEYS = frozenset({"logDriver", "options"})
+LOG_OPTION_KEYS = frozenset(
+    {"awslogs-group", "awslogs-region", "awslogs-stream-prefix"}
+)
+
+
+def _require_awslogs_configuration(log: Any) -> None:
+    """Accept only the closed awslogs shape, with no secret options (FR-03)."""
+    if (
+        type(log) is not dict
+        or set(log) != LOG_CONFIGURATION_KEYS
+        or log["logDriver"] != LOG_DRIVER
+        or type(log["options"]) is not dict
+        or not set(log["options"]) <= LOG_OPTION_KEYS
+    ):
+        raise ValueError("Workload log configuration must be the closed awslogs shape")
+
+
+def _require_unversioned_value_from(value: Any) -> None:
+    """Hold every ``valueFrom`` found anywhere in the tree to the bare ARN shape.
+
+    Defence in depth: the closed keys leave no such field outside
+    ``secrets[]``, so this only fires if a future key set admits one.
+    """
+    if type(value) is list:
+        for item in value:
+            _require_unversioned_value_from(item)
+    elif type(value) is dict:
+        for key, item in value.items():
+            if key.casefold() == "valuefrom":
+                require_unversioned_reference(item)
+            else:
+                _require_unversioned_value_from(item)
+
+
+def _closed_rows(rows: Any, keys: frozenset[str]) -> list[dict[str, Any]]:
+    """Accept only a list of exact-key rows with a plain string name."""
+    if type(rows) is not list or not all(
+        type(row) is dict and set(row) == keys and type(row["name"]) is str
+        for row in rows
+    ):
+        raise ValueError("Workload container rows must be closed name pairs")
+    return rows
+
+
+def _require_credential_free_tree(value: Any, exempt: str = "") -> None:
+    """Scan every map key and string leaf; skip only the value under ``exempt``."""
+    if type(value) is str:
+        require_credential_free(value)
+    elif type(value) is list:
+        for item in value:
+            _require_credential_free_tree(item)
+    elif type(value) is dict:
+        folded = {require_credential_free(key).casefold() for key in value}
+        if len(folded) != len(value):
+            raise ValueError("Workload container repeats a key in another case")
+        for key, item in value.items():
+            if key != exempt:
+                _require_credential_free_tree(item)
+
+
+def require_plain_containers(containers: Any, *, unversioned: bool) -> None:
+    """Refuse container definitions that could carry secret material (FR-03).
+
+    Keys are the closed exact-case set the compute plane emits; environment
+    and secret rows are closed name pairs with disjoint names; every key and
+    string leaf except ``secrets[].valueFrom`` is credential-free. With
+    ``unversioned`` (the hardened shape) each ``valueFrom`` must be a bare
+    secret ARN (S1.7); the pre-hardening shape stays version-pinned (AD-25).
+    ``logConfiguration`` is the closed awslogs shape with the three emitted
+    option keys and no ``secretOptions``; any other ``valueFrom`` in the tree
+    gets the same bare-ARN check when ``unversioned``.
+    The guard and ``ComputePlane`` apply this one check, so they agree.
+    """
+    if type(containers) is not list:
+        raise ValueError("Workload container definitions must be a list")
+    for container in containers:
+        if type(container) is not dict or not set(container) <= CONTAINER_KEYS:
+            raise ValueError("Workload container holds an unreviewed key")
+        environment = _closed_rows(
+            container.get("environment", []), ENVIRONMENT_ROW_KEYS
+        )
+        secrets = _closed_rows(container.get("secrets", []), SECRET_ROW_KEYS)
+        require_plain_environment(environment, secrets)
+        _require_credential_free_tree({**container, "secrets": None})
+        if "logConfiguration" in container:
+            _require_awslogs_configuration(container["logConfiguration"])
+        if unversioned:
+            _require_unversioned_value_from({**container, "secrets": None})
+        for row in secrets:
+            _require_credential_free_tree(row, exempt="valueFrom")
+            if unversioned:
+                require_unversioned_reference(row["valueFrom"])
 
 
 @dataclass(frozen=True)
@@ -121,6 +312,8 @@ class ComputePlane(pulumi.ComponentResource):
 
     outputs: ComputeOutputs
     _runtime_secrets: RuntimeSecrets | None = None
+    _hardened = False
+    _initial_service_scale: int | None = None
 
     def __init__(
         self,
@@ -132,9 +325,14 @@ class ComputePlane(pulumi.ComponentResource):
         messaging: MessagingPlane,
         registries: RegistryOutputs | None = None,
         runtime_secrets: RuntimeSecrets | None = None,
+        initial_service_scale: int | None = None,
         opts: Optional[pulumi.ResourceOptions] = None,
     ) -> None:
-        """Build preview-safe outputs or provision the managed compute plane."""
+        """Build preview-safe outputs or provision the managed compute plane.
+
+        ``initial_service_scale`` overrides both desired counts; the hardened
+        step-1 shape requires exactly ``INITIAL_SERVICE_SCALE`` (FR-34).
+        """
         if settings.is_managed:
             validate_runtime_roles(settings.runtime, settings.environment)
             validate_health_check_runtime(settings.runtime, settings.queues)
@@ -142,7 +340,13 @@ class ComputePlane(pulumi.ComponentResource):
                 require_application_secrets(settings)
             else:
                 runtime_secrets.descriptor.validate_target(settings)
+        self._hardened = (
+            runtime_secrets is not None and runtime_secrets.descriptor.hardened
+        )
+        if self._hardened and initial_service_scale != INITIAL_SERVICE_SCALE:
+            raise ValueError("Hardened workload services start at zero tasks (FR-34)")
         self._runtime_secrets = runtime_secrets
+        self._initial_service_scale = initial_service_scale
         super().__init__("user-service-infrastructure:compute:Plane", name, None, opts)
 
         self.outputs = (
@@ -355,7 +559,7 @@ class ComputePlane(pulumi.ComponentResource):
             name=build_resource_name(settings.stack_tag, "web", max_length=255),
             cluster=cluster.arn,
             task_definition=web_task_definition.arn,
-            desired_count=settings.capacity.web_desired_count,
+            desired_count=self._desired_count(settings.capacity.web_desired_count),
             launch_type="FARGATE",
             platform_version="LATEST",
             enable_execute_command=False,
@@ -381,7 +585,7 @@ class ComputePlane(pulumi.ComponentResource):
             wait_for_steady_state=True,
             opts=pulumi.ResourceOptions(
                 parent=self,
-                depends_on=[http_listener, *data.outputs.documentdb_instances],
+                depends_on=[http_listener, *self._documentdb_instances(data)],
                 custom_timeouts=_service_timeouts(),
             ),
         )
@@ -391,7 +595,7 @@ class ComputePlane(pulumi.ComponentResource):
             name=build_resource_name(settings.stack_tag, "worker", max_length=255),
             cluster=cluster.arn,
             task_definition=worker_task_definition.arn,
-            desired_count=settings.capacity.worker_desired_count,
+            desired_count=self._desired_count(settings.capacity.worker_desired_count),
             launch_type="FARGATE",
             platform_version="LATEST",
             enable_execute_command=False,
@@ -409,7 +613,7 @@ class ComputePlane(pulumi.ComponentResource):
             wait_for_steady_state=True,
             opts=pulumi.ResourceOptions(
                 parent=self,
-                depends_on=list(data.outputs.documentdb_instances),
+                depends_on=list(self._documentdb_instances(data)),
                 custom_timeouts=_service_timeouts(),
             ),
         )
@@ -423,6 +627,24 @@ class ComputePlane(pulumi.ComponentResource):
             web_service_name=web_service.name,
             worker_service_name=worker_service.name,
         )
+
+    def _desired_count(self, configured: int) -> int:
+        """Return the step-1 scale when one is set, else the configured count."""
+        if self._initial_service_scale is None:
+            return configured
+        return self._initial_service_scale
+
+    def _documentdb_instances(self, data: DataPlane) -> tuple[pulumi.Resource, ...]:
+        """Return the instances ECS waits for; the endpoint alone is no edge."""
+        if self._hardened:
+            return data.documentdb.instances
+        return data.outputs.documentdb_instances
+
+    def _data_environment(self, data: DataPlane) -> list[dict[str, pulumi.Input[str]]]:
+        """Pass the hardened MONGODB-AWS URL as a plain value (FR-02, S1.3)."""
+        if not self._hardened:
+            return []
+        return [{"name": "MONGODB_URL", "value": data.documentdb.mongodb_url}]
 
     def _create_repository_lifecycle(
         self,
@@ -595,7 +817,8 @@ class ComputePlane(pulumi.ComponentResource):
                 messaging,
                 include_worker_name=False,
             )
-            + self._trusted_proxy_environment(),
+            + self._trusted_proxy_environment()
+            + self._data_environment(data),
             secrets=self._common_secrets(data, runtime_secret_arns),
             port_mappings=[
                 {
@@ -658,7 +881,8 @@ class ComputePlane(pulumi.ComponentResource):
                 settings,
                 messaging,
                 include_worker_name=True,
-            ),
+            )
+            + self._data_environment(data),
             secrets=self._common_secrets(data, runtime_secret_arns),
             port_mappings=None,
             writable_paths=WORKER_WRITABLE_PATHS,
@@ -701,8 +925,9 @@ class ComputePlane(pulumi.ComponentResource):
             pulumi.Output.from_input(secrets),
             log_group_name,
         ).apply(
-            lambda parts: json.dumps(
-                [
+            lambda parts: self._serialize_container(
+                unversioned=self._hardened,
+                containers=[
                     {
                         "name": name,
                         "image": parts[0],
@@ -733,9 +958,17 @@ class ComputePlane(pulumi.ComponentResource):
                             },
                         },
                     }
-                ]
+                ],
             )
         )
+
+    @staticmethod
+    def _serialize_container(
+        containers: list[dict[str, Any]], *, unversioned: bool
+    ) -> str:
+        """Serialize after the checks the guard repeats on the JSON (FR-03)."""
+        require_plain_containers(containers, unversioned=unversioned)
+        return json.dumps(containers)
 
     def _common_environment(
         self,
@@ -954,7 +1187,8 @@ class ComputePlane(pulumi.ComponentResource):
         queue_url: pulumi.Input[str],
         region: str,
     ) -> pulumi.Output[str]:
-        """Build the Symfony SQS DSN from the full queue URL."""
+        """Build the credential-free Symfony SQS DSN from the full queue URL."""
+        options = f"?region={region}&auto_setup=false"
         return pulumi.Output.from_input(queue_url).apply(
-            lambda value: f"{value}?region={region}&auto_setup=false"
+            lambda value: require_credential_free(value + options)
         )

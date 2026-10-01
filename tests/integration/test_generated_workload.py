@@ -299,16 +299,62 @@ def test_native_hardened_data_plane_rejects_a_password_config_key(native_stack):
     assert "documentDbPassword must not be configured" in str(failure.value)
 
 
-def test_native_hardened_workload_rejects_readded_secret_material(native_stack):
+@pytest.mark.parametrize(
+    ("addition", "message", "kind"),
+    [
+        ("runtime-secrets:random-password", "must not hold secret material", None),
+        # N1 (F1): outside the component, the stack-wide guard still applies.
+        ("stack:random-password", "must not hold secret material", None),
+        ("root:random-password", "must not hold secret material", None),
+        ("stack:secret-version", "must not hold secret material", None),
+        ("root:secret-version", "must not hold secret material", None),
+        # F3: a type outside the closed allowlist fails too.
+        ("root:ssm-parameter", "unreviewed type", "aws:ssm/parameter:Parameter"),
+        # N1: the allowlist is the rendered set, so a DocumentDB master
+        # password fails whatever its parent.
+        ("stack:docdb-cluster", "unreviewed type", "aws:docdb/cluster:Cluster"),
+        ("root:docdb-cluster", "unreviewed type", "aws:docdb/cluster:Cluster"),
+        # N1: a BYODKIM private key fails the SES identity property check.
+        ("root:byodkim-identity", "unreviewed property", None),
+        ("stack:byodkim-identity", "unreviewed property", None),
+    ],
+)
+def test_native_hardened_workload_rejects_readded_secret_material(
+    native_stack, addition, message, kind
+):
     stack, work = native_stack
-    (work / "scenario.json").write_text('{"mode":"hardened-secret-material"}')
+    (work / "scenario.json").write_text(
+        json.dumps({"mode": "hardened-workload", "addition": addition})
+    )
     events = []
     with pytest.raises(AutomationRuntimeError) as failure:
         stack.preview(on_event=events.append)
-    assert "must not hold secret material" in str(failure.value)
+    assert message in str(failure.value)
     assert not [
-        row for row in resources(events) if row.type.startswith(SECRET_MATERIAL)
+        row
+        for row in resources(events)
+        if row.type.startswith(SECRET_MATERIAL)
+        or row.type == kind
+        or "::fixture-" in row.urn
     ]
+
+
+def test_native_hardened_workload_refuses_provider_function_calls(
+    native_stack, local_sts
+):
+    """N2: the engine invoke guard, not the network, fails the provider read."""
+    stack, work = native_stack
+    (work / "scenario.json").write_text(
+        json.dumps(
+            {"mode": "hardened-workload", "addition": "root:random-password-invoke"}
+        )
+    )
+    with pytest.raises(AutomationRuntimeError) as failure:
+        stack.preview()
+    assert "must not call a provider function" in str(failure.value)
+    # The provider never ran the invoke: no Secrets Manager request and no
+    # egress attempt reached the local endpoint that records every request.
+    assert set(local_sts[1]) <= {"GetCallerIdentity", "GetUser"}
 
 
 def test_native_legacy_workload_program_registers_managed_planes(native_stack):

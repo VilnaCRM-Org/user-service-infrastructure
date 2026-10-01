@@ -3,6 +3,7 @@
   "$id": "urn:vilnacrm:poc-workload-observation:v1",
   "title": "Workload start or stop observation bound to one success receipt",
   "description": "Local shape only. Publication, issuer, run binding and checkpoint authenticity are established by the receipt library, never by this schema. Metadata only: no secret value, resource input or resource output appears. A start record shows every service steady with running tasks, healthy targets and a green health endpoint; a stop record shows zero tasks and every target at min = max = 0.",
+  "$comment": "Draft 2020-12 pattern is applied with re.search, so '$' also matches before a trailing newline. Fixed-length fields pin minLength = maxLength; the S4.11 receipt library must re-check every variable-length field with re.fullmatch.",
   "$defs": {
     "checkpoint": {
       "type": "object",
@@ -24,8 +25,8 @@
         },
         "etag": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 512,
+          "minLength": 34,
+          "maxLength": 34,
           "pattern": "^\"[0-9a-f]{32}\"$"
         },
         "sha256": {
@@ -39,8 +40,8 @@
     },
     "sha256": {
       "type": "string",
-      "minLength": 1,
-      "maxLength": 512,
+      "minLength": 64,
+      "maxLength": 64,
       "pattern": "^[0-9a-f]{64}$"
     },
     "stack": {

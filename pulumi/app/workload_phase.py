@@ -220,14 +220,16 @@ def _unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 DEFERRED = object()
 
 
-def _resolved(future: Any) -> bool:
-    """Tell whether a future already holds a result, without awaiting it."""
-    return (
+def _settled(future: Any) -> tuple[bool, Any]:
+    """Return whether a future already holds a result, and that result."""
+    if (
         isinstance(future, asyncio.Future)
         and future.done()
         and not future.cancelled()
         and future.exception() is None
-    )
+    ):
+        return True, future.result()
+    return False, None
 
 
 def _engine_output(value: pulumi.Output) -> Any:
@@ -240,10 +242,10 @@ def _engine_output(value: pulumi.Output) -> Any:
     # ``vars`` avoids ``Output.__getattr__``, which would lift a missing
     # attribute into a new pending output instead of failing.
     fields = vars(value)
-    secret, future = fields.get("_is_secret"), fields.get("_future")
-    if not (_resolved(secret) and _resolved(future)) or secret.result() is not False:
+    secret_settled, secret = _settled(fields.get("_is_secret"))
+    value_settled, result = _settled(fields.get("_future"))
+    if not (secret_settled and value_settled) or secret is not False:
         return value
-    result = future.result()
     return Unknown() if result is None else result
 
 

@@ -149,13 +149,28 @@ REDIS_URL_NAMES = frozenset({"REDIS_URL", "REDIS_LOCKOUT_URL"})
 REDIS_IAM_SCHEME = "rediss://"
 
 
+def _valid_endpoint(parts) -> bool:
+    """A non-empty host and, when present, a port in 1-65535 (N1)."""
+    try:
+        port = parts.port
+    except ValueError:
+        return False
+    return bool(parts.hostname) and (port is None or port > 0)
+
+
 def _require_iam_redis_urls(values: dict[str, str]) -> None:
     """Hold the hardened Redis URLs to the plain IAM shape (FR-04, FR-08 B).
 
     Both URLs are plain rows; since plain and secret names are disjoint,
     neither can be a ``secrets`` row. The URL is ``rediss://`` with a host and
-    no path, query or fragment (``redis_iam_url``). Equality is checked by
+    no path, query or fragment (``redis_iam_url``); ``hostname`` must be
+    non-empty and any port a valid 1-65535 number (N1). Equality is checked by
     ``require_plain_environment`` for every shape.
+
+    Duty (N2): the hardened task definition holds the Redis URLs in every
+    container, so each container is held to this rule. A future hardened task
+    definition or sidecar that does not use Redis must re-scope this
+    per-container rule under review before it is added.
     """
     if not REDIS_URL_NAMES <= set(values):
         raise ValueError(
@@ -165,7 +180,7 @@ def _require_iam_redis_urls(values: dict[str, str]) -> None:
     parts = urlsplit(url)
     if (
         not url.startswith(REDIS_IAM_SCHEME)
-        or not parts.netloc
+        or not _valid_endpoint(parts)
         or parts.path
         or parts.query
         or parts.fragment

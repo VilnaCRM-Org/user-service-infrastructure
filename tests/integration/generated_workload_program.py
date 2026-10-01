@@ -134,11 +134,12 @@ elif hardened:
         import pulumi_aws as aws
         from app.data import REDIS_APP_ACCESS_STRING, redis_iam_identity
 
-        user_group_id = redis_iam_identity(workload.settings.stack_tag)[3]
+        identity = redis_iam_identity(workload.settings.stack_tag)
+        app_user_id, user_group_id = identity[1], identity[3]
         if kind == "redis-user-mismatch":
             aws.elasticache.User(
                 "fixture-user",
-                user_id="fixture-app",
+                user_id=app_user_id,
                 user_name="fixture-other",
                 engine="redis",
                 access_string=REDIS_APP_ACCESS_STRING,
@@ -148,15 +149,25 @@ elif hardened:
         elif kind == "redis-open-default-group":
             aws.elasticache.UserGroup(
                 "fixture-user-group",
-                user_group_id="fixture-users",
+                user_group_id=user_group_id,
                 engine="redis",
-                user_ids=["default", "fixture-app"],
+                user_ids=["default", app_user_id],
+                opts=options,
+            )
+        elif kind == "redis-foreign-member-group":
+            aws.elasticache.UserGroup(
+                "fixture-user-group",
+                user_group_id=user_group_id,
+                engine="redis",
+                user_ids=["legacy-open-default", app_user_id],
                 opts=options,
             )
         else:
             aws.elasticache.ReplicationGroup(
                 "fixture-redis",
                 description="fixture",
+                engine="redis",
+                engine_version="7.1",
                 transit_encryption_enabled=True,
                 transit_encryption_mode=(
                     "preferred" if kind == "redis-tls-preferred" else "required"

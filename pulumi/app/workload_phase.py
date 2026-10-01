@@ -424,18 +424,37 @@ def _bound_user_group(value: Any, user_group_id: str | None) -> bool:
     return value is DEFERRED or (type(value) is str and value == user_group_id)
 
 
-def _iam_redis_group(props, sdk_path: bool, user_group_id: str | None = None) -> bool:
+def _iam_engine_version(value: Any) -> bool:
+    """Whether ``value`` meets the IAM minimum, as ``require_iam_redis_engine``."""
+    try:
+        require_iam_redis_engine(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _user_group_id_of(identity: tuple[str, str, str, str] | None) -> str | None:
+    """The user-group ID of a bound ``redis_iam_identity``; ``None`` if unbound."""
+    return None if identity is None else identity[3]
+
+
+def _iam_redis_group(props, sdk_path: bool, identity=None) -> bool:
     """Accept only a TLS-required replication group with one user group (S1.4).
 
     No ``authToken`` input may be present, ``transitEncryptionEnabled`` must be
     literally true and ``transitEncryptionMode`` exactly ``required`` (D-1,
     V-9). ``userGroupIds`` is a list of one entry that names this graph's user
-    group, ``user_group_id`` (F1); an unknown entry is deferred, and an
-    unbound check accepts no inspectable entry.
+    group, ``identity[3]`` (F1); an unknown entry is deferred, and an unbound
+    check accepts no inspectable entry. The engine is ``redis`` and its version
+    meets the IAM minimum, as ``require_iam_redis_engine`` requires (N4).
     """
     groups = _read(props, "user_group_ids", "userGroupIds", sdk_path)
     return (
-        _read(props, "auth_token", "authToken", sdk_path) is None
+        _inspectable(props.get("engine"), sdk_path) == REDIS_ENGINE
+        and _iam_engine_version(
+            _read(props, "engine_version", "engineVersion", sdk_path)
+        )
+        and _read(props, "auth_token", "authToken", sdk_path) is None
         and _read(
             props, "transit_encryption_enabled", "transitEncryptionEnabled", sdk_path
         )
@@ -444,7 +463,9 @@ def _iam_redis_group(props, sdk_path: bool, user_group_id: str | None = None) ->
         == REDIS_TRANSIT_ENCRYPTION_MODE
         and type(groups) is list
         and len(groups) == 1
-        and _bound_user_group(_inspectable(groups[0], sdk_path), user_group_id)
+        and _bound_user_group(
+            _inspectable(groups[0], sdk_path), _user_group_id_of(identity)
+        )
     )
 
 
@@ -452,32 +473,51 @@ def _iam_redis_group(props, sdk_path: bool, user_group_id: str | None = None) ->
 REDIS_USER_GROUP_SIZE = 2
 
 
-def _redis_user_group(props, sdk_path: bool) -> bool:
-    """Accept the Redis OSS user group of exactly two reviewed users (F1).
+def _declared_members(entries: list, identity) -> bool:
+    """Two distinct entries, each deferred or one of the two declared users (F11)."""
+    declared = set() if identity is None else {identity[1], identity[2]}
+    readable = [entry for entry in entries if entry is not DEFERRED]
+    return all(type(entry) is str and entry in declared for entry in readable) and len(
+        set(readable)
+    ) == len(readable)
 
-    ``userIds`` is a literal list of two entries; each is another resource's
-    output, so an unknown entry is deferred. Every inspectable entry is a
-    lower-case ID and never the open built-in ``default`` user; a secret or
-    any other value, or an opaque list, fails closed.
+
+def _redis_user_group(props, sdk_path: bool, identity=None) -> bool:
+    """Accept the Redis OSS user group of exactly the two declared users (F11).
+
+    Its own ``userGroupId`` is this graph's group ID (``identity[3]``).
+    ``userIds`` is a literal list of two distinct entries; each is another
+    resource's output, so an unknown entry is deferred, and an inspectable
+    one is the app-user ID or the default-user ID of ``identity``. That also
+    refuses the open built-in ``default`` user (F1) and every foreign member.
+    A secret or any other value, or an opaque list, fails closed, and an
+    unbound check accepts no readable ID.
     """
     user_ids = _read(props, "user_ids", "userIds", sdk_path)
     return (
         _inspectable(props.get("engine"), sdk_path) == REDIS_ENGINE
+        and _read(props, "user_group_id", "userGroupId", sdk_path)
+        == _user_group_id_of(identity)
         and type(user_ids) is list
         and len(user_ids) == REDIS_USER_GROUP_SIZE
-        and all(_reviewed_user_id(_inspectable(entry, sdk_path)) for entry in user_ids)
+        and _declared_members(
+            [_inspectable(entry, sdk_path) for entry in user_ids], identity
+        )
     )
 
 
-def _iam_app_user(props, sdk_path: bool) -> bool:
-    """The IAM app user (V-9, S1.4 gate F3 and F8).
+def _iam_app_user(props, sdk_path: bool, identity=None) -> bool:
+    """The IAM app user (V-9, S1.4 gate F3, F8 and F11).
 
     Its name equals its ID, both are lower case and neither is ``default``,
-    and its access string is exactly the reviewed ``REDIS_APP_ACCESS_STRING``.
+    the ID is the app-user ID of ``identity`` and its access string is exactly
+    the reviewed ``REDIS_APP_ACCESS_STRING``.
     """
     name = _read(props, "user_name", "userName", sdk_path)
     return (
         type(name) is str
+        and identity is not None
+        and name == identity[1]
         and name == _read(props, "user_id", "userId", sdk_path)
         and _reviewed_user_id(name)
         and _read(props, "access_string", "accessString", sdk_path)
@@ -485,10 +525,15 @@ def _iam_app_user(props, sdk_path: bool) -> bool:
     )
 
 
-def _disabled_default_user(props, sdk_path: bool) -> bool:
-    """The ``default`` user has exactly the reviewed ``off`` access string (V-5)."""
+def _disabled_default_user(props, sdk_path: bool, identity=None) -> bool:
+    """The ``default`` user has exactly the reviewed ``off`` access string (V-5).
+
+    Its ID is the default-user ID of ``identity`` (F11).
+    """
     return (
-        _read(props, "user_name", "userName", sdk_path) == REDIS_DEFAULT_USER_NAME
+        identity is not None
+        and _read(props, "user_id", "userId", sdk_path) == identity[2]
+        and _read(props, "user_name", "userName", sdk_path) == REDIS_DEFAULT_USER_NAME
         and _read(props, "access_string", "accessString", sdk_path)
         == REDIS_DEFAULT_ACCESS_STRING
     )
@@ -501,7 +546,7 @@ REDIS_USER_SHAPES = {
 }
 
 
-def _redis_user(props, sdk_path: bool) -> bool:
+def _redis_user(props, sdk_path: bool, identity=None) -> bool:
     """Accept the IAM app user or the disabled ``default`` user only (AD-02).
 
     No password input may be present, and the authentication mode must be a
@@ -515,7 +560,7 @@ def _redis_user(props, sdk_path: bool) -> bool:
         props.get("passwords") is None
         and _read(props, "no_password_required", "noPasswordRequired", sdk_path) is None
         and shape is not None
-        and shape(props, sdk_path)
+        and shape(props, sdk_path, identity)
     )
 
 
@@ -560,6 +605,10 @@ HARDENED_PROPERTY_CHECKS = {
 }
 
 
+# The Redis checks that compare IDs against this graph's ``redis_iam_identity``.
+REDIS_IDENTITY_CHECKS = frozenset({_iam_redis_group, _redis_user, _redis_user_group})
+
+
 def _merge_tags(existing, baseline: dict[str, str]) -> dict[str, str]:
     """Preserve extra explicit tags, rejecting conflicts with baseline metadata."""
     existing = {} if existing is None else existing
@@ -573,7 +622,7 @@ def _merge_tags(existing, baseline: dict[str, str]) -> dict[str, str]:
 def _reject_secret_material(
     args: pulumi.ResourceTransformationArgs | pulumi.ResourceTransformArgs,
     step: int = 1,
-    redis_user_group_id: str | None = None,
+    redis_identity: tuple[str, str, str, str] | None = None,
 ) -> None:
     """Fail closed before secret material or an unreviewed type joins the graph.
 
@@ -581,9 +630,9 @@ def _reject_secret_material(
     both argument types carry ``type_`` and ``None`` keeps the resource as is.
     ``step`` is the contract's ``workload_step``; step 1 refuses every step-2
     type (FR-34), and the default is that stricter step.
-    ``redis_user_group_id`` is the one user group this graph declares; the
-    replication group may name no other (S1.4 gate F1), and without it no
-    inspectable user-group ID passes.
+    ``redis_identity`` is this graph's ``redis_iam_identity``; the Redis user
+    group, its users and the replication group may name no other ID (S1.4 gate
+    F1 and F11), and without it no readable ID passes.
     """
     if args.type_.startswith(SECRET_MATERIAL_TYPES):
         raise ValueError("Hardened workload graph must not hold secret material")
@@ -595,8 +644,8 @@ def _reject_secret_material(
         raise ValueError("Hardened workload graph holds an unreviewed type")
     check = HARDENED_PROPERTY_CHECKS.get(args.type_)
     sdk_path = isinstance(args, pulumi.ResourceTransformationArgs)
-    bound = {"user_group_id": redis_user_group_id} if check is _iam_redis_group else {}
-    if check is not None and not check(args.props, sdk_path, **bound):
+    bound = (redis_identity,) if check in REDIS_IDENTITY_CHECKS else ()
+    if check is not None and not check(args.props, sdk_path, *bound):
         raise ValueError("Hardened workload graph holds an unreviewed property")
     return None
 
@@ -610,22 +659,22 @@ def _reject_invoke(_args: pulumi.InvokeTransformArgs) -> None:
     raise ValueError("Hardened workload graph must not call a provider function")
 
 
-def _step_guard(step: int, redis_user_group_id: str):
-    """Bind the guard to the contract's step and this graph's Redis user group.
+def _step_guard(step: int, redis_identity: tuple[str, str, str, str]):
+    """Bind the guard to the contract's step and this graph's Redis identity.
 
     Both registrations share it.
     """
     return functools.partial(
-        _reject_secret_material, step=step, redis_user_group_id=redis_user_group_id
+        _reject_secret_material, step=step, redis_identity=redis_identity
     )
 
 
-def _redis_user_group_id(settings: StackSettings) -> str:
-    """Return the one Redis user-group ID this hardened graph declares (F1)."""
-    return redis_iam_identity(settings.stack_tag)[3]
+def _redis_identity(settings: StackSettings) -> tuple[str, str, str, str]:
+    """Return the Redis IDs this hardened graph declares (F1, F11)."""
+    return redis_iam_identity(settings.stack_tag)
 
 
-def _guard_hardened_stack(step: int, redis_user_group_id: str) -> None:
+def _guard_hardened_stack(step: int, redis_identity: tuple[str, str, str, str]) -> None:
     """Guard the whole stack before its first hardened resource (FR-09, F1).
 
     The SDK stack transformation reaches every resource this program builds,
@@ -636,7 +685,7 @@ def _guard_hardened_stack(step: int, redis_user_group_id: str) -> None:
     transformation in ``_compose_hardened`` stays as a second layer. These
     are the last transforms the program registers.
     """
-    guard = _step_guard(step, redis_user_group_id)
+    guard = _step_guard(step, redis_identity)
     pulumi.runtime.register_stack_transformation(guard)
     pulumi.runtime.register_resource_transform(guard)
     pulumi.runtime.register_invoke_transform(_reject_invoke)
@@ -669,7 +718,7 @@ class WorkloadPhaseStack(RegistryPhaseStack):
             reject_redis_auth_token_config()
             require_iam_documentdb_engine(settings.documentdb.engine_version)
             require_iam_redis_engine(settings.redis.engine_version)
-            _guard_hardened_stack(secrets.workload_step, _redis_user_group_id(settings))
+            _guard_hardened_stack(secrets.workload_step, _redis_identity(settings))
         super().__init__(registries=registries)
         self.settings = settings
         if secrets.hardened:
@@ -694,7 +743,7 @@ class WorkloadPhaseStack(RegistryPhaseStack):
         opts = pulumi.ResourceOptions(
             parent=self,
             transformations=[
-                _step_guard(secrets.workload_step, _redis_user_group_id(settings)),
+                _step_guard(secrets.workload_step, _redis_identity(settings)),
                 self._tag_resource,
             ],
         )

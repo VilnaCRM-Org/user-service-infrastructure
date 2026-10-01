@@ -36,6 +36,9 @@ USER = "aws:elasticache/user:User"
 USER_GROUP = "aws:elasticache/userGroup:UserGroup"
 # The user-group ID the guard binds the replication group to (F1).
 USER_GROUP_ID = "synthetic-users"
+# The full ``redis_iam_identity`` result the guard binds to (F11): replication
+# group, app user, default user and user group.
+USER_IDENTITY = ("synthetic-redis", "synthetic-app", "synthetic-default", USER_GROUP_ID)
 APP_ACCESS = "on ~* +@all -@dangerous"
 SECRET = "aws:secretsmanager/secret:Secret"
 SECRET_ARN = (
@@ -341,7 +344,17 @@ SPLUNK_LOG = {
         _definitions([{"name": "A", "value": "x", "Value": USERINFO}]),
         '[{"name": "fixture", "name": "other"}]',
         json.dumps(
-            [{"name": "f", "logConfiguration": {"options": {}, "Options": {"a": "b"}}}]
+            [
+                {
+                    "name": "f",
+                    "environment": REDIS_ROWS,
+                    "logConfiguration": {
+                        "logDriver": "awslogs",
+                        "options": {},
+                        "Options": {"a": "b"},
+                    },
+                }
+            ]
         ),
         # F-01 (c): a key outside the emitted set fails, whatever it holds.
         _definitions(dockerLabels={"label": "plain"}),
@@ -440,25 +453,29 @@ def _casing(engine, props):
     }
 
 
-def _redis_group(engine, **changes):
+def _redis_group(engine_path, **changes):
     props = {
+        "engine": "redis",
+        "engine_version": "7.1",
         "transit_encryption_enabled": True,
         "transit_encryption_mode": "required",
         "user_group_ids": [USER_GROUP_ID],
         **changes,
     }
-    return _transform_args(engine, REPLICATION_GROUP, _casing(engine, props))
+    return _transform_args(engine_path, REPLICATION_GROUP, _casing(engine_path, props))
 
 
 def _guard(args):
     """Run the guard bound to this graph's Redis user group, as the stack does."""
-    return _reject_secret_material(args, redis_user_group_id=USER_GROUP_ID)
+    return _reject_secret_material(args, redis_identity=USER_IDENTITY)
 
 
 @pytest.mark.parametrize("engine", [False, True])
 def test_the_iam_replication_group_passes_the_guard(engine):
     assert _guard(_redis_group(engine)) is None
     assert _guard(_redis_group(engine, auth_token=None)) is None
+    for version in ("7.0", "7.1", "8.0", "7.1.0"):
+        assert _guard(_redis_group(engine, engine_version=version)) is None
 
 
 @pytest.mark.parametrize("engine", [False, True])
@@ -482,6 +499,16 @@ def test_the_iam_replication_group_passes_the_guard(engine):
         {"user_group_ids": ["foreign-users"]},
         {"user_group_ids": ["Synthetic-Users"]},
         {"user_group_ids": [None]},
+        # N4: defence in depth, mirroring ``require_iam_redis_engine`` (V-9).
+        {"engine": "valkey"},
+        {"engine": "REDIS"},
+        {"engine": None},
+        {"engine_version": "6.2"},
+        {"engine_version": "6"},
+        {"engine_version": "7"},
+        {"engine_version": None},
+        {"engine_version": 7.1},
+        {"engine_version": "7.x"},
     ],
 )
 def test_the_replication_group_check_refuses_a_token_or_weak_tls(engine, change):
@@ -498,7 +525,7 @@ def test_the_replication_group_is_bound_to_this_graphs_user_group(engine):
         _reject_secret_material(_redis_group(engine))
     with pytest.raises(ValueError, match="unreviewed property"):
         _reject_secret_material(
-            _redis_group(engine), redis_user_group_id="foreign-users"
+            _redis_group(engine), redis_identity=("g", "a", "d", "foreign-users")
         )
     # The real entry is another resource's output: deferred until it resolves.
     deferred = Unknown() if engine else _unresolved()
@@ -527,6 +554,33 @@ def test_the_reviewed_user_group_passes_the_guard(engine):
     deferred = Unknown() if engine else _unresolved()
     assert _guard(_user_group(engine, user_ids=[deferred, deferred])) is None
     assert _guard(_user_group(engine, user_ids=[deferred, "synthetic-app"])) is None
+    assert _guard(_user_group(engine, user_ids=["synthetic-app", deferred])) is None
+    # Either order of the two declared users passes (F11).
+    assert (
+        _guard(_user_group(engine, user_ids=["synthetic-app", "synthetic-default"]))
+        is None
+    )
+
+
+@pytest.mark.parametrize("engine", [False, True])
+def test_the_user_group_is_bound_to_this_graphs_identity(engine):
+    """F11: an unbound call refuses every readable ID; a foreign identity too."""
+    deferred = Unknown() if engine else _unresolved()
+    group = _user_group(engine)
+    with pytest.raises(ValueError, match="unreviewed property"):
+        _reject_secret_material(group)
+    with pytest.raises(ValueError, match="unreviewed property"):
+        _reject_secret_material(
+            group, redis_identity=("g", "other-app", "other-default", USER_GROUP_ID)
+        )
+    with pytest.raises(ValueError, match="unreviewed property"):
+        _reject_secret_material(
+            group, redis_identity=("g", "synthetic-app", "synthetic-default", "x")
+        )
+    # Unbound, a deferred entry is the only one that passes, never a literal.
+    only_deferred = _user_group(engine, user_ids=[deferred, deferred])
+    with pytest.raises(ValueError, match="unreviewed property"):
+        _reject_secret_material(only_deferred)
 
 
 @pytest.mark.parametrize("engine", [False, True])
@@ -552,6 +606,17 @@ def test_the_reviewed_user_group_passes_the_guard(engine):
         {"engine": "valkey"},
         {"engine": None},
         {"engine": "REDIS"},
+        # F11: the group's own ID and both members are this graph's own.
+        {"user_group_id": "foreign-users"},
+        {"user_group_id": "Synthetic-Users"},
+        {"user_group_id": None},
+        {"user_group_id": 7},
+        {"user_group_id": Unknown()},
+        {"user_ids": ["legacy-open-default", "synthetic-app"]},
+        {"user_ids": ["synthetic-default", "legacy-open-default"]},
+        {"user_ids": ["legacy-open-default", "synthetic-other"]},
+        {"user_ids": ["synthetic-app", "synthetic-app"]},
+        {"user_ids": ["synthetic-default", "synthetic-default"]},
     ],
 )
 def test_the_user_group_check_refuses_the_open_default_user(engine, change):
@@ -593,9 +658,27 @@ def _default_user(engine, **changes):
 
 @pytest.mark.parametrize("engine", [False, True])
 def test_the_iam_app_user_and_the_disabled_default_user_pass(engine):
-    assert _reject_secret_material(_user(engine)) is None
-    assert _reject_secret_material(_default_user(engine)) is None
-    assert _reject_secret_material(_user(engine, passwords=None)) is None
+    assert _guard(_user(engine)) is None
+    assert _guard(_default_user(engine)) is None
+    assert _guard(_user(engine, passwords=None)) is None
+
+
+@pytest.mark.parametrize("engine", [False, True])
+def test_a_user_with_a_foreign_id_or_no_bound_identity_fails(engine):
+    """F11: an app or default user outside this graph's identity is refused."""
+    for builder in (_user, _default_user):
+        # Unbound, no readable user ID is reviewed.
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _reject_secret_material(builder(engine))
+    for foreign in (
+        _user(engine, user_id="foreign-app", user_name="foreign-app"),
+        _user(engine, user_id=Unknown(), user_name="synthetic-app"),
+        _default_user(engine, user_id="foreign-default"),
+        _default_user(engine, user_id="synthetic-app"),
+        _default_user(engine, user_id=None),
+    ):
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _guard(foreign)
 
 
 @pytest.mark.parametrize("engine", [False, True])
@@ -637,7 +720,7 @@ def test_the_iam_app_user_and_the_disabled_default_user_pass(engine):
 )
 def test_the_user_check_refuses_a_password_or_name_mismatch(engine, builder):
     with pytest.raises(ValueError, match="unreviewed property"):
-        _reject_secret_material(builder(engine))
+        _guard(builder(engine))
 
 
 @pytest.mark.parametrize("engine", [False, True])
@@ -1031,6 +1114,11 @@ def test_a_redis_engine_without_iam_fails_the_hardened_composition(tmp_path):
         ("root:redis-open-default-group", "unreviewed property"),
         ("stack:redis-open-default-group", "unreviewed property"),
         ("root:redis-foreign-user-group", "unreviewed property"),
+        # F11: a member, a group ID or a user ID this graph does not declare.
+        ("root:redis-foreign-member-group", "unreviewed property"),
+        ("stack:redis-foreign-member-group", "unreviewed property"),
+        ("root:redis-foreign-group-id", "unreviewed property"),
+        ("root:redis-foreign-app-user", "unreviewed property"),
         (":redis-secret", "unreviewed property"),
         ("root:redis-secret", "unreviewed property"),
         ("stack:docdb-cluster", "unreviewed property"),
@@ -1305,6 +1393,7 @@ def test_a_resolved_engine_output_entry_is_read_and_checked():
     for value, fields in (
         ("default", {}),
         ("Synthetic-App", {}),
+        ("foreign-user", {}),
         ("x", {"secret": True}),
     ):
         with pytest.raises(ValueError, match="unreviewed property"):
@@ -1317,16 +1406,25 @@ def test_the_lifecycle_doc_records_the_s14_gate_fixes_and_advisories():
     section = text[text.index("### Redis authenticates with IAM") :]
     for marker in (
         # F1: the user group and its binding.
-        "exactly two lower-case user IDs",
-        "never the built-in `default` user in any casing",
+        "is never accepted in any casing",
         "the one user-group ID this graph declares",
+        # F11: the members and both user IDs are this graph's own.
+        "its own `user_group_id` equal to the one user-group ID",
+        "each either deferred or one of the two user IDs `redis_iam_identity` declares",
+        "a foreign or duplicated member fails (F11)",
+        "an unbound call refuses every readable user or group ID",
+        "the disabled `default` user's `user_id` equals the default-user ID",
+        # N1, N2, N4.
+        "a non-empty host, a valid port if present",
+        "must re-scope the per-container Redis rule under review",
+        "an `engine_version` that meets the IAM minimum of 7.0",
         # F2, F3, F8.
         "an input present in both casings is refused",
         "exactly `on ~* +@all -@dangerous`",
         "lower-case user name and ID",
         # F5.
         "both URLs as plain rows",
-        "`rediss://` with no path or query",
+        "`rediss://` with a non-empty host",
         # F10.
         "40-character",
         "maximum length is unverified",

@@ -418,6 +418,9 @@ def test_native_hardened_workload_rejects_a_non_iam_redis_engine(native_stack):
         ("root:redis-open-default-group", "unreviewed property", None),
         ("stack:redis-open-default-group", "unreviewed property", None),
         ("root:redis-foreign-user-group", "unreviewed property", None),
+        # F11: a member outside this graph's declared users.
+        ("root:redis-foreign-member-group", "unreviewed property", None),
+        ("stack:redis-foreign-member-group", "unreviewed property", None),
         ("runtime-secrets:random-password", "must not hold secret material", None),
         # N1 (F1): outside the component, the stack-wide guard still applies.
         ("stack:random-password", "must not hold secret material", None),

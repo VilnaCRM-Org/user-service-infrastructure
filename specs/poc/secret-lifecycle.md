@@ -319,13 +319,22 @@ S4.10 removes it (AD-25).
 
 The stack-wide guard holds each Redis type to that shape (S1.4 gate fixes):
 an input present in both casings is refused, so a decoy key in the other
-casing cannot hide the checked one (F2). The `UserGroup` must have engine `redis` and
-`user_ids` with exactly two lower-case user IDs, never the built-in `default`
-user in any casing: AWS creates that user open (`on ~* +@all`, no password)
-(F1). The replication group's one `user_group_ids` entry must be the one
-user-group ID this graph declares (`redis_iam_identity`), so a foreign literal
-group fails (F1). The IAM app user has a lower-case user name and ID (F8) and
-an access string of exactly `on ~* +@all -@dangerous` (F3). The guard reads
+casing cannot hide the checked one (F2). The `UserGroup` must have engine `redis`,
+its own `user_group_id` equal to the one user-group ID this graph declares
+(`redis_iam_identity`), and `user_ids` of two distinct entries, each either
+deferred or one of the two user IDs `redis_iam_identity` declares (the app
+user and the stack-scoped default user), so a foreign or duplicated member
+fails (F11); the built-in `default` user, whose ID AWS creates open (`on ~*
++@all`, no password), is never accepted in any casing (F1). The replication
+group's one `user_group_ids` entry must be that same user-group ID, so a
+foreign literal group fails (F1); it must also have engine `redis` and an
+`engine_version` that meets the IAM minimum of 7.0, mirroring
+`require_iam_redis_engine` (N4). The guard takes the full `redis_iam_identity`
+result; an unbound call refuses every readable user or group ID. The IAM app
+user has a lower-case user name and ID (F8), its `user_id` equals the app-user ID
+`redis_iam_identity` declares, the disabled `default` user's `user_id` equals the
+default-user ID it declares (F11), and the app user has an access string of
+exactly `on ~* +@all -@dangerous` (F3). The guard reads
 every literal Redis input, and the Secret name, through `_inspectable`: an
 unknown, secret or opaque value fails, and only a user or user-group ID entry,
 which is another resource's output, is deferred while unknown (F6). The
@@ -338,8 +347,11 @@ no userinfo (the FR-08 B row: the lockout URL equals the Redis URL, checked on
 the plain environment), plus `REDIS_IAM_USER_ID`, the lower-case
 `REDIS_REPLICATION_GROUP_ID` and `AWS_REGION` for the token signer (S5.13). The
 hardened container check requires both URLs as plain rows, so neither can be a
-secret, equal to each other and `rediss://` with no path or query (F5). The
-task role's `elasticache:Connect` grant on the replication-group and user ARNs
+secret, equal to each other and `rediss://` with a non-empty host, a valid port
+if present and no path or query (F5, N1). That per-container Redis rule holds for
+every container of the hardened task definition, so a future hardened task
+definition or sidecar without Redis must re-scope the per-container Redis rule
+under review before it is added (N2). The task role's `elasticache:Connect` grant on the replication-group and user ARNs
 is BI's (S5.1).
 
 V-5 (docs and provider source). pulumi-aws 7.23.0 `elasticache.User` takes

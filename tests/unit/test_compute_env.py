@@ -172,6 +172,12 @@ def test_the_hardened_redis_urls_are_equal_plain_rediss_urls():
     assert require_plain_environment([REDIS_URL_ROW], [], unversioned=False) is None
 
 
+@pytest.mark.parametrize("url", ["rediss://h", "rediss://h:1", "rediss://h:65535"])
+def test_a_hardened_redis_url_with_a_host_and_a_valid_port_passes(url):
+    """N1: the host is required; the port is optional and 1-65535."""
+    assert require_plain_environment(_both(url), [], unversioned=True) is None
+
+
 @pytest.mark.parametrize(
     ("environment", "secrets", "message"),
     [
@@ -198,6 +204,13 @@ def test_the_hardened_redis_urls_are_equal_plain_rediss_urls():
         (_both(REDIS + "?ssl_cert_reqs=none"), [], IAM_URL),
         (_both(REDIS + "#fragment"), [], IAM_URL),
         (_both("rediss://"), [], IAM_URL),
+        # N1: a host is required, and any port is a valid 1-65535 number.
+        (_both("rediss://:6379"), [], IAM_URL),
+        (_both("rediss://:"), [], IAM_URL),
+        (_both("rediss://h:abc"), [], IAM_URL),
+        (_both("rediss://h:0"), [], IAM_URL),
+        (_both("rediss://h:65536"), [], IAM_URL),
+        (_both("rediss://h:-1"), [], IAM_URL),
         # FR-08 B: the two plain URLs differ.
         ([REDIS_URL_ROW, {**REDIS_LOCKOUT_ROW, "value": REDIS + "1"}], [], "equal"),
     ],

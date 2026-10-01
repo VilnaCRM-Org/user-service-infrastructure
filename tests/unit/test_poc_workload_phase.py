@@ -217,10 +217,10 @@ def _mutation_config(mutation):
     return {}
 
 
-def _fixture_builders(options, user_group_id):
+def _fixture_builders(options, identity):
     """Map each N-case kind to the forbidden registration it attempts.
 
-    ``user_group_id`` is this graph's Redis user group, so each Redis fixture
+    ``identity`` is this graph's ``redis_iam_identity``, so each Redis fixture
     differs from the reviewed shape in exactly one input.
     """
     import json
@@ -231,6 +231,7 @@ def _fixture_builders(options, user_group_id):
 
     import pulumi
 
+    user_group_id, app_user_id = identity[3], identity[1]
     task_definitions = json.dumps(
         [
             {
@@ -364,7 +365,7 @@ def _fixture_builders(options, user_group_id):
         ),
         "redis-user-mismatch": lambda: aws.elasticache.User(
             "fixture-user",
-            user_id="fixture-app",
+            user_id=app_user_id,
             user_name="fixture-other",
             engine="redis",
             access_string=REDIS_APP_ACCESS_STRING,
@@ -374,9 +375,34 @@ def _fixture_builders(options, user_group_id):
         # F1: the AWS built-in ``default`` user is open (on ~* +@all, no password).
         "redis-open-default-group": lambda: aws.elasticache.UserGroup(
             "fixture-user-group",
+            user_group_id=user_group_id,
+            engine="redis",
+            user_ids=["default", app_user_id],
+            opts=options,
+        ),
+        # F11: a member this graph does not declare, a foreign group ID and a
+        # foreign app-user ID; each differs from the reviewed shape by one input.
+        "redis-foreign-member-group": lambda: aws.elasticache.UserGroup(
+            "fixture-user-group",
+            user_group_id=user_group_id,
+            engine="redis",
+            user_ids=["legacy-open-default", app_user_id],
+            opts=options,
+        ),
+        "redis-foreign-group-id": lambda: aws.elasticache.UserGroup(
+            "fixture-user-group",
             user_group_id="fixture-users",
             engine="redis",
-            user_ids=["default", "fixture-app"],
+            user_ids=[identity[2], app_user_id],
+            opts=options,
+        ),
+        "redis-foreign-app-user": lambda: aws.elasticache.User(
+            "fixture-user",
+            user_id="fixture-app",
+            user_name="fixture-app",
+            engine="redis",
+            access_string=REDIS_APP_ACCESS_STRING,
+            authentication_mode={"type": "iam"},
             opts=options,
         ),
         "redis-secret": lambda: aws.secretsmanager.Secret(
@@ -397,6 +423,8 @@ def _redis_group(aws, options, user_group_id, **changes):
         "description": "fixture",
         "transit_encryption_enabled": True,
         "transit_encryption_mode": "required",
+        "engine": "redis",
+        "engine_version": "7.1",
         "user_group_ids": [user_group_id],
         **changes,
     }
@@ -414,8 +442,8 @@ def _add_secret_material(stack, mutation):
     options = pulumi.ResourceOptions(parent=parents[owner])
     from app.data import redis_iam_identity
 
-    user_group_id = redis_iam_identity(stack.settings.stack_tag)[3]
-    builder = _fixture_builders(options, user_group_id).get(kind)
+    identity = redis_iam_identity(stack.settings.stack_tag)
+    builder = _fixture_builders(options, identity).get(kind)
     if builder is not None:
         builder()
 

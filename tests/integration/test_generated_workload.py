@@ -294,9 +294,17 @@ def test_native_hardened_data_plane_uses_the_managed_password(native_stack):
 def test_native_hardened_data_plane_rejects_a_password_config_key(native_stack):
     stack, work = native_stack
     (work / "scenario.json").write_text('{"mode":"hardened-data-password"}')
+    # F-02: a real password arrives as secret stack config, never plain.
+    synthetic = "synthetic-documentdb-password-do-not-echo"
+    stack.set_config(
+        "documentDbPassword", auto.ConfigValue(value=synthetic, secret=True)
+    )
+    events = []
     with pytest.raises(AutomationRuntimeError) as failure:
-        stack.preview(on_event=[].append)
+        stack.preview(on_event=events.append)
     assert "documentDbPassword must not be configured" in str(failure.value)
+    assert synthetic not in str(failure.value)
+    assert not [row for row in resources(events) if row.type.startswith("aws:docdb")]
 
 
 @pytest.mark.parametrize(

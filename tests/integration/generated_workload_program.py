@@ -52,10 +52,8 @@ elif mode.startswith("hardened-data"):
     # closed type guard: S1.3 composes the data plane into the hardened graph
     # and widens that allowlist then. S1.2 does not widen it.
     settings = resolve_stack_settings(metadata, generated_secrets=True)
-    if mode == "hardened-data-password":
-        pulumi.runtime.set_config(
-            "user-service-infrastructure:documentDbPassword", "synthetic"
-        )
+    # hardened-data-password: the stack holds a secret documentDbPassword, set
+    # by the test through stack config, never through this program.
     runtime_secrets = RuntimeSecrets(
         "runtime-secrets", descriptor=RuntimeSecretsDescriptor(contract)
     )

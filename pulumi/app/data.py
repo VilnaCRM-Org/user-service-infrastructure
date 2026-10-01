@@ -72,6 +72,7 @@ def _master_credentials(
     7.23.0 has no ``master_user_secret_kms_key_id``, and none is ever passed.
     """
     if password is None:
+        # Boolean flag that hands the password to DocumentDB; B105 matches the key name only.
         return {"manage_master_user_password": True}  # nosec B105
     return {"master_password": password}
 
@@ -122,13 +123,17 @@ class DataPlane(pulumi.ComponentResource):
         if settings.is_managed and runtime_secrets is None:
             require_application_secrets(settings)
         self._runtime_secrets = runtime_secrets
-        super().__init__("user-service-infrastructure:data:Plane", name, None, opts)
-
-        if (
+        hardened = (
             settings.is_managed
             and runtime_secrets is not None
             and runtime_secrets.descriptor.hardened
-        ):
+        )
+        if hardened:
+            # Refuse before the component registers, so no resource is left behind.
+            reject_documentdb_password_config()
+        super().__init__("user-service-infrastructure:data:Plane", name, None, opts)
+
+        if hardened:
             self.documentdb = self._build_hardened_documentdb(settings, network)
             self.register_outputs(
                 {
@@ -164,7 +169,6 @@ class DataPlane(pulumi.ComponentResource):
         not compose this plane yet (S1.3, C-composition). The pre-hardening path
         is unchanged until S4.10.
         """
-        reject_documentdb_password_config()
         cluster, instances = self._build_documentdb(settings, network, None)
         return HardenedDocumentDbOutputs(
             endpoint=cluster.endpoint,

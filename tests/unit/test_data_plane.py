@@ -1,10 +1,16 @@
 """Hardened DocumentDB primary password: AWS-managed, never configured (S1.2)."""
 
+import ast
+import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from app.data import DataPlane
-from app.environment import reject_documentdb_password_config
+from app.environment import (
+    DOCUMENTDB_PASSWORD_CONFIG_KEYS,
+    reject_documentdb_password_config,
+)
 from test_environment_component import (
     OptionRecordingMonitor,
     RecordingMocks,
@@ -142,3 +148,67 @@ def test_a_password_config_key_raises_on_the_hardened_path(key):
 def test_unset_password_config_keys_are_accepted():
     with mocked_pulumi_context({}):
         reject_documentdb_password_config()
+
+
+def test_password_config_is_refused_before_any_resource_registers():
+    """F-05/F-06: the refusal runs before the component, so nothing is created."""
+    recorder = RecordingMocks()
+    monitor = OptionRecordingMonitor(recorder)
+
+    def program():
+        DataPlane(
+            "data",
+            settings=_settings(),
+            network=_network(),
+            runtime_secrets=_secrets(hardened=True),
+        )
+
+    with mocked_pulumi_context({"documentDbPassword": "synthetic"}):
+        with pytest.raises(ValueError, match="documentDbPassword"):
+            _run_pulumi_program(program, test_mocks=recorder, monitor=monitor)
+    assert not [row for row in recorder.resources if "data" in str(row["name"])]
+    assert not [row for row in recorder.resources if row["type"].startswith("aws:")]
+
+
+PASSWORD_KEY = re.compile(r"documentDb\w*Password\w*")
+
+
+def _password_key_literals(source):
+    """Return every string literal in ``source`` that names a DocumentDB password."""
+    return {
+        node.value
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and PASSWORD_KEY.fullmatch(node.value)
+    }
+
+
+def test_every_documentdb_password_config_key_is_refused_on_the_hardened_path():
+    """F-03: a new password config key cannot bypass the hardened refusal."""
+    found = set()
+    for path in sorted((Path(__file__).parents[2] / "pulumi").rglob("*.py")):
+        found |= _password_key_literals(path.read_text())
+    assert found, "the scan must see at least the existing password keys"
+    assert found <= set(DOCUMENTDB_PASSWORD_CONFIG_KEYS), found
+
+
+def test_the_password_key_scan_finds_an_unlisted_key():
+    source = 'config.get("documentDbRotatedPassword")\nx = "documentDbHost"'
+    assert _password_key_literals(source) == {"documentDbRotatedPassword"}
+
+
+def test_lifecycle_doc_qualifies_the_refusal_until_s13_composes_the_data_plane():
+    """F-04: the doc does not claim the workload stack refuses it yet."""
+    text = " ".join(
+        (Path(__file__).parents[2] / "specs/poc/secret-lifecycle.md")
+        .read_text()
+        .split()
+    )
+    section = text[text.index("### DocumentDB primary password") :]
+    for marker in (
+        "only once S1.3 composes it",
+        "S1.3 owns the composition-level N test",
+        "without echoing its value",
+    ):
+        assert marker in section, marker

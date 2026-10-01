@@ -165,8 +165,14 @@ On the hardened path the DocumentDB cluster is declared with
 `manage_master_user_password=True` and no `master_password`, so DocumentDB owns
 and rotates the primary password in its own managed secret. Pulumi never holds
 or generates it. A `documentDbPassword` (or `documentDbMasterPassword`) config
-key raises on that path instead of being ignored. The pre-hardening shape keeps
-its generated password until S4.10 removes that branch (AD-25).
+key makes `DataPlane` raise before it registers anything, instead of being
+ignored. The hardened `WorkloadPhaseStack` does not compose the data plane yet,
+so that refusal applies to a workload stack only once S1.3 composes it. Until
+then the seam is exercised by a `DataPlane` built outside the stack guard. S1.3
+owns the composition-level N test: a native preview of the hardened workload
+with a secret `documentDbPassword` must fail without echoing its value. The
+pre-hardening shape keeps its generated password until S4.10 removes that
+branch (AD-25).
 
 Exception A-05 (D-4): pulumi-aws 7.23.0 exposes `manage_master_user_password`
 and `master_user_secrets` but no `master_user_secret_kms_key_id`. The managed

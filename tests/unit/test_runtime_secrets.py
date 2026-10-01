@@ -840,4 +840,5 @@ def test_secret_lifecycle_spec_records_the_hardened_contract():
         "both `deleted` and `retain`",
     ):
         assert marker in section, marker
-    assert "a transformation fails the program" not in section
+    # The stale phrase must stay out of the whole document, not only this section.
+    assert "a transformation fails the program" not in " ".join(text.split())

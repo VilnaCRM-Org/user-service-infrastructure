@@ -170,7 +170,8 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     `{mode, phase}` of the operation being finished, is required for
     `resume` and absent otherwise; R6-m7), `documentdb_secret_policy`
     (AD-08), `scaling: {starts: [{seq, at}…], stops: [{seq, at}…],
-    consumed: [name…], scheduled_scaling_suspended: bool}` (AD-10; one `at`
+    consumed: [name…], scheduled_scaling_suspended: bool, capacity}` (AD-10,
+    `capacity` per D-16, added by S2.1; one `at`
     time per action, R5-M3; `scheduled_scaling_suspended` is a persistent
     TEST-only flag, default `false`, and a PROD contract with `true` fails
     the PROD schema of S4.14, R6-m7, R7-m4) and `drift.out_of_band_fields` (AD-23, added by
@@ -400,6 +401,28 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
        ones, the hold plan could restart a stopped service, and S4.9 does
        not merge until the hold design is changed in a reviewed PR. V-23(d)
        stays the live STOP at step 15.
+       **V-23(e) result (provider and engine source, recorded by S2.1 on
+       2026-10-01):** the pinned provider's `Target` update calls
+       `RegisterScalableTarget` with `MinCapacity` and `MaxCapacity` on
+       every non-tag update (terraform-provider-aws `target.go`
+       `resourceTargetUpdate`, lines 177-206). Under
+       `ignore_changes=["minCapacity","maxCapacity"]` the engine copies the
+       ignored inputs from the prior state into the new inputs. With the
+       repository's `up-plan` (`up --yes --refresh --plan`,
+       `scripts/_pulumi_command_support.py` lines 58-63), that prior state
+       is the refreshed live state, so a hold update re-sends the live
+       values (0 and 0 after the stop). A plain `up` without `--refresh`
+       re-sends the checkpoint values. Source chain: the engine deployment
+       executor and step generator (`deployment_executor.go` 166-168,
+       `step.go` 960-967 and 1529-1551), the bridge provider and schema
+       (`provider.go` 1458 and 1501, `schema.go` 1680-1684 and 1897-1904,
+       `instance_diff.go` 95-110, `fork_grpc.go` 1187-1209) and the saved
+       plan check (`plan.go` 377-470). Residuals for S4.9: the stop and hold
+       path must use `up-plan` only, never a plain `up`; and a scheduled
+       action that fires between the refresh and the `RegisterScalableTarget`
+       call changes the live bounds after they were read, so the update
+       re-sends the values read before that action (a race window S4.9
+       owns).
 
     A **restart plan** (`phase: start`) comes from a contract PR that sets
     `scaling.scheduled_scaling_suspended: false` (TEST) and appends a new

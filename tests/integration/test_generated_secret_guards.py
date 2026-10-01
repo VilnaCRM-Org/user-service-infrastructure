@@ -359,10 +359,20 @@ def test_task_definition_property_check_reads_resolved_definitions(engine):
             _reject_secret_material(args)
 
 
+AUTOSCALING_PREFIXES = (
+    "aws:appautoscaling/",
+    "user-service-infrastructure:autoscaling:",
+)
+
+
 @pytest.mark.parametrize("step", [1, 2])
 def test_step_two_and_elastic_types_are_refused(step):
     """FR-34 B and V-17 N at the guard."""
-    from app.workload_phase import STEP_TWO_TYPES, _reject_secret_material
+    from app.workload_phase import (
+        HARDENED_TYPES,
+        STEP_TWO_TYPES,
+        _reject_secret_material,
+    )
 
     import pulumi
 
@@ -375,6 +385,11 @@ def test_step_two_and_elastic_types_are_refused(step):
         _reject_secret_material(args("aws:docdb/elasticCluster:ElasticCluster"), step)
     message = "step-2 resource" if step == 1 else "unreviewed type"
     for kind in STEP_TWO_TYPES:
+        if step == 2 and kind in HARDENED_TYPES:
+            # S2.1 allowlists the autoscaling types at step 2 only.
+            assert kind.startswith(AUTOSCALING_PREFIXES)
+            assert _reject_secret_material(args(kind), step) is None
+            continue
         with pytest.raises(ValueError, match=message):
             _reject_secret_material(args(kind), step)
 

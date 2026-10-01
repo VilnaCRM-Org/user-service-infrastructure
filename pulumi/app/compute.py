@@ -353,6 +353,25 @@ class ComputeOutputs:
     worker_service_name: pulumi.Input[str]
 
 
+@dataclass(frozen=True)
+class ScalableServices:
+    """What the step-2 scalable targets and web policies name (S2.1, AD-10).
+
+    Only the hardened compute plane sets it; no resource is registered here.
+    ``request_count_label`` is the ``ALBRequestCountPerTarget`` resource label:
+    the load balancer and target group ARN suffixes joined by ``/``.
+    """
+
+    cluster_name: pulumi.Input[str]
+    service_names: dict[str, pulumi.Input[str]]
+    request_count_label: pulumi.Input[str]
+
+
+# The hardened services leave ``desiredCount`` to Application Auto Scaling
+# (FR-11, FR-32, AD-23): the one-time actions and the policies change it.
+HARDENED_SERVICE_IGNORED_CHANGES = ["desiredCount"]
+
+
 def _task_volumes(
     writable_paths: tuple[tuple[str, str], ...],
 ) -> list[aws.ecs.TaskDefinitionVolumeArgs]:
@@ -374,6 +393,7 @@ class ComputePlane(pulumi.ComponentResource):
     _runtime_secrets: RuntimeSecrets | None = None
     _hardened = False
     _initial_service_scale: int | None = None
+    scalable_services: ScalableServices | None = None
 
     def __init__(
         self,
@@ -647,6 +667,7 @@ class ComputePlane(pulumi.ComponentResource):
                 parent=self,
                 depends_on=[http_listener, *self._documentdb_instances(data)],
                 custom_timeouts=_service_timeouts(),
+                ignore_changes=self._ignored_service_changes(),
             ),
         )
 
@@ -675,8 +696,18 @@ class ComputePlane(pulumi.ComponentResource):
                 parent=self,
                 depends_on=list(self._documentdb_instances(data)),
                 custom_timeouts=_service_timeouts(),
+                ignore_changes=self._ignored_service_changes(),
             ),
         )
+
+        if self._hardened:
+            self.scalable_services = ScalableServices(
+                cluster_name=cluster.name,
+                service_names={"web": web_service.name, "worker": worker_service.name},
+                request_count_label=pulumi.Output.concat(
+                    load_balancer.arn_suffix, "/", target_group.arn_suffix
+                ),
+            )
 
         return ComputeOutputs(
             cluster_name=cluster.name,
@@ -687,6 +718,10 @@ class ComputePlane(pulumi.ComponentResource):
             web_service_name=web_service.name,
             worker_service_name=worker_service.name,
         )
+
+    def _ignored_service_changes(self) -> list[str] | None:
+        """Ignore ``desiredCount`` only on the hardened path (AD-25 rule)."""
+        return list(HARDENED_SERVICE_IGNORED_CHANGES) if self._hardened else None
 
     def _desired_count(self, configured: int) -> int:
         """Return the step-1 scale when one is set, else the configured count."""

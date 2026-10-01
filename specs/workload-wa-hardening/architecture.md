@@ -170,7 +170,8 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     `{mode, phase}` of the operation being finished, is required for
     `resume` and absent otherwise; R6-m7), `documentdb_secret_policy`
     (AD-08), `scaling: {starts: [{seq, at}…], stops: [{seq, at}…],
-    consumed: [name…], scheduled_scaling_suspended: bool}` (AD-10; one `at`
+    consumed: [name…], scheduled_scaling_suspended: bool, capacity}` (AD-10,
+    `capacity` per D-16, added by S2.1; one `at`
     time per action, R5-M3; `scheduled_scaling_suspended` is a persistent
     TEST-only flag, default `false`, and a PROD contract with `true` fails
     the PROD schema of S4.14, R6-m7, R7-m4) and `drift.out_of_band_fields` (AD-23, added by
@@ -246,7 +247,12 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     every policy). The ECS task definitions and services exist from step 1 at 0
     tasks and are **not** changed in step 2. Tasks start only when the
     one-time start action fires (AD-10, V-23), after the seed and rotation
-    exist.
+    exist. **Edge ownership (S2.1 gate S21-M1):** S2.1 landed before S1.6
+    and S1.5, which wait on BI S5.3 and S5.1, so the targets and policies
+    it renders have no edge to the seed, rotation or policy yet. S1.6 adds
+    the `depends_on` from every S2.1 target and policy to its
+    `SecretRotation`s, and S1.5 adds the one to its
+    `SecretPolicy`s, each with a test.
   - V-7: `aws.lambda.Invocation` must need only `lambda:InvokeFunction`, not
     `GetFunction`.
   - V-8: reading `Secret`, `SecretRotation` and `SecretPolicy` must use
@@ -331,7 +337,12 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     command.
 - **AD-10 Autoscaling and create-only start/stop (R4-M5, m4, R5-M3).**
   - `appautoscaling.Target` per service, created in **step 2** (AD-18), with
-    `min = max(contract min, 1)` and `max = contract max`.
+    `min = max(contract min, 1)` and `max = contract max`. The contract
+    capacity and target-tracking values are set by D-16. The contract check
+    (`scripts/poc_contract.py` `_capacity_semantics`, S2.1) requires
+    `1 <= min <= max` for each service and, for PROD, `min >= 2` (D-16: one
+    task per AZ). The S4.14 PROD schema and its contract dispatch keep that
+    floor.
   - Web: target tracking on `ALBRequestCountPerTarget` (resource label) and
     CPU.
   - Worker: metric math (A-17) with a zero-task guard.
@@ -399,6 +410,75 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
        ones, the hold plan could restart a stopped service, and S4.9 does
        not merge until the hold design is changed in a reviewed PR. V-23(d)
        stays the live STOP at step 15.
+       **V-23(e) result (provider and engine source, recorded by S2.1 on
+       2026-10-01):** the pinned provider's `Target` update calls
+       `RegisterScalableTarget` with `MinCapacity` and `MaxCapacity` on
+       every non-tag update (terraform-provider-aws `target.go`
+       `resourceTargetUpdate`, lines 177-206). Under
+       `ignore_changes=["minCapacity","maxCapacity"]` the engine copies the
+       ignored inputs from the prior state into the new inputs. With the
+       repository's `up-plan` (`up --yes --refresh --plan`,
+       `scripts/_pulumi_command_support.py` lines 58-63), that prior state
+       is the refreshed live state, so a hold update re-sends the live
+       values (0 and 0 after the stop). A plain `up` without `--refresh`
+       re-sends the checkpoint values. Source chain: the engine deployment
+       executor and step generator (`deployment_executor.go` 166-168,
+       `step.go` 960-967 and 1529-1551), the bridge provider and schema
+       (`provider.go` 1458 and 1501, `schema.go` 1680-1684 and 1897-1904,
+       `instance_diff.go` 95-110, `fork_grpc.go` 1187-1209) and the saved
+       plan check (`plan.go` 377-470). Residuals for S4.9: the stop and hold
+       path must use `up-plan` only, never a plain `up`; and a scheduled
+       action that fires between the refresh and the `RegisterScalableTarget`
+       call changes the live bounds after they were read, so the update
+       re-sends the values read before that action (a race window S4.9
+       owns).
+       **V-23(e) provenance (S2.1 gate S21-N4).** Pins: `pulumi-aws` 7.23.0,
+       whose `provider/go.mod` pins `pulumi-terraform-bridge` v3.123.0, the
+       `terraform-plugin-sdk` fork `pulumi/terraform-plugin-sdk`
+       `7f1981c8674a` and `pulumi/pulumi` `pkg`/`sdk` v3.225.0, and whose
+       `upstream` submodule is terraform-provider-aws commit
+       `4981ec2b44ea4892c1ee4f0c1ed23b761a55f44d`. The engine is the
+       development image's Pulumi CLI v3.223.0. The engine files read are
+       identical at v3.223.0 and v3.225.0, except `source_eval.go`,
+       `pkg/engine/deployment.go` and `pkg/engine/update.go`, which were read
+       at v3.223.0. Each local copy's sha256 equals its upstream file at
+       that ref:
+       - terraform-provider-aws `internal/service/appautoscaling/target.go`:
+         `435e01e3c71cbdb2fb22bcb57e5d105ca58d26c40c546a45b032edf985d46d7b`;
+       - pulumi `pkg/resource/deploy/step.go`:
+         `908f9707e6988659883aa45c30b40f0a34c448348efcc8f7aa6ba04691a1f3d9`;
+         `deployment_executor.go`:
+         `6de8d1b2ee4412002cc559e5e48617bc302b8780a1e98dd6d78a1c0b1a8cb5e4`;
+         `step_generator.go`:
+         `0f05d3580b0f3cb9cc1df6d136a703d690c53d61e0a91220e71ee2d6cef2ef67`;
+         `source_eval.go`:
+         `8afccdb79e73eb3d55b130a734250b9a6b29eba0072552d8dc456f831557be4f`;
+         `plan.go`:
+         `da080267e6a93f9fb063abe8a824c707448154c342a93fcc87d2a8ab2ff97466`;
+       - pulumi `pkg/engine/deployment.go`:
+         `de7704cd57b89f88fb0247f763c51f352447ee32599d2eb4297781b9211bbf7f`;
+         `pkg/engine/update.go`:
+         `131b4e508936a50ef5f4f633590b62826defc3dc3e3fe928f24986a79eba8887`;
+         `pkg/backend/apply.go`:
+         `e8d71d6ecec1a218176182b861f53484ca27b690cf0575df0f6a4622c09ef2a6`;
+         `pkg/engine/lifecycletest/refresh_test.go`:
+         `440b77bfdb344157d0f472dbaac3fce89d2a598bc8f3b8b1e4c0fbeb045f169a`;
+         `sdk/go/common/resource/plugin/provider_plugin.go`:
+         `566010e064425d108962d481286d351dbd5e8b597a2a9711d824d49a5aa52bd0`;
+       - bridge `pkg/tfbridge/provider.go`:
+         `ab794b7c60f20200e01e8fdd93e30f2538c50c5799f8f629b6b6818c7658322e`;
+         `pkg/tfbridge/schema.go`:
+         `19056bac5a11833aed1273a4379e7aaa650afd1293d9d578057fce9050bdb826`;
+         `pkg/tfbridge/diff.go`:
+         `06903c4fd5d722a5df4cccdddc987a8d25776ec33d45c6c0ffe1b8f3c7ba215f`;
+         `pkg/tfshim/sdk-v2/instance_diff.go`:
+         `2b849ca70ecc7ff9152daaeecb38e4caa6f53610fb3e11abd22b24ca7eed9c58`;
+         `pkg/tfshim/sdk-v2/provider2.go`:
+         `2b27cddfdca25a6b46adb212fa319f98b649f8e239d0a5df2242a4063b05fd23`;
+       - fork `helper/schema/grpc_provider.go`:
+         `526a056bccd80b562ed8cada627a423f1612832d70e70f949895a024d2e3a537`;
+         `helper/schema/shims.go`:
+         `afdf02459d06cd708d5aa316dbb246447c0580f83e5ec0502e4b12e0942a0668`.
 
     A **restart plan** (`phase: start`) comes from a contract PR that sets
     `scaling.scheduled_scaling_suspended: false` (TEST) and appends a new

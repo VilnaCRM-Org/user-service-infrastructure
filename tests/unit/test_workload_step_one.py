@@ -34,6 +34,15 @@ TASK = "aws:ecs/taskDefinition:TaskDefinition"
 REPLICATION_GROUP = "aws:elasticache/replicationGroup:ReplicationGroup"
 USER = "aws:elasticache/user:User"
 USER_GROUP = "aws:elasticache/userGroup:UserGroup"
+# The step-2 types S2.1 allowlists (AD-10); S1.5, S1.6 and S2.6 add the rest.
+STEP_TWO_ADMITTED = frozenset(
+    {
+        "aws:appautoscaling/policy:Policy",
+        "aws:appautoscaling/scheduledAction:ScheduledAction",
+        "aws:appautoscaling/target:Target",
+        "user-service-infrastructure:autoscaling:Plane",
+    }
+)
 # The user-group ID the guard binds the replication group to (F1).
 USER_GROUP_ID = "synthetic-users"
 # The full ``redis_iam_identity`` result the guard binds to (F11): replication
@@ -125,9 +134,18 @@ def test_a_step_two_type_is_refused_at_step_one(engine, kind):
     args = _transform_args(engine, kind, {})
     with pytest.raises(ValueError, match="step-2 resource"):
         _reject_secret_material(args)
-    # Step 2 admits each type only once its own story allowlists it.
+    # Step 2 admits each type only once its own story allowlists it: S2.1
+    # adds the autoscaling types; the seed, rotation and policy stay refused.
+    if kind in STEP_TWO_ADMITTED:
+        assert _reject_secret_material(args, step=2) is None
+        return
     with pytest.raises(ValueError, match="unreviewed type"):
         _reject_secret_material(args, step=2)
+
+
+def test_s2_1_admits_exactly_the_autoscaling_step_two_types():
+    """S2.1: the target, policy, scheduled action and their component."""
+    assert STEP_TWO_ADMITTED == STEP_TWO_TYPES & HARDENED_TYPES
 
 
 # F5: a hardened container holds both Redis URLs as equal plain rows.

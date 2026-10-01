@@ -329,6 +329,93 @@ def test_native_hardened_workload_renders_no_secret_material(native_stack):
     )
 
 
+def _checked(value):
+    """Drop the ``__defaults`` marker the provider's Check adds to a nested input."""
+    return {key: val for key, val in value.items() if key != "__defaults"}
+
+
+def _step_two_contract(work):
+    """Rewrite the bound hardened contract as a step-2 start plan (S2.1)."""
+    path = work / "hardened-contract.json"
+    contract = json.loads(path.read_text())
+    contract["workload_step"] = 2
+    contract["workload_operation"] = {"mode": "step2", "sequence": 2}
+    contract["workload"]["central"].update(
+        {
+            "lambda_network": {
+                "subnet_ids": ["subnet-0123456789abcdef0"],
+                "bootstrap_job_security_group_id": "sg-0123456789abcdef0",
+            },
+            "documentdb_managed_secret_arn": (
+                "arn:aws:secretsmanager:eu-central-1:891377212104:secret:"
+                "rds!cluster-00000000-0000-4000-8000-000000000003-AbCdEf"
+            ),
+        }
+    )
+    # ``start-2`` stands for a missed entry moved to ``scaling.consumed``.
+    contract["scaling"].update(
+        starts=[
+            {"seq": 1, "at": "2026-10-02T08:00:00"},
+            {"seq": 2, "at": "2026-10-02T09:00:00"},
+        ],
+        stops=[{"seq": 1, "at": "2026-10-03T08:00:00"}],
+        consumed=["start-2"],
+    )
+    path.write_text(json.dumps(contract))
+
+
+def test_native_step_two_previews_autoscaling_through_the_provider(native_stack):
+    """S2.1 (FR-11, AD-10): the provider checks the step-2 autoscaling inputs."""
+    stack, work = native_stack
+    _step_two_contract(work)
+    _hardened(stack, work)
+    events = []
+    stack.preview(on_event=events.append)
+    rows = {row.urn.rsplit("::", 1)[-1]: row for row in resources(events)}
+    scaling = {
+        name: row
+        for name, row in rows.items()
+        if row.type.startswith("aws:appautoscaling/")
+    }
+    assert set(scaling) == {
+        "web-scaling-target",
+        "worker-scaling-target",
+        "web-cpu-tracking",
+        "web-request-tracking",
+        *(f"{svc}-{kind}-1" for svc in ("web", "worker") for kind in ("start", "stop")),
+    }
+    for service in ("web", "worker"):
+        target = scaling[f"{service}-scaling-target"].new.inputs
+        assert (target["minCapacity"], target["maxCapacity"]) == (1, 2)
+        assert target["suspendedState"]["scheduledScalingSuspended"] is False
+        start = scaling[f"{service}-start-1"].new.inputs
+        assert start["schedule"] == "at(2026-10-02T08:00:00)"
+        assert _checked(start["scalableTargetAction"]) == {
+            "minCapacity": 1,
+            "maxCapacity": 2,
+        }
+        stop = scaling[f"{service}-stop-1"].new.inputs
+        assert stop["schedule"] == "at(2026-10-03T08:00:00)"
+        assert _checked(stop["scalableTargetAction"]) == {
+            "minCapacity": 0,
+            "maxCapacity": 0,
+        }
+    cpu = scaling["web-cpu-tracking"].new.inputs
+    configuration = cpu["targetTrackingScalingPolicyConfiguration"]
+    assert configuration["targetValue"] == 60
+    assert (configuration["scaleOutCooldown"], configuration["scaleInCooldown"]) == (
+        60,
+        300,
+    )
+    requests = scaling["web-request-tracking"].new.inputs
+    metric = requests["targetTrackingScalingPolicyConfiguration"]
+    assert metric["targetValue"] == 1000
+    assert (
+        metric["predefinedMetricSpecification"]["predefinedMetricType"]
+        == "ALBRequestCountPerTarget"
+    )
+
+
 def test_native_hardened_data_plane_uses_the_managed_password(native_stack):
     """S1.2/S1.3: managed password on engine 5.0.0, no password input (F-10)."""
     stack, work = native_stack

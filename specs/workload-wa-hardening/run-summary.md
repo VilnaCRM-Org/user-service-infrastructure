@@ -311,6 +311,20 @@ This file is the execution ledger. It is not a planning input.
 - User decisions given in chat on 2026-09-30 and relayed by the coordinator: D-1…D-7 (`decisions.md`). The D-4 and D-5 clarifications came in a second message the same day, and D-8…D-13 (derived details) were confirmed in a third. D-14 (recovery targets RPO ≤ 1 hour, RTO ≤ 24 hours) is a user decision of the same date, recorded in `decisions.md` by commit `68584e1`. **D-15** (the gateway certificate ARN pinned in the reviewed USI workload contract and checked only with `acm:DescribeCertificate`; no CI role gets any `ssm:GetParameter` read; no identity deny, seed guard, seed boundary or catalog hash loosened for SSM) is a user decision given in chat on 2026-09-30, answering the coordinator's question, and relayed with round 10; revision 10 records it in `decisions.md`.
 - Read-only cross-repository reconnaissance: bootstrap-infrastructure @debd88b, api-gateway-infrastructure, and user-service @main via `gh api`
 
+## Implementation notes (after revision 14)
+
+- **S2.1 reorder (gate S21-M1, 2026-10-01).** S2.1 (row 16) was
+  implemented ahead of S1.6 (row 14) and S1.5 (row 15), because both wait
+  on BI S5.3 and S5.1. So the S2.1 targets and policies have no AD-06
+  `depends_on` edge to the step-2 `SecretRotation`s and `SecretPolicy`s
+  yet. The edge is now owned: S1.6 and S1.5 each add it, with a test
+  (`epics-stories.md` S1.6 and S1.5 scope; `architecture.md` AD-06).
+- The S2.1 commits also changed `architecture.md` (V-23(e) result and
+  provenance, the AD-10 contract shape and PROD floor, AD-06 edge
+  ownership), `prd.md` (FR-11 B wording) and `epics-stories.md` (S1.5/S1.6
+  scope, S2.1 B1 wording). The manifest below hashes those versions; the
+  revision number is unchanged.
+
 ## Artifacts (sha256, revision 14)
 
 `run-summary.md` is not hashed here, because it contains the hashes. `decisions.md` is a planning input and is hashed. Commit `68584e1` added its D-14 row after revision 5; revision 6 changed only that row's label (a user decision, not a planning default); revisions 7, 8 and 9 do not change it; revision 10 adds the D-15 row (a user decision of 2026-09-30); revision 11 changes only D-15's note text (R11-n3); revisions 12, 13 and 14 do not change it. `research.md` is unchanged since revision 4; `brief.md` changed last in revision 10 (front matter and AS-4, D-15).
@@ -319,10 +333,10 @@ Check with `sha256sum -c` over the block below, from `specs/workload-wa-hardenin
 ```
 beca16ba9ab95d76cd28ed47ac8e806549b94805ddca9a2d138a790ee0f0ca59  research.md
 5d7d1e37b9417de7cbe7b4fa0bcafe28ed723da997c22be7ef5902b384e302e4  brief.md
-fc0dc5e90013f7361821001e8470d259eb368a1562649023f48bafccd44f3dde  prd.md
-a632f89643792a71cf764651d601893dab25060cb56d7f3ba00ce7590930c1a4  architecture.md
-fc5c9895d9094b8501e72aa9aa7f4b1b70e4aad7c06c3a824dd7578ed262ba8b  epics-stories.md
-86df7c4f7b72ad49cbca328ec79884c792c1b3f833567f4a34586eb60d5259c6  decisions.md
+18228d0075defe4cd689cc070cc648c94e49bd68a52ebae92e80b8939c750a0a  prd.md
+d12a6b436cc5b2a9e1de69088afac3f82cd404ebec9e15a31d0e1966bd55216a  architecture.md
+1e73a9d9053a61cebfdee9677ab246271369ade33c4847c44a64939517089807  epics-stories.md
+7701cd7163b87744087b78d8d01abad0fcb2a11dbe0468d5b3559d975488b119  decisions.md
 45553cbd61f1ae16c238cba9f3ee4f555ede5e06d5e9aaa9199670f0ad81046a  readiness.md
 ```
 

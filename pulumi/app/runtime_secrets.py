@@ -92,6 +92,11 @@ class RuntimeSecretsDescriptor:
         return self._contract["workload_step"]
 
     @property
+    def scaling(self) -> dict[str, Any]:
+        """Return a detached copy of the hardened ``scaling`` block (AD-10)."""
+        return copy.deepcopy(self._contract["scaling"])
+
+    @property
     def references(self) -> dict[str, dict[str, Any]]:
         """Return a detached copy of the exact declared secret identities."""
         return copy.deepcopy(

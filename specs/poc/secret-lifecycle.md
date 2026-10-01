@@ -408,9 +408,14 @@ only during a JWT key change: it holds the new key while it is pre-published
 and then the old key. The app verifies with the public halves of the current
 and the verify-only JWT key (`GetPublicKey`) and signs only with the current
 one; S1.8 passes the verify-only key as `JWT_KMS_PREVIOUS_KEY_ID`, empty when
-absent. BI S5.4 grants the task role `kms:GetPublicKey` only (never
-`kms:Sign`) on whichever key is in that slot, and adds it to the task role's
-`-Guard` and `-Boundary` allowed-key lists, by reviewed amendments. The key
+absent. BI S5.4 changes the task role's grants by reviewed amendments, by
+phase. At S5.11 step 2, before the new key is pre-published in the slot, the
+new key gets `kms:Sign` and `kms:GetPublicKey`, because it becomes the
+current key at step 4. Once the old key is in the slot (steps 4-6), it keeps
+only `kms:GetPublicKey`; its `kms:Sign` is revoked only after the step-4
+rollout has replaced every task. At step 7 every grant on the old key is
+removed. Each key joins the task role's `-Guard` and `-Boundary` allowed-key
+lists with its first grant and leaves them with its last grant. The key
 change has 7 steps (user-service S5.11).
 Any other member of `cmk` fails the schema. No two keys may share an ARN or
 an alias, so a key or alias that names another D-4 key fails, and a secret on

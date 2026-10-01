@@ -655,6 +655,7 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   | runtime | `delivery.logs.amazonaws.com` (service) | `kms:GenerateDataKey*`, `kms:Decrypt` | `aws:SourceAccount` = `<a>`; `aws:SourceArn` like `arn:aws:logs:<r>:<a>:*` (V-16) |
   | runtime | `cloudwatch.amazonaws.com`, `events.amazonaws.com` (services, SNS publish) | `kms:GenerateDataKey*`, `kms:Decrypt` | `aws:SourceAccount` = `<a>` |
   | JWT (RSA_4096, SIGN_VERIFY) | ECS task role | `kms:Sign`, `kms:GetPublicKey` | `kms:SigningAlgorithm=RSASSA_PKCS1_V1_5_SHA_256` on `Sign` |
+| previous JWT (the verify-only slot `cmk.jwt_previous`, D-17 window only) | ECS task role | `kms:GetPublicKey` | exact key ARN. The old key gets this row in place of the JWT row once the step-4 rollout of user-service S5.11 has replaced every task, and loses it at step 7. While the new key is pre-published in the slot (step 3) it already holds the JWT row, because it becomes the current key at step 4. |
   | 2FA (symmetric) | ECS task role | `kms:Encrypt`, `kms:Decrypt` | `ForAllValues:StringEquals kms:EncryptionContextKeys` = [`user_id`] and `Null kms:EncryptionContextKeys` = false |
   | runtime (TEST only) | TEST exercise role `GitHubCiExercise-user-service-infrastructure-test` (created by S5.1; this row's key-policy and identity statements are S5.4's, the role's other grants S5.23's) | `kms:Decrypt` | `kms:ViaService=s3.<r>.amazonaws.com`; `kms:EncryptionContext:aws:s3:arn` like `arn:aws:s3:::<flow-log bucket>/*` (reading flow-log objects, S4.6 step 12) |
 

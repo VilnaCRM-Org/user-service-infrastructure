@@ -351,6 +351,11 @@ This file is the execution ledger. It is not a planning input.
   contract schema refuses the AWS-reserved `alias/aws/` alias prefix, with a
   test. S2.2 nit: S1.5 and S1.6 name the "S2.1/S2.2 autoscaling targets and
   policies".
+  Delta-gate round 2: S19-M1 now splits the JWT grants by key-change phase
+  (the new key holds `kms:Sign` and `kms:GetPublicKey` from S5.11 step 2;
+  the old key keeps only `kms:GetPublicKey` in the slot after the step-4
+  rollout; step 7 removes it), and S19-M3 adds the AD-15a verify-only row so
+  S5.4's "only the AD-15a rows" acceptance covers the D-17 window grant.
 
 ## Artifacts (sha256, revision 14)
 
@@ -361,9 +366,9 @@ Check with `sha256sum -c` over the block below, from `specs/workload-wa-hardenin
 beca16ba9ab95d76cd28ed47ac8e806549b94805ddca9a2d138a790ee0f0ca59  research.md
 5d7d1e37b9417de7cbe7b4fa0bcafe28ed723da997c22be7ef5902b384e302e4  brief.md
 18228d0075defe4cd689cc070cc648c94e49bd68a52ebae92e80b8939c750a0a  prd.md
-e9a208e029ac9caf71ce5dc4ef4418446912a02bdf889422a785344b413056da  architecture.md
-a69075147cf970bb77fce597f52ce4095dc6d1e35b7fbe198bd0aaefb9132bb7  epics-stories.md
-dd779f20718166417dbf465eab0f646998f5349268f00c532ff978c39bd6aa5d  decisions.md
+dcd03ea1fb77008dc2ed7264b5aa1f5dade0eb024cd4f71aff37f7ec6a8d50b5  architecture.md
+20f2048e6d0c716c06fa8ec4cd6e71de6a017173fbb4e2b73d3c18a2d20372c0  epics-stories.md
+c264677ab97a2c48dcb315b1c001e61c1b3c279015a98cba29f2fbdb34a2ae55  decisions.md
 45553cbd61f1ae16c238cba9f3ee4f555ede5e06d5e9aaa9199670f0ad81046a  readiness.md
 ```
 

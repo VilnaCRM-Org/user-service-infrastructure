@@ -39,6 +39,8 @@ DEFAULT_REDIS_PORT: Final[int] = 6379
 DEFAULT_HEALTH_CHECK_PATH: Final[str] = "/api/health"
 PREVIEW_PLACEHOLDER_PREFIX: Final[str] = "preview-only"
 DEPLOYMENT_MODES: Final[set[str]] = {"auto", "preview", "managed"}
+# Shared stacks never run the legacy managed path (S1.10, FR-29, AD-22).
+SHARED_ENVIRONMENTS: Final[frozenset[str]] = frozenset({"test", "prod"})
 
 
 @dataclass(frozen=True)
@@ -563,10 +565,30 @@ class EnvironmentSettings(pulumi.ComponentResource):
         )
 
 
+def require_legacy_target(settings: StackSettings) -> None:
+    """Refuse the legacy managed path on a shared stack (S1.10, FR-29, AD-22).
+
+    The legacy path writes config-supplied material, including the social-login
+    client secrets, into ``SecretVersion``s. Shared stacks compose
+    ``WorkloadPhaseStack`` with ``RuntimeSecrets`` instead. Both the configured
+    environment and the selected stack name are checked; preview placeholders
+    register no AWS resource and stay open.
+    """
+    if settings.is_managed and SHARED_ENVIRONMENTS & {
+        settings.environment,
+        pulumi.get_stack(),
+    }:
+        raise ValueError(
+            "Legacy managed path is closed for shared stacks (FR-29): test and "
+            "prod compose WorkloadPhaseStack with RuntimeSecrets"
+        )
+
+
 def require_application_secrets(settings: StackSettings) -> ApplicationSecretInputs:
     """Reject unconfigured legacy material before workload resource registration."""
     if settings.secrets is None:
         raise ValueError("Legacy managed workload requires application secrets")
+    require_legacy_target(settings)
     return settings.secrets
 
 

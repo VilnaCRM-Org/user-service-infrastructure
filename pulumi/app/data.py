@@ -17,6 +17,7 @@ from app.environment import (
     reject_documentdb_password_config,
     reject_redis_auth_token_config,
     require_application_secrets,
+    require_legacy_target,
 )
 from app.network import NetworkPlane
 from app.runtime_secrets import RuntimeSecrets, RuntimeSecretsDescriptor
@@ -560,6 +561,7 @@ class DataPlane(pulumi.ComponentResource):
         )
 
         documentdb_url_secret_arn = self._persist_url(
+            settings,
             "document_db_url",
             "user-service-documentdb-url",
             pulumi.Output.all(
@@ -593,6 +595,7 @@ class DataPlane(pulumi.ComponentResource):
         )
 
         redis_url_secret_arn = self._persist_url(
+            settings,
             "redis_url",
             "user-service-redis-url",
             pulumi.Output.all(
@@ -617,11 +620,17 @@ class DataPlane(pulumi.ComponentResource):
         )
 
     def _persist_url(
-        self, purpose: str, name: str, value: pulumi.Input[str]
+        self,
+        settings: StackSettings,
+        purpose: str,
+        name: str,
+        value: pulumi.Input[str],
     ) -> pulumi.Output[str]:
         """Use the contract-owned version while retaining legacy identities."""
         if self._runtime_secrets is not None:
             return self._runtime_secrets.persist_url(purpose, value)
+        # The legacy fallback writes a SecretVersion: never on a shared stack.
+        require_legacy_target(settings)
         descriptions = {
             "document_db_url": (
                 "MongoDB connection URL for the user-service application."

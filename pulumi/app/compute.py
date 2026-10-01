@@ -762,7 +762,11 @@ class ComputePlane(pulumi.ComponentResource):
         self,
         settings: StackSettings,
     ) -> dict[str, pulumi.Input[str]]:
-        """Persist application secrets to Secrets Manager for ECS injection."""
+        """Persist application secrets to Secrets Manager for ECS injection.
+
+        Legacy path only: ``require_application_secrets`` refuses test and prod
+        before any ``SecretVersion`` registers (S1.10, FR-29, AD-22).
+        """
         material = require_application_secrets(settings)
         definitions = {
             "app-secret": material.app_secret,

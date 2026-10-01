@@ -331,7 +331,8 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     command.
 - **AD-10 Autoscaling and create-only start/stop (R4-M5, m4, R5-M3).**
   - `appautoscaling.Target` per service, created in **step 2** (AD-18), with
-    `min = max(contract min, 1)` and `max = contract max`.
+    `min = max(contract min, 1)` and `max = contract max`. The contract
+    capacity and target-tracking values are set by D-16.
   - Web: target tracking on `ALBRequestCountPerTarget` (resource label) and
     CPU.
   - Worker: metric math (A-17) with a zero-task guard.

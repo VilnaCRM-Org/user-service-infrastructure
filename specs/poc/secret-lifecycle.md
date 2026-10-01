@@ -136,11 +136,13 @@ For a hardened projection, `RuntimeSecrets.ecs_secrets()` sets each container
 secret's `valueFrom` to the bare secret ARN: hardened declarations select no JSON
 key. The validator also accepts `arn:<json-key>::`. ECS then resolves the `AWSCURRENT` version at task start, so a
 rotated value needs only new tasks. `require_unversioned_reference` refuses any
-reference with a version ID or staging label (`arn:::<id>`, `arn::AWSCURRENT:`).
-It also fullmatches the exact declared name in the deployment's own account and
-region, with the six-character random suffix and ASCII digits only, so a foreign,
-partial or look-alike ARN fails. A missing declaration fails the inventory
-check. The pre-hardening
+reference with a version ID or staging label (`arn:::<id>`, `arn::AWSCURRENT:`)
+and checks shape only. The exact-identity check is made by `ecs_secrets()`
+(through `_current_references`): it fullmatches each reference against
+`secret_arn_regex(...)` for the exact declared name in the deployment's own
+account and region, with the six-character random suffix and ASCII digits only,
+so a foreign, partial or look-alike ARN fails. A missing declaration fails the
+inventory check. The pre-hardening
 projection keeps its version-pinned references until S4.10 removes that branch.
 
 The observed `AWSCURRENT` version is evidence only. For a seeded secret the
@@ -148,6 +150,10 @@ prior-receipt comparison uses the ARN and the name bound by that ARN: a rotation
 may change `version_id`, a different ARN is a replacement and fails, and a secret
 that had a current version cannot lose it. The generated (pre-hardening) shape
 still requires the exact prior observation.
+
+`_validate_secret_arn` in `poc_secret_observation.py` pins TEST through the
+module constants `REGION` and `ACCOUNT_ID`, not the contract. S4.14's pin
+inventory must include that use site.
 
 This validator does not prove rotation provenance. AD-25 requires
 `LastRotatedDate` later than the receipt, with rotation enabled by the reviewed

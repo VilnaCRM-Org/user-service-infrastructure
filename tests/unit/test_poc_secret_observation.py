@@ -1,6 +1,7 @@
 """Exercise desired creation and observed preservation without secret values."""
 
 import copy
+import re
 import sys
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import pytest
 from poc_contract import validate
 from poc_secret_observation import (
     SECRET_PREFIX,
+    secret_arn_regex,
     validate_secret_observation,
     validate_seed_input,
 )
@@ -75,6 +77,11 @@ def test_generated_or_secret_fields_cannot_enter_desired_contract(field):
             SECRET_PREFIX + "/user-service-infrastructure/runtime/test/"
             "synthetic-app_secret-extra-AbCdEf",
         ),
+        # N2: the exact (json_key=False) pattern refuses every reference suffix.
+        *[
+            ("arn_suffix", suffix)
+            for suffix in (":password::", ":::" + "a" * 32, "::AWSCURRENT:")
+        ],
         ("version_id", "latest"),
         ("version_id", None),
         (
@@ -88,6 +95,8 @@ def test_generated_or_secret_fields_cannot_enter_desired_contract(field):
 def test_native_observation_must_match_reviewed_identity(field, value):
     contract = fixture("workload")
     current = observation(contract)
+    if field == "arn_suffix":
+        field, value = "arn", current["app_secret"]["arn"] + value
     current["app_secret"][field] = value
     with pytest.raises(ValueError) as failure:
         validate_secret_observation(contract, current)
@@ -266,6 +275,16 @@ def test_seed_input_is_exactly_the_secret_arn_and_purpose(purpose):
             lambda seed: seed.update(secret_arn=seed["secret_arn"][:-6] + "*"),
             "identity differs",
         ),
+        # N2: a JSON-key, version-ID or staging-label suffix is not the ARN.
+        *[
+            (
+                lambda seed, suffix=suffix: seed.update(
+                    secret_arn=seed["secret_arn"] + suffix
+                ),
+                "identity differs",
+            )
+            for suffix in (":password::", ":::" + "a" * 32, "::AWSCURRENT:")
+        ],
     ],
 )
 def test_seed_input_with_any_other_key_or_target_is_rejected(mutate, message):
@@ -296,3 +315,35 @@ def test_observed_version_refuses_the_hex_256_value_shape(version):
     current["app_secret"]["version_id"] = version
     with pytest.raises(ValueError, match="version invalid"):
         validate_secret_observation(contract, current)
+
+
+_NAME = "/user-service-infrastructure/runtime/test/synthetic-app_secret"
+_ARN = f"arn:aws:secretsmanager:eu-central-1:891377212104:secret:{_NAME}-AbCdEf"
+
+
+@pytest.mark.parametrize(
+    ("json_key", "reference", "accepted"),
+    [
+        (False, _ARN, True),
+        (True, _ARN, True),
+        (False, _ARN + ":password::", False),
+        (True, _ARN + ":password::", True),
+        (False, _ARN + ":::" + "a" * 32, False),
+        (True, _ARN + ":::" + "a" * 32, False),
+        (False, _ARN + "::AWSCURRENT:", False),
+        (True, _ARN + "::AWSCURRENT:", False),
+        (False, _ARN + "\n", False),
+        (True, _ARN + "\n", False),
+        (False, _ARN.replace("AbCdEf", "AbCdE"), False),
+        (False, _ARN.replace("AbCdEf", "AbCdE\u0661"), False),
+        (True, _ARN.replace("891377212104", "933245420672"), False),
+        (True, _ARN.replace("eu-central-1", "eu-west-1"), False),
+        (True, _ARN.replace("synthetic-app_secret", "other"), False),
+    ],
+)
+def test_secret_arn_regex_in_both_modes(json_key, reference, accepted):
+    """N2: json_key=False is the exact ARN; json_key=True adds only `:key::`."""
+    pattern = secret_arn_regex(
+        "eu-central-1", "891377212104", _NAME, json_key=json_key
+    )
+    assert bool(re.fullmatch(pattern, reference)) is accepted

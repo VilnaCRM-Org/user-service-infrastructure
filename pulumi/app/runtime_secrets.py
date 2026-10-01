@@ -42,7 +42,12 @@ _SECRET_REFERENCE = re.compile(
 
 
 def require_unversioned_reference(reference: Any) -> str:
-    """Accept only the secret ARN or ``arn:key::``; reject versions and stages."""
+    """Accept only the secret ARN or ``arn:key::``; reject versions and stages.
+
+    This checks the reference shape only. It does not bind the declared name,
+    account or region; ``ecs_secrets()`` (``_current_references``) fullmatches
+    each reference against ``secret_arn_regex(...)`` for that.
+    """
     if type(reference) is not str or not _SECRET_REFERENCE.fullmatch(reference):
         raise ValueError("Secret reference must not pin a version or staging label")
     return reference

@@ -687,8 +687,8 @@ def test_hardened_allowlist_is_exactly_the_rendered_graph(tmp_path):
 
 
 def test_secret_lifecycle_spec_records_the_awscurrent_section():
-    """F1: the S1.7 section names its markers and drops the stale wording."""
-    text = (ROOT / "specs/poc/secret-lifecycle.md").read_text()
+    """F1/N1/N3/N4: the S1.7 section names its markers and drops stale wording."""
+    text = " ".join((ROOT / "specs/poc/secret-lifecycle.md").read_text().split())
     section = text[text.index("### ECS references resolve `AWSCURRENT`") :]
     for marker in (
         "require_unversioned_reference",
@@ -698,12 +698,23 @@ def test_secret_lifecycle_spec_records_the_awscurrent_section():
         "does not prove rotation provenance",
         "S4.10",
         "select no JSON",
+        "checks shape only",
+        "S4.14's pin inventory must include that use site",
+        "`REGION` and `ACCOUNT_ID`",
     ):
         assert marker in section, marker
+    # N1: the identity check belongs to ecs_secrets(), not to the shape helper.
+    paragraph = next(
+        part
+        for part in (ROOT / "specs/poc/secret-lifecycle.md").read_text().split("\n\n")
+        if "`ecs_secrets()`" in part
+    )
+    assert "secret_arn_regex" in " ".join(paragraph.split())
     for stale in (
-        "its identity\nand first version are preserved",
+        "its identity and first version are preserved",
         "the current source pins secret versions",
-        "when a JSON\nkey is selected",
+        "when a JSON key is selected",
+        "It also fullmatches the exact declared name",
     ):
         assert stale not in text, stale
 

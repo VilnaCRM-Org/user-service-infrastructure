@@ -271,6 +271,19 @@ def test_a_secret_reference_is_exempt_only_from_the_credential_scan(engine):
             _reject_secret_material(args)
 
 
+AWSLOGS = {
+    "logDriver": "awslogs",
+    "options": {"awslogs-group": "/g", "awslogs-region": "r"},
+}
+VERSIONED_ARN = SECRET_ARN + ":password:AWSPREVIOUS:"
+# The N-01 static trigger: a splunk driver whose token rides in secretOptions.
+SPLUNK_LOG = {
+    "logDriver": "splunk",
+    "options": {"splunk-url": "https://collector.example"},
+    "secretOptions": [{"name": "splunk-token", "valueFrom": VERSIONED_ARN}],
+}
+
+
 @pytest.mark.parametrize("engine", [False, True])
 @pytest.mark.parametrize(
     "definitions",
@@ -324,6 +337,27 @@ def test_a_secret_reference_is_exempt_only_from_the_credential_scan(engine):
         _definitions(mountPoints=[{"containerPath": "/x?token=synthetic"}]),
         _definitions(name=f"{USERINFO}/fixture"),
         _definitions(secrets=[{"name": ACCESS_KEY, "valueFrom": SECRET_ARN}]),
+        # N-01: logConfiguration is the closed awslogs shape, no secretOptions.
+        _definitions(logConfiguration=SPLUNK_LOG),
+        _definitions(logConfiguration={**AWSLOGS, "logDriver": "splunk"}),
+        _definitions(
+            logConfiguration={**AWSLOGS, "options": {"awslogs-endpoint": "https://x"}}
+        ),
+        _definitions(logConfiguration={**AWSLOGS, "secretOptions": []}),
+        _definitions(
+            logConfiguration={
+                **AWSLOGS,
+                "secretOptions": [{"name": "t", "valueFrom": SECRET_ARN}],
+            }
+        ),
+        _definitions(
+            logConfiguration={
+                **AWSLOGS,
+                "secretOptions": [{"name": "t", "valueFrom": VERSIONED_ARN}],
+            }
+        ),
+        _definitions(logConfiguration=SPLUNK_LOG, secrets=[]),
+        _definitions(logConfiguration="awslogs"),
     ],
 )
 def test_the_task_property_check_refuses_secret_shaped_environment(engine, definitions):
@@ -665,6 +699,15 @@ def test_the_lifecycle_doc_records_the_s13_gate_fixes():
         "inline `policy` at any step",
         "Typed-input audit",
         "are no longer residuals",
+        "is a shape heuristic",
+        "source review remains the control",
+        "closed to the shape `ComputePlane` emits",
+        "`secretOptions` is refused",
+        "The pre-hardening serializer now also runs the closed-key",
+        "an input present in both casings is refused",
+        "`ListenerDefaultActionArgs` and `TaskDefinitionVolumeArgs`",
+        "(R-1)",
+        "(R-2)",
         "before any resource registers, and the data plane repeats that check",
         "S3.4 replaces both with security-group references",
         "test_the_bootstrap_job_sg_reaches_documentdb_and_stays_in_the_vpc",
@@ -676,3 +719,48 @@ def test_the_lifecycle_doc_records_the_s13_gate_fixes():
         "raises before the data plane registers",
     ):
         assert stale not in text, stale
+
+
+@pytest.mark.parametrize("engine", [False, True])
+def test_the_guard_accepts_the_emitted_awslogs_shape(engine):
+    """N-01: the closed log configuration still admits what ComputePlane emits."""
+    key = "containerDefinitions" if engine else "container_definitions"
+    full = {"awslogs-group": "/g", "awslogs-region": "r", "awslogs-stream-prefix": "p"}
+    for options in ({}, full):
+        log = {"logDriver": "awslogs", "options": options}
+        args = _transform_args(engine, TASK, {key: _definitions(logConfiguration=log)})
+        assert _reject_secret_material(args) is None
+
+
+@pytest.mark.parametrize("engine", [False, True])
+@pytest.mark.parametrize(
+    ("kind", "snake", "camel", "good"),
+    [
+        (TASK, "container_definitions", "containerDefinitions", _definitions()),
+        (CLUSTER, "manage_master_user_password", "manageMasterUserPassword", True),
+        (LISTENER, "default_actions", "defaultActions", []),
+        (SERVICE, "service_connect_configuration", "serviceConnectConfiguration", None),
+    ],
+)
+def test_both_casings_of_one_input_are_refused(engine, kind, snake, camel, good):
+    """N-03: two casings of one input are ambiguous on either path."""
+    args = _transform_args(engine, kind, {snake: good, camel: good})
+    with pytest.raises(ValueError, match="unreviewed property"):
+        _reject_secret_material(args)
+
+
+@pytest.mark.parametrize("engine", [False, True])
+def test_the_casing_of_the_path_wins_and_the_other_is_still_read(engine):
+    """N-03: a lone key of either casing is read, never ignored."""
+    own, other = (
+        ("containerDefinitions", "container_definitions")
+        if engine
+        else ("container_definitions", "containerDefinitions")
+    )
+    dirty = _definitions([{"name": "DSN", "value": USERINFO}])
+    for key in (own, other):
+        args = _transform_args(engine, TASK, {key: _definitions()})
+        assert _reject_secret_material(args) is None
+        args = _transform_args(engine, TASK, {key: dirty})
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _reject_secret_material(args)

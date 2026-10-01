@@ -280,6 +280,21 @@ def test_s13_gate_property_checks_fail_closed(engine):
     listener, secret = "aws:lb/listener:Listener", "aws:secretsmanager/secret:Secret"
     service, task = "aws:ecs/service:Service", "aws:ecs/taskDefinition:TaskDefinition"
     plain = json.dumps([{"name": "f", "secrets": []}])
+    versioned = "arn:aws:secretsmanager:eu-central-1:891377212104:secret:s-AbCdEf"
+    splunk = json.dumps(
+        [
+            {
+                "name": "f",
+                "logConfiguration": {
+                    "logDriver": "splunk",
+                    "options": {"splunk-url": "https://collector.example"},
+                    "secretOptions": [
+                        {"name": "t", "valueFrom": versioned + ":password:AWSPREVIOUS:"}
+                    ],
+                },
+            }
+        ]
+    )
     for kind, props in (
         (listener, {}),
         (listener, {"defaultActions": [{"type": "forward"}]}),
@@ -296,6 +311,10 @@ def test_s13_gate_property_checks_fail_closed(engine):
         (secret, {"policy": "{}"}),
         (task, {"containerDefinitions": plain, "volumes": [{"hostPath": "/"}]}),
         (task, {"containerDefinitions": '[{"name": "a", "NAME": "b"}]'}),
+        # N-01: the closed awslogs shape, with no secretOptions.
+        (task, {"containerDefinitions": splunk}),
+        # N-03: two casings of one input are ambiguous.
+        (task, {"containerDefinitions": plain, "container_definitions": plain}),
     ):
         with pytest.raises(ValueError, match="unreviewed property"):
             _reject_secret_material(args(kind, props))
@@ -325,6 +344,16 @@ def test_s13_gate_serializer_refuses_unreviewed_shapes():
         ([{"name": "f", "Name": "g"}], "unreviewed key"),
         ([{"logConfiguration": {"options": {}, "Options": {}}}], "repeats a key"),
         ([{"command": ["AKIA" + "SYNTHETIC0000000"]}], "access key"),
+        (
+            [{"logConfiguration": {"logDriver": "splunk", "options": {}}}],
+            "closed awslogs",
+        ),
     ):
         with pytest.raises(ValueError, match=message):
             ComputePlane._serialize_container(containers, unversioned=True)
+    from app.compute import _require_unversioned_value_from
+
+    arn = "arn:aws:secretsmanager:eu-central-1:891377212104:secret:s-AbCdEf"
+    _require_unversioned_value_from([{"valueFrom": arn}, {"a": 1}])
+    with pytest.raises(ValueError, match="must not pin a version"):
+        _require_unversioned_value_from({"a": [{"valueFrom": arn + "::AWSCURRENT:"}]})

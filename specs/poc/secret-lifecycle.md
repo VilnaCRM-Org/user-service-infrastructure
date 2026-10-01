@@ -79,7 +79,13 @@ The guard is type-level plus the listed property checks
 hold only `nextSigningKeyLength`; a BYODKIM `domainSigningPrivateKey` or
 selector fails before registration. The check reads both key casings:
 snake_case on the SDK transformation path and camelCase on the engine path.
-An opaque value, such as an input type or an `Output`, fails closed.
+An opaque value fails closed, with two reviewed exceptions: the guard reads
+the input types `ListenerDefaultActionArgs` and `TaskDefinitionVolumeArgs`
+field by field. An SDK `Output` for a task definition is not refused but
+deferred (see below), because the engine transform re-checks it once resolved.
+Each check reads the casing of its path (snake_case on the SDK path, camelCase
+on the engine path); an input present in both casings is refused as an
+unreviewed property.
 
 `WorkloadPhaseStack` also registers a deny-all engine invoke transform through
 `pulumi.runtime.register_invoke_transform`. Its allowlist is empty: no hardened
@@ -100,9 +106,16 @@ secret names. Every key and string leaf except `secrets[].valueFrom` must be
 credential-free (no AWS access key, URL userinfo or credential query
 parameter), so `command`, `image`, `healthCheck.command` and
 `logConfiguration.options` are scanned too, and every `valueFrom` must be a
-bare secret ARN. `ComputePlane` applies the same check when it serializes
+bare secret ARN. `logConfiguration` is closed to the shape `ComputePlane`
+emits: `logDriver` is `awslogs`, `options` keys lie within `awslogs-group`,
+`awslogs-region` and `awslogs-stream-prefix`, and `secretOptions` is refused.
+Any `valueFrom` found outside `secrets[]` also gets the bare-ARN check as
+defence in depth; the closed keys leave none reachable today. `ComputePlane` applies the same check when it serializes
 (`require_plain_containers`), so both layers agree. The pre-hardening shape
-keeps its version-pinned `valueFrom` (AD-25).
+keeps its version-pinned `valueFrom` (AD-25). The pre-hardening serializer
+now also runs the closed-key, closed-log-configuration and credential-scan
+checks. That is an extra refusal only: the rendered output is unchanged and
+validation is stricter.
 
 The task definition check inspects a JSON string and defers only a value it
 cannot inspect yet. An SDK `Output` on the SDK transformation path is
@@ -151,7 +164,13 @@ resource inputs, and default-provider config. Review of the program source and
 of the stack config remains the control for these. The listener OIDC
 `clientSecret` and the container fields other than `environment` (`command`,
 `image`, `healthCheck`, `logConfiguration` and the rest) are no longer
-residuals: the checks above inspect them.
+residuals: the checks above inspect them. The credential scan is a shape heuristic (access key, URL
+userinfo, credential query parameter): an arbitrary plaintext secret in an
+environment value, `command` or a log option is not recognised, so source
+review remains the control for it. Two further residuals are recorded: on a
+first create, container content is checked only at `up`, not in the saved
+preview (R-1), and there is no native `up` observation until S4.6 step 4
+(R-2).
 
 The stack that renders no hardened contract registers no such guard.
 

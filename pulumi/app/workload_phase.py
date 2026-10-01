@@ -180,9 +180,16 @@ def _easy_dkim_only(props, _sdk_path: bool) -> bool:
     )
 
 
-def _either(props, snake: str, camel: str):
-    """Read one input in the SDK (snake_case) or engine (camelCase) casing."""
-    return props[snake] if snake in props else props.get(camel)
+def _either(props, snake: str, camel: str, sdk_path: bool):
+    """Read one input in the casing of its path (SDK snake_case, engine camelCase).
+
+    Both casings present is ambiguous, so it is an unreviewed property. A lone
+    key of the other casing is still read, so no input is ever ignored.
+    """
+    if snake in props and camel in props:
+        raise ValueError("Hardened workload graph holds an unreviewed property")
+    own, other = (snake, camel) if sdk_path else (camel, snake)
+    return props[own] if own in props else props.get(other)
 
 
 DOCUMENTDB_PASSWORD_INPUTS = (
@@ -193,18 +200,20 @@ DOCUMENTDB_PASSWORD_INPUTS = (
 )
 
 
-def _managed_iam_documentdb(props, _sdk_path: bool) -> bool:
+def _managed_iam_documentdb(props, sdk_path: bool) -> bool:
     """Accept only the managed password on the IAM-capable engine (S1.2, S1.3).
 
     ``manageMasterUserPassword`` must be literally true, no primary password
     input may be present, and the engine must be DocumentDB 5.0.0 (V-17).
     """
     return (
-        _either(props, "manage_master_user_password", "manageMasterUserPassword")
+        _either(
+            props, "manage_master_user_password", "manageMasterUserPassword", sdk_path
+        )
         is True
         and all(props.get(key) is None for key in DOCUMENTDB_PASSWORD_INPUTS)
         and props.get("engine") == "docdb"
-        and _either(props, "engine_version", "engineVersion")
+        and _either(props, "engine_version", "engineVersion", sdk_path)
         == DOCUMENTDB_IAM_ENGINE_VERSION
     )
 
@@ -277,7 +286,8 @@ def _plain_task_environment(props, sdk_path: bool) -> bool:
     and no JSON object may repeat a key in any case.
     """
     value = _inspectable(
-        _either(props, "container_definitions", "containerDefinitions"), sdk_path
+        _either(props, "container_definitions", "containerDefinitions", sdk_path),
+        sdk_path,
     )
     if value is DEFERRED:
         return True
@@ -328,13 +338,13 @@ def _reviewed_task_definition(props, sdk_path: bool) -> bool:
     return _plain_task_environment(props, sdk_path) and _name_only_volumes(props)
 
 
-def _no_oidc_action(props, _sdk_path: bool) -> bool:
+def _no_oidc_action(props, sdk_path: bool) -> bool:
     """Refuse a listener action that could carry an OIDC ``clientSecret`` (F-02).
 
     Each default action must be a readable map or input type with no
     ``authenticate_oidc`` key in any casing; an opaque action or list fails.
     """
-    actions = _either(props, "default_actions", "defaultActions")
+    actions = _either(props, "default_actions", "defaultActions", sdk_path)
     if actions is None:
         return True
     if type(actions) is not list:
@@ -357,10 +367,15 @@ def _no_inline_secret_policy(props, _sdk_path: bool) -> bool:
     return props.get("policy") is None
 
 
-def _no_service_connect(props, _sdk_path: bool) -> bool:
+def _no_service_connect(props, sdk_path: bool) -> bool:
     """Refuse Service Connect, whose log configuration has ``secretOptions``."""
     return (
-        _either(props, "service_connect_configuration", "serviceConnectConfiguration")
+        _either(
+            props,
+            "service_connect_configuration",
+            "serviceConnectConfiguration",
+            sdk_path,
+        )
         is None
     )
 

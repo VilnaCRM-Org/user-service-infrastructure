@@ -52,13 +52,32 @@ elif hardened:
         registries=registries,
         secrets=RuntimeSecretsDescriptor(contract),
     )
-    if mode == "hardened-secret-material":
+    # N1 (F1, F3): material or an unlisted type under any owner fails the program.
+    owner, _, kind = scenario.get("addition", ":").partition(":")
+    parent = {
+        "runtime-secrets": workload.runtime_secrets,
+        "stack": workload,
+        "root": None,
+    }.get(owner)
+    options = pulumi.ResourceOptions(parent=parent)
+    if kind == "random-password":
         import pulumi_random as random
 
-        random.RandomPassword(
-            "fixture-material",
-            length=16,
-            opts=pulumi.ResourceOptions(parent=workload.runtime_secrets),
+        random.RandomPassword("fixture-material", length=16, opts=options)
+    if kind == "secret-version":
+        import pulumi_aws as aws
+
+        aws.secretsmanager.SecretVersion(
+            "fixture-version",
+            secret_id="synthetic",
+            secret_string="synthetic",
+            opts=options,
+        )
+    if kind == "ssm-parameter":
+        import pulumi_aws as aws
+
+        aws.ssm.Parameter(
+            "fixture-parameter", type="String", value="synthetic", opts=options
         )
 elif mode == "legacy-workload":
     # The installed entrypoint stays metadata-only. Exercise the legacy managed

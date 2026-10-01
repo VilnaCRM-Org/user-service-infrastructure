@@ -276,15 +276,34 @@ def test_native_hardened_workload_renders_no_secret_material(native_stack):
     assert "aws:lambda/function:Function" not in types
 
 
-def test_native_hardened_workload_rejects_readded_secret_material(native_stack):
+@pytest.mark.parametrize(
+    ("addition", "message", "kind"),
+    [
+        ("runtime-secrets:random-password", "must not hold secret material", None),
+        # N1 (F1): outside the component, the stack-wide guard still applies.
+        ("stack:random-password", "must not hold secret material", None),
+        ("root:random-password", "must not hold secret material", None),
+        ("stack:secret-version", "must not hold secret material", None),
+        ("root:secret-version", "must not hold secret material", None),
+        # F3: a type outside the closed allowlist fails too.
+        ("root:ssm-parameter", "unreviewed type", "aws:ssm/parameter:Parameter"),
+    ],
+)
+def test_native_hardened_workload_rejects_readded_secret_material(
+    native_stack, addition, message, kind
+):
     stack, work = native_stack
-    (work / "scenario.json").write_text('{"mode":"hardened-secret-material"}')
+    (work / "scenario.json").write_text(
+        json.dumps({"mode": "hardened-workload", "addition": addition})
+    )
     events = []
     with pytest.raises(AutomationRuntimeError) as failure:
         stack.preview(on_event=events.append)
-    assert "must not hold secret material" in str(failure.value)
+    assert message in str(failure.value)
     assert not [
-        row for row in resources(events) if row.type.startswith(SECRET_MATERIAL)
+        row
+        for row in resources(events)
+        if row.type.startswith(SECRET_MATERIAL) or row.type == kind
     ]
 
 

@@ -42,15 +42,51 @@ rotation. Every `function_ref` must name a key of
 `central.rotation_function_arns`, and a missing central function or CMK makes
 the contract invalid, so admission is refused before any read (NFR-07).
 
+Every declared secret is encrypted by the runtime CMK: its `kms_key_arn` must
+equal `central.cmk.runtime.arn`, and the runtime, JWT and 2FA CMK ARNs must be
+pairwise distinct (D-4). The JWT or 2FA key, the `aws/secretsmanager` key or
+any other key in the account is refused. `rotation.schedule_days` must be the
+exact integer `90`.
+
 For such a projection the program declares only `Secret` resources: no Random
-or TLS generator and no `SecretVersion`, and a transformation fails the program
-if either is added (FR-09, NFR-01). A seeded secret has no version until the
-seed runs; after that its identity and first version are preserved. The seed
-input is exactly `{secret_arn, purpose}` for a rotated purpose
-(`poc_secret_observation.validate_seed_input`). A contract without
+or TLS generator and no `SecretVersion` (FR-09, NFR-01). Before its first
+resource, `WorkloadPhaseStack` registers one guard for the whole stack, twice:
+`pulumi.runtime.register_stack_transformation` reaches every resource the
+program builds, whatever its parent (the workload owner, the registry and mail
+resources, and root resources with no parent), and
+`pulumi.runtime.register_resource_transform` lets the engine also reach the
+children of a packaged component. The component-level transformation on the
+secret, network and messaging planes stays as a second layer. The guard fails
+the program on any Random, TLS or `SecretVersion` type and on any type outside
+the closed allowlist of the hardened graph (`HARDENED_TYPES`: the taggable
+workload types, the route-table association, ECR repository, Route 53 record
+and SES identity types, and the component tokens); widening that list is a
+reviewed change. The stack that renders no hardened contract registers no such
+guard.
+
+A seeded secret has no version until the seed runs; after that its identity
+and first version are preserved. The seed input is exactly
+`{secret_arn, purpose}` for a rotated purpose
+(`poc_secret_observation.validate_seed_input`); the ARN must fully match the
+declared TEST name, account, region and partition. A contract without
 `workload_step` keeps the pre-hardening shape and graph unchanged until the
 topology story removes that branch (AD-25). Switching a workload contract
 between the two shapes is refused; it would need a reviewed state migration.
+
+Receipt schemas (`schemas/poc-workload-*-v1.schema.json`) are local shape only.
+A Secrets Manager `VersionId` is the caller's `ClientRequestToken`: 32 to 64
+characters of `[A-Za-z0-9-]`. AWS only recommends a UUID, so the schemas and
+`validate_secret_observation` keep that charset and refuse the hex-256 value
+shape it would otherwise admit. `secret_metadata` keys are the six declared
+purposes plus `documentdb_primary`. A TEST receipt names only account
+`891377212104` resources and the one gateway certificate parameter; the abandon
+receipt is TEST-only (`urn:pulumi:test::`, mode `recovery-abandon`) and the
+import receipt's mode is `recovery-import`. A schema cannot compare two values,
+so the S4.11 receipt library must enforce that a retained secret's `import_id`
+equals its `secret.arn`. JSON Schema `pattern` runs as `re.search`, where `$`
+also matches before a trailing newline: fixed-length fields pin their length,
+and the S4.11 library must re-check every variable-length field with
+`re.fullmatch`.
 
 V-8 (provider source): pulumi-aws 7.23.0 builds on terraform-provider-aws
 v6.36.0 with no Secrets Manager patch. Reading `Secret` calls only

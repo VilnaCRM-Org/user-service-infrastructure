@@ -423,7 +423,19 @@ def test_pre_hardening_projection_keeps_its_generators_until_s4_10(tmp_path):
     assert {"data", "compute"} <= set(rows)
 
 
-@pytest.mark.parametrize("mutation", ["random-password", "secret-version"])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "random-password",
+        "secret-version",
+        # N1 (F1): outside the runtime-secrets component, the stack-wide guard
+        # still refuses material parented to the stack or to no resource.
+        "stack:random-password",
+        "root:random-password",
+        "stack:secret-version",
+        "root:secret-version",
+    ],
+)
 def test_readding_secret_material_to_the_hardened_graph_fails(tmp_path, mutation):
     receipt = graph(tmp_path, "hardened", mutation)
     assert receipt["error"] == "Hardened workload graph must not hold secret material"
@@ -432,6 +444,16 @@ def test_readding_secret_material_to_the_hardened_graph_fails(tmp_path, mutation
         for name, row in receipt["registrations"].items()
         if row["type"].startswith(SECRET_MATERIAL)
     ]
+
+
+@pytest.mark.parametrize("owner", ["", "stack:", "root:"])
+def test_unlisted_type_in_the_hardened_graph_fails(tmp_path, owner):
+    """F3: the hardened graph is a closed allowlist, not a denylist."""
+    receipt = graph(tmp_path, "hardened", f"{owner}ssm-parameter")
+    assert receipt["error"] == "Hardened workload graph holds an unreviewed type"
+    assert "aws:ssm/parameter:Parameter" not in {
+        row["type"] for row in receipt["registrations"].values()
+    }
 
 
 def test_hardened_inventory_has_no_version_references_or_derived_secrets():
@@ -446,3 +468,70 @@ def test_hardened_inventory_has_no_version_references_or_derived_secrets():
     for purpose in sorted(module.DERIVED):
         with pytest.raises(ValueError, match="invalid or duplicated"):
             resource.persist_url(purpose, "synthetic")
+
+
+def test_hardened_guard_is_registered_stack_wide_with_the_engine(tmp_path):
+    """F1: the engine transform, which reaches packaged components, is present."""
+    assert graph(tmp_path, "hardened")["engine_transforms"] == 1
+    assert graph(tmp_path, "bridge")["engine_transforms"] == 0
+
+
+@pytest.mark.parametrize(
+    ("kind", "message"),
+    [
+        ("random:index/randomPassword:RandomPassword", "secret material"),
+        ("tls:index/privateKey:PrivateKey", "secret material"),
+        ("aws:secretsmanager/secretVersion:SecretVersion", "secret material"),
+        ("aws:ssm/parameter:Parameter", "unreviewed type"),
+        ("awsx:ec2:Vpc", "unreviewed type"),
+        ("pulumi:providers:random", "unreviewed type"),
+    ],
+)
+def test_engine_transform_refuses_packaged_component_children(kind, message):
+    """A packaged component's child reaches only the engine-level transform."""
+    from app.workload_phase import _reject_secret_material
+
+    import pulumi
+
+    args = pulumi.ResourceTransformArgs(
+        custom=True, type_=kind, name="child", props={}, opts=pulumi.ResourceOptions()
+    )
+    with pytest.raises(ValueError, match=message):
+        _reject_secret_material(args)
+
+
+def test_hardened_allowlist_is_the_rendered_graph_plus_reviewed_taggable_types(
+    tmp_path,
+):
+    """F3: every allowlisted untagged or component type is rendered today."""
+    from app.workload_phase import (
+        HARDENED_COMPONENT_TYPES,
+        HARDENED_TYPES,
+        HARDENED_UNTAGGED_TYPES,
+        TAGGABLE_TYPES,
+    )
+
+    rendered = {
+        row["type"] for row in graph(tmp_path, "hardened")["registrations"].values()
+    } - {"pulumi:pulumi:Stack"}
+    assert rendered <= HARDENED_TYPES
+    assert HARDENED_UNTAGGED_TYPES | HARDENED_COMPONENT_TYPES <= rendered
+    assert not HARDENED_UNTAGGED_TYPES & TAGGABLE_TYPES
+    assert not [kind for kind in HARDENED_TYPES if kind.startswith(SECRET_MATERIAL)]
+
+
+def test_secret_lifecycle_spec_records_the_hardened_contract():
+    """F-4: the hardened section names its markers and the guard's real reach."""
+    text = (ROOT / "specs/poc/secret-lifecycle.md").read_text()
+    section = text[text.index("## Hardened (seeded) declarations") :]
+    for marker in (
+        "rotation-seed",
+        "validate_seed_input",
+        f"pulumi-aws {V8_PROVIDER_VERSION}",
+        "register_stack_transformation",
+        "register_resource_transform",
+        "runtime CMK",
+        "re.fullmatch",
+    ):
+        assert marker in section, marker
+    assert "a transformation fails the program" not in section

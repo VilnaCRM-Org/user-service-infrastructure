@@ -615,7 +615,10 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   - a 2FA key (symmetric, encryption-context `user_id`);
   - the task-role grants.
 
-  USI passes the key ARNs as plain environment values.
+  USI passes the key ARNs as plain environment values, under the names the
+  user-service stories S5.11 and S5.12 define: `JWT_KMS_KEY_ID` (the current
+  JWT key), `JWT_KMS_PREVIOUS_KEY_ID` (the previous JWT key during a key change,
+  D-17; empty otherwise), `TWO_FACTOR_KMS_KEY_ID` (the 2FA key) and `AWS_REGION`.
 - **AD-15a Per-key grant table (D-4, R4-M8, m7).** No key policy has an
   `arn:aws:iam::<acct>:root` `kms:*` statement. Every principal is named. Each
   row is both a key-policy statement and, for IAM roles, a matching identity

@@ -260,3 +260,64 @@ def test_step_two_and_elastic_types_are_refused(step):
     for kind in STEP_TWO_TYPES:
         with pytest.raises(ValueError, match=message):
             _reject_secret_material(args(kind), step)
+
+
+@pytest.mark.parametrize("engine", [False, True])
+def test_s13_gate_property_checks_fail_closed(engine):
+    """F-01..F-03: the listener, secret, service and volume checks at the guard."""
+    from app.workload_phase import _reject_secret_material
+    from pulumi.runtime import rpc
+
+    import pulumi
+
+    def args(kind, props):
+        if not engine:
+            return _sdk_args(kind, props)
+        return pulumi.ResourceTransformArgs(
+            custom=True, type_=kind, name="probe", props=props, opts=None
+        )
+
+    listener, secret = "aws:lb/listener:Listener", "aws:secretsmanager/secret:Secret"
+    service, task = "aws:ecs/service:Service", "aws:ecs/taskDefinition:TaskDefinition"
+    plain = json.dumps([{"name": "f", "secrets": []}])
+    for kind, props in (
+        (listener, {}),
+        (listener, {"defaultActions": [{"type": "forward"}]}),
+        (service, {}),
+        (secret, {"name": "fixture"}),
+        (task, {"containerDefinitions": plain, "volumes": [{"name": "a"}]}),
+    ):
+        assert _reject_secret_material(args(kind, props)) is None
+    for kind, props in (
+        (listener, {"defaultActions": rpc.wrap_rpc_secret([])}),
+        (listener, {"defaultActions": [object()]}),
+        (listener, {"defaultActions": [{"authenticateOidc": {}}]}),
+        (service, {"serviceConnectConfiguration": {}}),
+        (secret, {"policy": "{}"}),
+        (task, {"containerDefinitions": plain, "volumes": [{"hostPath": "/"}]}),
+        (task, {"containerDefinitions": '[{"name": "a", "NAME": "b"}]'}),
+    ):
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _reject_secret_material(args(kind, props))
+
+
+def _sdk_args(kind, props):
+    import pulumi
+
+    return pulumi.ResourceTransformationArgs(
+        resource=None, type_=kind, name="probe", props=props, opts=None
+    )
+
+
+def test_s13_gate_serializer_refuses_unreviewed_shapes():
+    """F-01: ComputePlane refuses what the guard refuses before it serializes."""
+    from app.compute import ComputePlane
+
+    for containers, message in (
+        ({"name": "f"}, "must be a list"),
+        ([{"name": "f", "Name": "g"}], "unreviewed key"),
+        ([{"logConfiguration": {"options": {}, "Options": {}}}], "repeats a key"),
+        ([{"command": ["AKIA" + "SYNTHETIC0000000"]}], "access key"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            ComputePlane._serialize_container(containers, unversioned=True)

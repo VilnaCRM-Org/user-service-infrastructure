@@ -149,8 +149,9 @@ def require_plain_environment(
 ) -> None:
     """Keep plain environment names apart from secret names (FR-03, FR-08).
 
-    Only ``secrets[].valueFrom`` may reference secret material; every plain
-    value must be credential-free and no name may be both plain and secret.
+    Only ``secrets[].valueFrom`` may reference secret material (a log-driver
+    ``secretOptions`` reference is refused by ``require_plain_containers``);
+    every plain value must be credential-free and no name may be both plain and secret.
     A plain ``REDIS_LOCKOUT_URL`` must equal ``REDIS_URL`` (FR-08 B, S1.4).
     """
     names = [row["name"] for row in environment]
@@ -187,6 +188,42 @@ CONTAINER_KEYS = frozenset(
 )
 ENVIRONMENT_ROW_KEYS = frozenset({"name", "value"})
 SECRET_ROW_KEYS = frozenset({"name", "valueFrom"})
+# The log configuration ``_container_definitions_json`` emits: the awslogs
+# driver with its three options, and no ``secretOptions`` (FR-03).
+LOG_DRIVER = "awslogs"
+LOG_CONFIGURATION_KEYS = frozenset({"logDriver", "options"})
+LOG_OPTION_KEYS = frozenset(
+    {"awslogs-group", "awslogs-region", "awslogs-stream-prefix"}
+)
+
+
+def _require_awslogs_configuration(log: Any) -> None:
+    """Accept only the closed awslogs shape, with no secret options (FR-03)."""
+    if (
+        type(log) is not dict
+        or set(log) != LOG_CONFIGURATION_KEYS
+        or log["logDriver"] != LOG_DRIVER
+        or type(log["options"]) is not dict
+        or not set(log["options"]) <= LOG_OPTION_KEYS
+    ):
+        raise ValueError("Workload log configuration must be the closed awslogs shape")
+
+
+def _require_unversioned_value_from(value: Any) -> None:
+    """Hold every ``valueFrom`` found anywhere in the tree to the bare ARN shape.
+
+    Defence in depth: the closed keys leave no such field outside
+    ``secrets[]``, so this only fires if a future key set admits one.
+    """
+    if type(value) is list:
+        for item in value:
+            _require_unversioned_value_from(item)
+    elif type(value) is dict:
+        for key, item in value.items():
+            if key.casefold() == "valuefrom":
+                require_unversioned_reference(item)
+            else:
+                _require_unversioned_value_from(item)
 
 
 def _closed_rows(rows: Any, keys: frozenset[str]) -> list[dict[str, Any]]:
@@ -223,6 +260,9 @@ def require_plain_containers(containers: Any, *, unversioned: bool) -> None:
     string leaf except ``secrets[].valueFrom`` is credential-free. With
     ``unversioned`` (the hardened shape) each ``valueFrom`` must be a bare
     secret ARN (S1.7); the pre-hardening shape stays version-pinned (AD-25).
+    ``logConfiguration`` is the closed awslogs shape with the three emitted
+    option keys and no ``secretOptions``; any other ``valueFrom`` in the tree
+    gets the same bare-ARN check when ``unversioned``.
     The guard and ``ComputePlane`` apply this one check, so they agree.
     """
     if type(containers) is not list:
@@ -236,6 +276,10 @@ def require_plain_containers(containers: Any, *, unversioned: bool) -> None:
         secrets = _closed_rows(container.get("secrets", []), SECRET_ROW_KEYS)
         require_plain_environment(environment, secrets)
         _require_credential_free_tree({**container, "secrets": None})
+        if "logConfiguration" in container:
+            _require_awslogs_configuration(container["logConfiguration"])
+        if unversioned:
+            _require_unversioned_value_from({**container, "secrets": None})
         for row in secrets:
             _require_credential_free_tree(row, exempt="valueFrom")
             if unversioned:

@@ -289,6 +289,15 @@ SECRET_ARN = (
 )
 
 
+AWSLOGS = {"logDriver": "awslogs", "options": {"awslogs-group": "g"}}
+VERSIONED = SECRET_ARN + ":password:AWSPREVIOUS:"
+SPLUNK = {
+    "logDriver": "splunk",
+    "options": {"splunk-url": "https://collector.example"},
+    "secretOptions": [{"name": "splunk-token", "valueFrom": VERSIONED}],
+}
+
+
 def _container(**changes):
     """One container with every key ``_container_definitions_json`` emits."""
     container = {
@@ -303,7 +312,10 @@ def _container(**changes):
         "mountPoints": [{"sourceVolume": "v", "containerPath": "/v"}],
         "linuxParameters": {"capabilities": {"drop": ["ALL"]}},
         "healthCheck": {"command": ["CMD", "/synthetic/check"], "retries": 3},
-        "logConfiguration": {"logDriver": "awslogs", "options": {"a": "b"}},
+        "logConfiguration": {
+            "logDriver": "awslogs",
+            "options": {"awslogs-group": "g", "awslogs-region": "r"},
+        },
     }
     return {**container, **changes}
 
@@ -351,6 +363,25 @@ def test_only_the_hardened_serializer_refuses_a_versioned_reference():
         ({"image": "https://u:p@registry.example/app:1"}, "userinfo"),
         ({"mountPoints": [{"containerPath": "/v?token=x"}]}, "credential parameter"),
         ({"secrets": [{"name": ACCESS_KEY, "valueFrom": SECRET_ARN}]}, "access key"),
+        # N-01: the closed awslogs shape, no secretOptions, in both shapes.
+        ({"logConfiguration": SPLUNK}, "closed awslogs"),
+        ({"logConfiguration": {**AWSLOGS, "logDriver": "splunk"}}, "closed awslogs"),
+        (
+            {"logConfiguration": {**AWSLOGS, "options": {"awslogs-x": "y"}}},
+            "closed awslogs",
+        ),
+        ({"logConfiguration": {**AWSLOGS, "secretOptions": []}}, "closed awslogs"),
+        (
+            {
+                "logConfiguration": {
+                    **AWSLOGS,
+                    "secretOptions": [{"name": "t", "valueFrom": VERSIONED}],
+                }
+            },
+            "closed awslogs",
+        ),
+        ({"logConfiguration": "awslogs"}, "closed awslogs"),
+        ({"logConfiguration": {**AWSLOGS, "options": []}}, "closed awslogs"),
     ],
 )
 @pytest.mark.parametrize("unversioned", [False, True])
@@ -410,3 +441,17 @@ def test_desired_count_override_applies_only_when_set():
     assert compute._desired_count(2) == 2
     compute._initial_service_scale = INITIAL_SERVICE_SCALE
     assert compute._desired_count(2) == 0
+
+
+def test_a_stray_value_from_gets_the_bare_arn_check_when_unversioned():
+    """N-01: defence in depth; the closed keys make this unreachable today."""
+    from app.compute import _require_unversioned_value_from
+
+    _require_unversioned_value_from({"a": [{"x": 1}, {"valueFrom": SECRET_ARN}]})
+    for stray in (
+        {"a": [{"valueFrom": VERSIONED}]},
+        {"ValueFrom": VERSIONED},
+        {"valueFrom": 7},
+    ):
+        with pytest.raises(ValueError, match="must not pin a version"):
+            _require_unversioned_value_from(stray)

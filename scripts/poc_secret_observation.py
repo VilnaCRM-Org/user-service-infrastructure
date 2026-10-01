@@ -7,16 +7,32 @@ from typing import Any
 
 from poc_contract import _validate_document
 
+REGION = "eu-central-1"
+ACCOUNT_ID = "891377212104"
 # Resource identifier prefix, never credential material.
-SECRET_PREFIX = "arn:aws:secretsmanager:eu-central-1:891377212104:secret:"  # nosec B105
+SECRET_PREFIX = f"arn:aws:secretsmanager:{REGION}:{ACCOUNT_ID}:secret:"  # nosec B105
 FIELDS = {"arn", "version_id", "kms_key_arn", "owner"}
-IDENTITY = ("arn", "kms_key_arn", "owner")
 SEED_FIELDS = {"secret_arn", "purpose"}
+
+
+def secret_arn_regex(
+    region: str, account_id: str, name: str, *, json_key: bool = False
+) -> str:
+    """Build the one exact pattern for a declared secret: name, six-character suffix.
+
+    ``json_key`` also admits ``:<json-key>::`` (ECS key selection). Callers must
+    ``re.fullmatch`` it. ASCII digits only, never a Unicode digit class.
+    """
+    pattern = (
+        re.escape(f"arn:aws:secretsmanager:{region}:{account_id}:secret:{name}")
+        + r"-[A-Za-z0-9]{6}"
+    )
+    return pattern + (r"(?::[A-Za-z0-9_.-]+::)?" if json_key else "")
 
 
 def _validate_secret_arn(arn: Any, declaration: dict[str, Any]) -> None:
     """Require the reviewed account-local name plus one native ARN suffix."""
-    arn_pattern = re.escape(SECRET_PREFIX + declaration["name"]) + r"-[A-Za-z0-9]{6}"
+    arn_pattern = secret_arn_regex(REGION, ACCOUNT_ID, declaration["name"])
     if type(arn) is not str or not re.fullmatch(arn_pattern, arn):
         raise ValueError("Observed secret identity differs")
 
@@ -72,17 +88,24 @@ def _validate_references(
 def _validate_preserved(
     observed: dict[str, Any], previous: dict[str, Any], *, seeded: bool
 ) -> None:
-    """Keep identities; only a seeded secret's first version may appear later."""
+    """Compare a prior receipt: seeded secrets by ARN and name, else exactly.
+
+    The name is bound by the validated ARN. The observed AWSCURRENT version is
+    evidence only for a seeded secret (AD-25): rotation may change it, but a
+    secret that had a current version cannot lose it. This does not prove
+    rotation provenance (AD-25: ``LastRotatedDate`` later than the receipt, with
+    rotation enabled by the reviewed function); S4.10's result checker must.
+    """
     if not seeded:
         if observed != previous:
             raise ValueError("Generated secret rotation or replacement forbidden")
         return
     for purpose, prior in previous.items():
         current = observed[purpose]
-        if any(current[key] != prior[key] for key in IDENTITY) or prior[
-            "version_id"
-        ] not in (None, current["version_id"]):
-            raise ValueError("Seeded secret replacement or version change forbidden")
+        if current["arn"] != prior["arn"]:
+            raise ValueError("Seeded secret replacement forbidden")
+        if prior["version_id"] is not None and current["version_id"] is None:
+            raise ValueError("Seeded secret lost its current version")
 
 
 def validate_secret_observation(
@@ -91,14 +114,16 @@ def validate_secret_observation(
     *,
     previous: dict[str, Any] | None = None,
 ) -> None:
-    """Preserve authenticated versions across releases, without predeclaring them.
+    """Check a release against its prior receipt, without predeclaring versions.
 
     The trusted result observer must supply native current metadata and, for an
     accepted workload, its authenticated previous receipt. Omitting previous is
     only valid for first creation; this pure checker cannot establish that fact.
-    A hardened (``workload_step``) contract declares seeded secrets, which have
-    no version until the seed runs. Secret values are neither accepted nor
-    returned.
+    A generated secret keeps its exact ARN and version. A hardened
+    (``workload_step``) contract declares seeded secrets, which have no version
+    until the seed runs; one keeps its identity and, once it had a current
+    version, keeps one. The version may change, and that change is evidence only.
+    Secret values are neither accepted nor returned.
     """
     _validate_document(contract)
     if contract["phase"] != "workload":

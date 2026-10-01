@@ -8,12 +8,14 @@ are not desired inputs: first creation cannot know those AWS-generated values.
 `poc_secret_observation.validate_secret_observation` checks metadata supplied by
 the trusted result observer. Every purpose must have an exact matching name,
 account, region, key and owner. Extra fields, including secret values, fail.
-After the first accepted workload, updates and rollback must preserve the exact
-ARN and version from its authenticated prior receipt. Desired secret names and
+After the first accepted workload, updates and rollback of a generated
+(pre-hardening) shape must preserve the exact ARN and version from its
+authenticated prior receipt; a hardened shape compares the ARN and name only
+(see "ECS references resolve `AWSCURRENT`" below). Desired secret names and
 keys remain immutable across workload transitions. Rotation needs a separate
 reviewed protocol.
 
-Hard stop: the current source pins secret versions and has no rotation. The
+Hard stop: the pre-hardening shape pins secret versions and has no rotation. The
 `workload` phase must not be enabled (`specs/poc/poc-test.json` stays
 `"registry"`) until secret rotation (F-01) and `AWSCURRENT` references instead of
 version pinning (F-02) land in the stacked hardening PR, together with the other
@@ -92,8 +94,9 @@ of the stack config remains the control for these.
 
 The stack that renders no hardened contract registers no such guard.
 
-A seeded secret has no version until the seed runs; after that its identity
-and first version are preserved. The seed input is exactly
+A seeded secret has no version until the seed runs. After that its identity is
+preserved and a secret that had a current version keeps one; the version may
+change, and that change is evidence only. The seed input is exactly
 `{secret_arn, purpose}` for a rotated purpose
 (`poc_secret_observation.validate_seed_input`); the ARN must fully match the
 declared TEST name, account, region and partition. A contract without
@@ -126,3 +129,32 @@ v6.36.0 with no Secrets Manager patch. Reading `Secret` calls only
 `DescribeSecret` and `GetResourcePolicy`, `SecretRotation` only
 `DescribeSecret`, and `SecretPolicy` only `GetResourcePolicy`. Only
 `SecretVersion` calls `GetSecretValue`, so it is never declared.
+
+### ECS references resolve `AWSCURRENT` (F-02, FR-08)
+
+For a hardened projection, `RuntimeSecrets.ecs_secrets()` sets each container
+secret's `valueFrom` to the bare secret ARN: hardened declarations select no JSON
+key. The validator also accepts `arn:<json-key>::`. ECS then resolves the `AWSCURRENT` version at task start, so a
+rotated value needs only new tasks. `require_unversioned_reference` refuses any
+reference with a version ID or staging label (`arn:::<id>`, `arn::AWSCURRENT:`)
+and checks shape only. The exact-identity check is made by `ecs_secrets()`
+(through `_current_references`): it fullmatches each reference against
+`secret_arn_regex(...)` for the exact declared name in the deployment's own
+account and region, with the six-character random suffix and ASCII digits only,
+so a foreign, partial or look-alike ARN fails. A missing declaration fails the
+inventory check. The pre-hardening
+projection keeps its version-pinned references until S4.10 removes that branch.
+
+The observed `AWSCURRENT` version is evidence only. For a seeded secret the
+prior-receipt comparison uses the ARN and the name bound by that ARN: a rotation
+may change `version_id`, a different ARN is a replacement and fails, and a secret
+that had a current version cannot lose it. The generated (pre-hardening) shape
+still requires the exact prior observation.
+
+`_validate_secret_arn` in `poc_secret_observation.py` pins TEST through the
+module constants `REGION` and `ACCOUNT_ID`, not the contract. S4.14's pin
+inventory must include that use site.
+
+This validator does not prove rotation provenance. AD-25 requires
+`LastRotatedDate` later than the receipt, with rotation enabled by the reviewed
+function; S4.10's result checker must prove that.

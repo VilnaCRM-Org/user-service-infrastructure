@@ -27,6 +27,7 @@ SECRET_MATERIAL = ("random:", "tls:", "aws:secretsmanager/secretVersion:SecretVe
 #   secret_policy.go resourceSecretPolicyRead -> GetResourcePolicy
 # None of their create, read, update or delete paths calls GetSecretValue; only
 # secret_version.go does, which is why no SecretVersion may be declared (FR-09).
+ARN_PREFIX = "arn:aws:secretsmanager:eu-central-1:891377212104:secret:"
 V8_PROVIDER_VERSION = "7.23.0"
 V8_METADATA_READ_TYPES = {
     "aws:secretsmanager/secret:Secret",
@@ -483,18 +484,135 @@ def test_provider_function_in_the_hardened_program_fails(tmp_path):
     assert graph(tmp_path, "bridge", "root:random-password-invoke")["error"] is None
 
 
-def test_hardened_inventory_has_no_version_references_or_derived_secrets():
-    resource = object.__new__(module.RuntimeSecrets)
-    resource.references = _hardened_contract()["workload"]["secret_lifecycle"][
-        "references"
+class _Resolved:
+    """Stand-in for a resolved Output: apply runs the callback immediately."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def apply(self, callback):
+        return callback(self.value)
+
+
+def _declared_arn(purpose, suffix="-AbCdEf"):
+    name = _hardened_contract()["workload"]["secret_lifecycle"]["references"][purpose][
+        "name"
     ]
-    resource.secret_arns = dict.fromkeys(resource.references, "synthetic-arn")
+    return f"{ARN_PREFIX}{name}{suffix}"
+
+
+def _hardened_resource(arns=None):
+    resource = object.__new__(module.RuntimeSecrets)
+    resource._hardened = True
+    resource.descriptor = module.RuntimeSecretsDescriptor(_hardened_contract())
+    resource.references = resource.descriptor.references
+    resource.secret_arns = arns or {
+        purpose: _Resolved(_declared_arn(purpose)) for purpose in resource.references
+    }
     resource.version_ids = {}
+    return resource
+
+
+def test_hardened_ecs_secrets_reference_the_secret_arn_without_a_version():
+    references = _hardened_contract()["workload"]["secret_lifecycle"]["references"]
+    rows = _hardened_resource().ecs_secrets()
+    assert rows == [
+        {"name": module.ENVIRONMENT_NAMES[p], "valueFrom": _declared_arn(p)}
+        for p in references
+    ]
+    assert len({row["valueFrom"] for row in rows}) == len(references)
+    assert not any(":::" in row["valueFrom"] for row in rows)
+
+
+def test_hardened_ecs_secrets_fail_closed_on_an_incomplete_inventory():
+    resource = _hardened_resource()
+    resource.secret_arns.pop("app_secret")
     with pytest.raises(ValueError, match="incomplete"):
         resource.ecs_secrets()
+
+
+def test_hardened_ecs_secret_with_a_version_suffix_fails():
+    resource = _hardened_resource()
+    resource.secret_arns["app_secret"] = _Resolved(
+        _declared_arn("app_secret", "-AbCdEf:::" + "1" * 32)
+    )
+    with pytest.raises(ValueError, match="version"):
+        resource.ecs_secrets()
+
+
+def test_hardened_ecs_secret_accepts_a_declared_json_key_selection():
+    resource = _hardened_resource()
+    resource.secret_arns["app_secret"] = _Resolved(
+        _declared_arn("app_secret", "-AbCdEf:password::")
+    )
+    assert resource.ecs_secrets()[0]["valueFrom"].endswith("-AbCdEf:password::")
+
+
+FOREIGN_ARNS = {
+    "foreign_account": lambda arn: arn.replace("891377212104", "123456789012"),
+    "foreign_region": lambda arn: arn.replace("eu-central-1", "us-east-1"),
+    "other_declared_name": lambda arn: _declared_arn("oauth_passphrase"),
+    "partial_arn_without_suffix": lambda arn: arn.removesuffix("-AbCdEf"),
+    "trailing_newline": lambda arn: arn + "\n",
+    "unicode_digits": lambda arn: arn.replace("891377212104", "\u0668" * 12),
+    "short_suffix": lambda arn: arn.removesuffix("f"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(FOREIGN_ARNS))
+def test_hardened_ecs_secret_must_be_the_declared_secret(case):
+    resource = _hardened_resource()
+    resource.secret_arns["app_secret"] = _Resolved(
+        FOREIGN_ARNS[case](_declared_arn("app_secret"))
+    )
+    with pytest.raises(ValueError, match="version|declaration"):
+        resource.ecs_secrets()
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        f"{ARN_PREFIX}app_secret-AbCdEf",
+        f"{ARN_PREFIX}app_secret-AbCdEf:password::",
+    ],
+)
+def test_unversioned_reference_accepts_the_arn_or_arn_key(reference):
+    assert module.require_unversioned_reference(reference) == reference
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        f"{ARN_PREFIX}app_secret-AbCdEf:::" + "1" * 32,
+        f"{ARN_PREFIX}app_secret-AbCdEf::AWSCURRENT:",
+        "arn:aws:secretsmanager:eu-central-1:\u0668\u0668\u0668\u0668\u0668\u0668\u0668\u0668\u0668\u0668\u0668\u0668:secret:app-AbCdEf",
+        f"{ARN_PREFIX}app_secret-AbCdEf\n",
+        f"{ARN_PREFIX}app_secret-AbCdEf:password:AWSCURRENT:",
+        f"{ARN_PREFIX}app_secret-AbCdEf:password::" + "1" * 32,
+        f"{ARN_PREFIX}app_secret-AbCdEf:",
+        "not-an-arn",
+        None,
+    ],
+)
+def test_version_suffix_or_stage_in_a_secret_reference_fails(reference):
+    with pytest.raises(ValueError, match="version"):
+        module.require_unversioned_reference(reference)
+
+
+def test_hardened_inventory_has_no_derived_secrets():
+    resource = _hardened_resource()
     for purpose in sorted(module.DERIVED):
         with pytest.raises(ValueError, match="invalid or duplicated"):
             resource.persist_url(purpose, "synthetic")
+
+
+def test_pre_hardening_ecs_secrets_remain_version_pinned_until_s4_10():
+    resource = object.__new__(module.RuntimeSecrets)
+    resource.references = {"app_secret": {}}
+    resource.secret_arns = {"app_secret": "arn"}
+    resource.version_ids = {}
+    with pytest.raises(ValueError, match="incomplete"):
+        resource.ecs_secrets()
 
 
 def test_hardened_guard_is_registered_stack_wide_with_the_engine(tmp_path):
@@ -566,6 +684,39 @@ def test_hardened_allowlist_is_exactly_the_rendered_graph(tmp_path):
     ):
         assert kind in TAGGABLE_TYPES and kind not in HARDENED_TYPES
     assert not [kind for kind in HARDENED_TYPES if kind.startswith(SECRET_MATERIAL)]
+
+
+def test_secret_lifecycle_spec_records_the_awscurrent_section():
+    """F1/N1/N3/N4: the S1.7 section names its markers and drops stale wording."""
+    text = " ".join((ROOT / "specs/poc/secret-lifecycle.md").read_text().split())
+    section = text[text.index("### ECS references resolve `AWSCURRENT`") :]
+    for marker in (
+        "require_unversioned_reference",
+        "arn:<json-key>::",
+        "evidence only",
+        "ARN and the name",
+        "does not prove rotation provenance",
+        "S4.10",
+        "select no JSON",
+        "checks shape only",
+        "S4.14's pin inventory must include that use site",
+        "`REGION` and `ACCOUNT_ID`",
+    ):
+        assert marker in section, marker
+    # N1: the identity check belongs to ecs_secrets(), not to the shape helper.
+    paragraph = next(
+        part
+        for part in (ROOT / "specs/poc/secret-lifecycle.md").read_text().split("\n\n")
+        if "`ecs_secrets()`" in part
+    )
+    assert "secret_arn_regex" in " ".join(paragraph.split())
+    for stale in (
+        "its identity and first version are preserved",
+        "the current source pins secret versions",
+        "when a JSON key is selected",
+        "It also fullmatches the exact declared name",
+    ):
+        assert stale not in text, stale
 
 
 EMAIL_IDENTITY = "aws:sesv2/emailIdentity:EmailIdentity"
@@ -673,7 +824,9 @@ def test_hardened_modules_make_no_provider_function_call():
 def test_secret_lifecycle_spec_records_the_hardened_contract():
     """F-4: the hardened section names its markers and the guard's real reach."""
     text = (ROOT / "specs/poc/secret-lifecycle.md").read_text()
-    section = text[text.index("## Hardened (seeded) declarations") :]
+    start = text.index("## Hardened (seeded) declarations")
+    # Bounded: the S1.7 section below has its own marker test.
+    section = text[start : text.index("### ECS references resolve `AWSCURRENT`")]
     for marker in (
         "rotation-seed",
         "validate_seed_input",
@@ -691,4 +844,5 @@ def test_secret_lifecycle_spec_records_the_hardened_contract():
         "both `deleted` and `retain`",
     ):
         assert marker in section, marker
-    assert "a transformation fails the program" not in section
+    # The stale phrase must stay out of the whole document, not only this section.
+    assert "a transformation fails the program" not in " ".join(text.split())

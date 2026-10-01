@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
-from typing import Optional
-from urllib.parse import quote
+from typing import Any, Optional, cast
+from urllib.parse import quote, urlsplit
 
 import pulumi_aws as aws
 
@@ -30,6 +31,50 @@ DOCUMENTDB_CLUSTER_PARAMETERS = {
     "profiler": "enabled",
     "profiler_threshold_ms": "100",
 }
+
+
+# IAM (MONGODB-AWS) authentication exists only on instance-based DocumentDB 5.0
+# clusters (A-01, V-17); any other engine version or an elastic cluster raises.
+DOCUMENTDB_IAM_ENGINE_VERSION = "5.0.0"
+# The task role authenticates through the ``$external`` source (FR-02, AD-01).
+DOCUMENTDB_IAM_OPTIONS = (
+    "replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false"
+    "&authSource=%24external&authMechanism=MONGODB-AWS"
+)
+
+
+def require_iam_documentdb_engine(engine_version: Any) -> None:
+    """Refuse any engine but instance-based DocumentDB 5.0.0 (FR-02, V-17)."""
+    if engine_version != DOCUMENTDB_IAM_ENGINE_VERSION:
+        raise ValueError(
+            "DocumentDB IAM authentication requires the instance-based "
+            f"{DOCUMENTDB_IAM_ENGINE_VERSION} engine (V-17)"
+        )
+
+
+def documentdb_iam_url(
+    endpoint: str, port: int, database: str, ca_bundle_path: str
+) -> str:
+    """Compose the non-secret MONGODB-AWS URL; it may never carry userinfo.
+
+    The task role signs the authentication, so the URL holds no credential:
+    the database and CA path are URL-encoded and any userinfo raises (FR-02).
+    """
+    url = (
+        f"mongodb://{endpoint}:{port}/{quote(database, safe='')}"
+        f"?tls=true&tlsCAFile={quote(ca_bundle_path, safe='')}"
+        f"&{DOCUMENTDB_IAM_OPTIONS}"
+    )
+    if "@" in urlsplit(url).netloc:
+        raise ValueError("MONGODB_URL must not carry userinfo")
+    return url
+
+
+def _managed_secret_arn(secrets: Any) -> str:
+    """Return the one DocumentDB-managed primary secret ARN (XP-8)."""
+    if type(secrets) is not list or len(secrets) != 1:
+        raise ValueError("DocumentDB must report exactly one managed secret")
+    return secrets[0].secret_arn
 
 
 def _documentdb_parameter_family(engine_version: str) -> str:
@@ -80,11 +125,17 @@ def _master_credentials(
 
 @dataclass(frozen=True)
 class HardenedDocumentDbOutputs:
-    """Hardened DocumentDB outputs; the DSN and Redis join in S1.3+ (AD-25)."""
+    """Hardened DocumentDB outputs: a plain IAM URL, no URL secret (S1.3).
+
+    Redis joins in S1.4 (D-1); the pre-hardening ``DataOutputs`` stay until
+    S4.10 (AD-25).
+    """
 
     endpoint: pulumi.Input[str]
     port: pulumi.Input[int]
     instances: tuple[pulumi.Resource, ...]
+    mongodb_url: pulumi.Output[str]
+    managed_secret_arn: pulumi.Output[str]
 
 
 @dataclass(frozen=True)
@@ -106,7 +157,7 @@ class DataPlane(pulumi.ComponentResource):
     """Provision preview placeholders or managed database/cache resources."""
 
     # Set on the pre-hardening and preview paths only; the hardened path sets
-    # ``documentdb`` until S1.3 wires the plain-env DSN and Redis (C-composition).
+    # ``documentdb`` with the plain-env IAM URL. Redis joins it in S1.4.
     outputs: DataOutputs
     documentdb: HardenedDocumentDbOutputs
     _runtime_secrets: RuntimeSecrets | None = None
@@ -132,6 +183,7 @@ class DataPlane(pulumi.ComponentResource):
         if hardened:
             # Refuse before the component registers, so no resource is left behind.
             reject_documentdb_password_config()
+            require_iam_documentdb_engine(settings.documentdb.engine_version)
         super().__init__("user-service-infrastructure:data:Plane", name, None, opts)
 
         if hardened:
@@ -140,6 +192,7 @@ class DataPlane(pulumi.ComponentResource):
                 {
                     "documentDbEndpoint": self.documentdb.endpoint,
                     "documentDbPort": self.documentdb.port,
+                    "documentDbManagedSecretArn": self.documentdb.managed_secret_arn,
                 }
             )
             return
@@ -164,17 +217,29 @@ class DataPlane(pulumi.ComponentResource):
         settings: StackSettings,
         network: NetworkPlane,
     ) -> HardenedDocumentDbOutputs:
-        """Compose DocumentDB with the managed password; Redis and DSN are S1.3+.
+        """Compose DocumentDB with the managed password and the IAM URL (S1.3).
 
-        Scoped seam for S1.2: the hardened branch of ``WorkloadPhaseStack`` does
-        not compose this plane yet (S1.3, C-composition). The pre-hardening path
-        is unchanged until S4.10.
+        The hardened branch of ``WorkloadPhaseStack`` composes this plane under
+        its stack-wide guard. The task role authenticates with MONGODB-AWS, so
+        no URL secret exists (``document_db_url`` is removed). The
+        pre-hardening path is unchanged until S4.10.
         """
+        descriptor = cast(RuntimeSecrets, self._runtime_secrets).descriptor
         cluster, instances = self._build_documentdb(settings, network, None)
+        port = settings.documentdb.port
         return HardenedDocumentDbOutputs(
             endpoint=cluster.endpoint,
-            port=pulumi.Output.from_input(settings.documentdb.port),
+            port=pulumi.Output.from_input(port),
             instances=tuple(instances),
+            mongodb_url=cluster.endpoint.apply(
+                functools.partial(
+                    documentdb_iam_url,
+                    port=port,
+                    database=descriptor.database_name,
+                    ca_bundle_path=descriptor.ca_bundle_path,
+                )
+            ),
+            managed_secret_arn=cluster.master_user_secrets.apply(_managed_secret_arn),
         )
 
     def _build_preview_outputs(self, settings: StackSettings) -> DataOutputs:

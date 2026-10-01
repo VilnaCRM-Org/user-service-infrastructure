@@ -252,17 +252,38 @@ def test_native_generated_workload_preserves_registry_and_registers_secret_versi
 
 
 SECRET_MATERIAL = ("random:", "tls:", "aws:secretsmanager/secretVersion:SecretVersion")
+# FR-34: no seed, rotation, secret policy, autoscaling or scheduled action.
+STEP_TWO = (
+    "aws:lambda/",
+    "aws:appautoscaling/",
+    "aws:secretsmanager/secretPolicy:",
+    "aws:secretsmanager/secretRotation:",
+)
+
+
+def _hardened(stack, work, scenario=None):
+    """Select the hardened composition; compute needs the admitted certificate."""
+    contract = json.loads((work / "hardened-contract.json").read_text())
+    stack.set_config(
+        "certificateArn",
+        auto.ConfigValue(
+            value=contract["workload"]["external"]["domain"]["certificate_arn"]
+        ),
+    )
+    (work / "scenario.json").write_text(
+        json.dumps({"mode": "hardened-workload", **(scenario or {})})
+    )
 
 
 def test_native_hardened_workload_renders_no_secret_material(native_stack):
-    """A workload_step projection previews seeded metadata only (FR-09, NFR-01)."""
+    """A workload_step projection previews the step-1 set (FR-09, FR-34)."""
     stack, work = native_stack
     events = []
     (work / "scenario.json").write_text('{"mode":"registry"}')
     stack.preview(on_event=events.append)
     baseline = {row.urn: row for row in resources(events)}
     events.clear()
-    (work / "scenario.json").write_text('{"mode":"hardened-workload"}')
+    _hardened(stack, work)
     result = stack.preview(on_event=events.append)
     assert result.change_summary
     actual = {row.urn: row for row in resources(events)}
@@ -273,13 +294,20 @@ def test_native_hardened_workload_renders_no_secret_material(native_stack):
     assert types.count("aws:secretsmanager/secret:Secret") == 6
     assert not [kind for kind in types if kind.startswith(SECRET_MATERIAL)]
     assert not [kind for kind in types if kind.startswith("aws:iam/")]
+    assert not [kind for kind in types if kind.startswith(STEP_TWO)]
     assert "aws:lambda/function:Function" not in types
+    assert not [kind for kind in types if kind.startswith("aws:elasticache/")]
+    services = [row for row in actual.values() if row.type == "aws:ecs/service:Service"]
+    assert [row.new.inputs["desiredCount"] for row in services] == [0, 0]
+    assert any(
+        row.urn.endswith("::user-service-bootstrap-job-sg") for row in actual.values()
+    )
 
 
 def test_native_hardened_data_plane_uses_the_managed_password(native_stack):
-    """S1.2: managed primary password, no password input, no CMK argument (A-05)."""
+    """S1.2/S1.3: managed password on engine 5.0.0, no password input (F-10)."""
     stack, work = native_stack
-    (work / "scenario.json").write_text('{"mode":"hardened-data"}')
+    _hardened(stack, work)
     events = []
     stack.preview(on_event=events.append)
     rows = resources(events)
@@ -287,13 +315,19 @@ def test_native_hardened_data_plane_uses_the_managed_password(native_stack):
     (cluster,) = [row for row in rows if row.type == "aws:docdb/cluster:Cluster"]
     inputs = cluster.new.inputs
     assert inputs["manageMasterUserPassword"] is True
-    assert "masterPassword" not in inputs
+    assert inputs["engineVersion"] == "5.0.0"
+    assert not [
+        key
+        for key in inputs
+        if "password" in key.lower() and key != "manageMasterUserPassword"
+    ]
     assert "masterUserSecretKmsKeyId" not in inputs
 
 
-def test_native_hardened_data_plane_rejects_a_password_config_key(native_stack):
+def test_native_hardened_workload_rejects_a_password_config_key(native_stack):
+    """S1.2 F-07: the composed hardened stack refuses a secret password config."""
     stack, work = native_stack
-    (work / "scenario.json").write_text('{"mode":"hardened-data-password"}')
+    _hardened(stack, work)
     # F-02: a real password arrives as secret stack config, never plain.
     synthetic = "synthetic-documentdb-password-do-not-echo"
     stack.set_config(
@@ -304,6 +338,19 @@ def test_native_hardened_data_plane_rejects_a_password_config_key(native_stack):
         stack.preview(on_event=events.append)
     assert "documentDbPassword must not be configured" in str(failure.value)
     assert synthetic not in str(failure.value)
+    # The refusal runs before the first workload registration.
+    assert not [row for row in resources(events) if row.type.startswith("aws:")]
+
+
+def test_native_hardened_workload_rejects_a_non_iam_engine(native_stack):
+    """N (V-17): engine 4.0.0 fails the hardened program before DocumentDB."""
+    stack, work = native_stack
+    _hardened(stack, work)
+    stack.set_config("documentDbEngineVersion", auto.ConfigValue(value="4.0.0"))
+    events = []
+    with pytest.raises(AutomationRuntimeError) as failure:
+        stack.preview(on_event=events.append)
+    assert "V-17" in str(failure.value)
     assert not [row for row in resources(events) if row.type.startswith("aws:docdb")]
 
 
@@ -318,10 +365,22 @@ def test_native_hardened_data_plane_rejects_a_password_config_key(native_stack):
         ("root:secret-version", "must not hold secret material", None),
         # F3: a type outside the closed allowlist fails too.
         ("root:ssm-parameter", "unreviewed type", "aws:ssm/parameter:Parameter"),
-        # N1: the allowlist is the rendered set, so a DocumentDB master
-        # password fails whatever its parent.
-        ("stack:docdb-cluster", "unreviewed type", "aws:docdb/cluster:Cluster"),
-        ("root:docdb-cluster", "unreviewed type", "aws:docdb/cluster:Cluster"),
+        # N1: the allowlisted DocumentDB cluster refuses a master password,
+        # whatever its parent (S1.3 property check).
+        ("stack:docdb-cluster", "unreviewed property", None),
+        ("root:docdb-cluster", "unreviewed property", None),
+        # N (V-17): an elastic cluster fails.
+        (
+            "root:docdb-elastic-cluster",
+            "instance-based",
+            "aws:docdb/elasticCluster:ElasticCluster",
+        ),
+        # B (FR-34): a step-2 type fails at step 1.
+        (
+            "stack:secret-policy",
+            "step-2 resource",
+            "aws:secretsmanager/secretPolicy:SecretPolicy",
+        ),
         # N1: a BYODKIM private key fails the SES identity property check.
         ("root:byodkim-identity", "unreviewed property", None),
         ("stack:byodkim-identity", "unreviewed property", None),
@@ -331,9 +390,7 @@ def test_native_hardened_workload_rejects_readded_secret_material(
     native_stack, addition, message, kind
 ):
     stack, work = native_stack
-    (work / "scenario.json").write_text(
-        json.dumps({"mode": "hardened-workload", "addition": addition})
-    )
+    _hardened(stack, work, {"addition": addition})
     events = []
     with pytest.raises(AutomationRuntimeError) as failure:
         stack.preview(on_event=events.append)
@@ -352,11 +409,7 @@ def test_native_hardened_workload_refuses_provider_function_calls(
 ):
     """N2: the engine invoke guard, not the network, fails the provider read."""
     stack, work = native_stack
-    (work / "scenario.json").write_text(
-        json.dumps(
-            {"mode": "hardened-workload", "addition": "root:random-password-invoke"}
-        )
-    )
+    _hardened(stack, work, {"addition": "root:random-password-invoke"})
     with pytest.raises(AutomationRuntimeError) as failure:
         stack.preview()
     assert "must not call a provider function" in str(failure.value)

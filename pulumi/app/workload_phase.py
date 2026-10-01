@@ -9,19 +9,29 @@ prerequisites of that path.
 Transition rule (AD-25): only a projection with ``workload_step`` renders the
 hardened composition, which holds no generator and no ``SecretVersion``. The
 pre-hardening composition stays unchanged until the topology story removes it.
+
+Two-step first workload (FR-34, AD-18): step 1 renders the network, data,
+secret metadata and ECS services at zero tasks; no step-2 type (seed, rotation,
+secret policy, autoscaling or scheduled action) may join it. Step 2 adds only
+those types, each with its own story (S1.5, S1.6, S2.1, S2.2, S2.6); its
+create-only admission is S4.9. After step 1 the XP-8 values are exported.
 """
 
 from __future__ import annotations
 
+import functools
+import json
+
 import pulumi
-from app.compute import ComputePlane
-from app.data import DataPlane
+from app.compute import INITIAL_SERVICE_SCALE, ComputePlane, require_plain_environment
+from app.data import DOCUMENTDB_IAM_ENGINE_VERSION, DataPlane
 from app.environment import (
     DEFAULT_COST_CENTER,
     DEFAULT_OWNER,
     StackSettings,
     _default_tags_from_parts,
     _normalize_tag_value,
+    reject_documentdb_password_config,
     resolve_config_value,
     validate_health_check_runtime,
     validate_runtime_roles,
@@ -30,7 +40,11 @@ from app.messaging import MessagingPlane
 from app.network import NetworkPlane
 from app.registry import RegistryInputs
 from app.registry_phase import RegistryPhaseStack
-from app.runtime_secrets import RuntimeSecrets, RuntimeSecretsDescriptor
+from app.runtime_secrets import (
+    RuntimeSecrets,
+    RuntimeSecretsDescriptor,
+    require_unversioned_reference,
+)
 
 # Closed taggable resource types used by the four installed workload planes.
 # SecretVersion, lifecycle policies and route associations do not accept tags.
@@ -69,15 +83,32 @@ SECRET_MATERIAL_TYPES = (
     "tls:",
     "aws:secretsmanager/secretVersion:SecretVersion",
 )
+# Step-2 types (FR-34, AD-18): a step-1 graph never holds one. Each joins the
+# allowlist only with its own story; until then the allowlist refuses it too.
+STEP_TWO_TYPES = frozenset(
+    {
+        "aws:appautoscaling/policy:Policy",
+        "aws:appautoscaling/scheduledAction:ScheduledAction",
+        "aws:appautoscaling/target:Target",
+        "aws:lambda/invocation:Invocation",
+        "aws:secretsmanager/secretPolicy:SecretPolicy",
+        "aws:secretsmanager/secretRotation:SecretRotation",
+    }
+)
+# IAM authentication exists only on instance-based DocumentDB 5.0 (V-17, A-01).
+ELASTIC_DOCUMENTDB_TYPE = "aws:docdb/elasticCluster:ElasticCluster"
 # Closed allowlist of the hardened graph (F3, N1): exactly the types it renders
 # today. Any other type, including a packaged component, fails; widening it is
-# a reviewed change. When the data and compute planes rejoin (S1.3, S4.10),
-# that story adds their types here together with property checks in
-# ``HARDENED_PROPERTY_CHECKS``: DocumentDB ``manageMasterUserPassword`` true and
-# no ``masterPassword`` or ``masterPasswordWo``; no ElastiCache ``authToken``;
-# and TaskDefinition environment names disjoint from the secret names.
+# a reviewed change. S1.3 added the data and compute planes with the property
+# checks in ``HARDENED_PROPERTY_CHECKS``. Redis (and its ``authToken`` check)
+# joins with S1.4 (D-1).
 HARDENED_TAGGED_TYPES = frozenset(
     {
+        "aws:cloudwatch/logGroup:LogGroup",
+        "aws:docdb/cluster:Cluster",
+        "aws:docdb/clusterInstance:ClusterInstance",
+        "aws:docdb/clusterParameterGroup:ClusterParameterGroup",
+        "aws:docdb/subnetGroup:SubnetGroup",
         "aws:ec2/eip:Eip",
         "aws:ec2/internetGateway:InternetGateway",
         "aws:ec2/natGateway:NatGateway",
@@ -85,6 +116,13 @@ HARDENED_TAGGED_TYPES = frozenset(
         "aws:ec2/securityGroup:SecurityGroup",
         "aws:ec2/subnet:Subnet",
         "aws:ec2/vpc:Vpc",
+        "aws:ecs/cluster:Cluster",
+        "aws:ecs/service:Service",
+        "aws:ecs/taskDefinition:TaskDefinition",
+        "aws:lb/listener:Listener",
+        "aws:lb/loadBalancer:LoadBalancer",
+        "aws:lb/targetGroup:TargetGroup",
+        "aws:s3/bucketV2:BucketV2",
         "aws:secretsmanager/secret:Secret",
         "aws:sqs/queue:Queue",
     }
@@ -92,14 +130,25 @@ HARDENED_TAGGED_TYPES = frozenset(
 HARDENED_UNTAGGED_TYPES = frozenset(
     {
         "aws:ec2/routeTableAssociation:RouteTableAssociation",
+        "aws:ecr/lifecyclePolicy:LifecyclePolicy",
         "aws:ecr/repository:Repository",
         "aws:route53/record:Record",
+        "aws:s3/bucketLifecycleConfigurationV2:BucketLifecycleConfigurationV2",
+        "aws:s3/bucketOwnershipControls:BucketOwnershipControls",
+        "aws:s3/bucketPolicy:BucketPolicy",
+        "aws:s3/bucketPublicAccessBlock:BucketPublicAccessBlock",
+        "aws:s3/bucketServerSideEncryptionConfigurationV2:"
+        "BucketServerSideEncryptionConfigurationV2",
+        "aws:s3/bucketVersioningV2:BucketVersioningV2",
         "aws:sesv2/emailIdentity:EmailIdentity",
     }
 )
 HARDENED_COMPONENT_TYPES = frozenset(
     {
+        "user-service-infrastructure:compute:AccessLogs",
+        "user-service-infrastructure:compute:Plane",
         "user-service-infrastructure:core:EnvironmentSettings",
+        "user-service-infrastructure:data:Plane",
         "user-service-infrastructure:messaging:Plane",
         "user-service-infrastructure:network:Plane",
         "user-service-infrastructure:registry:Plane",
@@ -125,9 +174,84 @@ def _easy_dkim_only(props) -> bool:
     )
 
 
+def _either(props, snake: str, camel: str):
+    """Read one input in the SDK (snake_case) or engine (camelCase) casing."""
+    return props[snake] if snake in props else props.get(camel)
+
+
+DOCUMENTDB_PASSWORD_INPUTS = (
+    "master_password",
+    "masterPassword",
+    "master_password_wo",
+    "masterPasswordWo",
+)
+
+
+def _managed_iam_documentdb(props) -> bool:
+    """Accept only the managed password on the IAM-capable engine (S1.2, S1.3).
+
+    ``manageMasterUserPassword`` must be literally true, no primary password
+    input may be present, and the engine must be DocumentDB 5.0.0 (V-17).
+    """
+    return (
+        _either(props, "manage_master_user_password", "manageMasterUserPassword")
+        is True
+        and all(props.get(key) is None for key in DOCUMENTDB_PASSWORD_INPUTS)
+        and props.get("engine") == "docdb"
+        and _either(props, "engine_version", "engineVersion")
+        == DOCUMENTDB_IAM_ENGINE_VERSION
+    )
+
+
+def _plain_container(container) -> bool:
+    """Check one container: plain environment, bare-ARN secret references."""
+    environment = container.get("environment", [])
+    secrets = container.get("secrets", [])
+    if not all(
+        type(row) is dict and set(row) == fields
+        for rows, fields in (
+            (environment, {"name", "value"}),
+            (secrets, {"name", "valueFrom"}),
+        )
+        for row in rows
+    ):
+        return False
+    require_plain_environment(environment, secrets)
+    for row in secrets:
+        require_unversioned_reference(row["valueFrom"])
+    return True
+
+
+def _plain_task_environment(props) -> bool:
+    """Accept container definitions whose only secrets are ``valueFrom`` ARNs.
+
+    Environment names must be disjoint from the secret names, every value must
+    be credential-free (FR-03, AD-20) and every ``valueFrom`` a bare ARN with
+    no version (S1.7). A resolved JSON string is checked here. An unresolved
+    value (an SDK ``Output`` or a preview ``Unknown``) is not yet inspectable:
+    the engine transform sees the resolved string before an ``up`` writes it,
+    and ``ComputePlane`` checks the same rules when it serializes.
+    """
+    value = _either(props, "container_definitions", "containerDefinitions")
+    if type(value) is not str:
+        return True
+    try:
+        containers = json.loads(value)
+        return type(containers) is list and all(
+            type(container) is dict and _plain_container(container)
+            for container in containers
+        )
+    except (ValueError, TypeError):
+        return False
+
+
 # Reviewed property checks for allowlisted types whose typed inputs could
 # carry secret material. Every other allowlisted type has no such input.
-HARDENED_PROPERTY_CHECKS = {"aws:sesv2/emailIdentity:EmailIdentity": _easy_dkim_only}
+HARDENED_PROPERTY_CHECKS = {
+    "aws:docdb/cluster:Cluster": _managed_iam_documentdb,
+    "aws:ecs/taskDefinition:TaskDefinition": _plain_task_environment,
+    "aws:sesv2/emailIdentity:EmailIdentity": _easy_dkim_only,
+}
 
 
 def _merge_tags(existing, baseline: dict[str, str]) -> dict[str, str]:
@@ -142,14 +266,21 @@ def _merge_tags(existing, baseline: dict[str, str]) -> dict[str, str]:
 
 def _reject_secret_material(
     args: pulumi.ResourceTransformationArgs | pulumi.ResourceTransformArgs,
+    step: int = 1,
 ) -> None:
     """Fail closed before secret material or an unreviewed type joins the graph.
 
     One check serves the SDK transformation and the engine transform alike;
     both argument types carry ``type_`` and ``None`` keeps the resource as is.
+    ``step`` is the contract's ``workload_step``; step 1 refuses every step-2
+    type (FR-34), and the default is that stricter step.
     """
     if args.type_.startswith(SECRET_MATERIAL_TYPES):
         raise ValueError("Hardened workload graph must not hold secret material")
+    if args.type_ == ELASTIC_DOCUMENTDB_TYPE:
+        raise ValueError("Hardened DocumentDB must be an instance-based cluster")
+    if step == 1 and args.type_ in STEP_TWO_TYPES:
+        raise ValueError("Step-1 workload graph must not hold a step-2 resource")
     if args.type_ not in HARDENED_TYPES:
         raise ValueError("Hardened workload graph holds an unreviewed type")
     check = HARDENED_PROPERTY_CHECKS.get(args.type_)
@@ -167,7 +298,12 @@ def _reject_invoke(_args: pulumi.InvokeTransformArgs) -> None:
     raise ValueError("Hardened workload graph must not call a provider function")
 
 
-def _guard_hardened_stack() -> None:
+def _step_guard(step: int):
+    """Bind the guard to the contract's step; both registrations share it."""
+    return functools.partial(_reject_secret_material, step=step)
+
+
+def _guard_hardened_stack(step: int) -> None:
     """Guard the whole stack before its first hardened resource (FR-09, F1).
 
     The SDK stack transformation reaches every resource this program builds,
@@ -175,10 +311,12 @@ def _guard_hardened_stack() -> None:
     engine resource transform also reaches the children of a packaged
     component, which no in-process transformation sees. The engine invoke
     transform refuses every provider function call (N2). The component-level
-    transformation in ``_compose_hardened`` stays as a second layer.
+    transformation in ``_compose_hardened`` stays as a second layer. These
+    are the last transforms the program registers.
     """
-    pulumi.runtime.register_stack_transformation(_reject_secret_material)
-    pulumi.runtime.register_resource_transform(_reject_secret_material)
+    guard = _step_guard(step)
+    pulumi.runtime.register_stack_transformation(guard)
+    pulumi.runtime.register_resource_transform(guard)
     pulumi.runtime.register_invoke_transform(_reject_invoke)
 
 
@@ -202,7 +340,9 @@ class WorkloadPhaseStack(RegistryPhaseStack):
             raise ValueError("Workload composition requires a secret declaration")
         secrets.validate_target(settings)
         if secrets.hardened:
-            _guard_hardened_stack()
+            # Refuse a configured primary password before any registration.
+            reject_documentdb_password_config()
+            _guard_hardened_stack(secrets.workload_step)
         super().__init__(registries=registries)
         self.settings = settings
         if secrets.hardened:
@@ -215,23 +355,69 @@ class WorkloadPhaseStack(RegistryPhaseStack):
     def _compose_hardened(
         self, settings: StackSettings, secrets: RuntimeSecretsDescriptor
     ) -> None:
-        """Compose seeded secret metadata and the credential-free planes only.
+        """Compose the step-1 resource set and export the XP-8 values (FR-34).
 
-        The data and compute planes join this branch once they need no generated
-        credential; no workload phase can be admitted before that composition.
+        Every plane is credential-free: seeded secret metadata, the network
+        with the bootstrap-job SG, DocumentDB with the managed password and the
+        plain MONGODB-AWS URL, the queues, and ECS services at zero tasks. A
+        step-2 contract renders the same set until each step-2 story adds its
+        resources; the guard refuses those types at step 1.
         """
         opts = pulumi.ResourceOptions(
             parent=self,
-            transformations=[_reject_secret_material, self._tag_resource],
+            transformations=[_step_guard(secrets.workload_step), self._tag_resource],
         )
         self.runtime_secrets = RuntimeSecrets(
             "runtime-secrets", descriptor=secrets, opts=opts
         )
         self.network = NetworkPlane(
-            "network", settings=settings, private_gateway=True, opts=opts
+            "network",
+            settings=settings,
+            private_gateway=True,
+            bootstrap_job=True,
+            opts=opts,
         )
-        self.messaging = MessagingPlane("messaging", settings=settings, opts=opts)
+        self.data = DataPlane(
+            "data",
+            settings=settings,
+            network=self.network,
+            runtime_secrets=self.runtime_secrets,
+            opts=opts,
+        )
         self.runtime_secrets.complete()
+        self.messaging = MessagingPlane("messaging", settings=settings, opts=opts)
+        self.compute = ComputePlane(
+            "compute",
+            settings=settings,
+            network=self.network,
+            data=self.data,
+            messaging=self.messaging,
+            registries=self.registries.outputs,
+            runtime_secrets=self.runtime_secrets,
+            initial_service_scale=INITIAL_SERVICE_SCALE,
+            opts=opts,
+        )
+        self._export_xp8()
+
+    def _export_xp8(self) -> None:
+        """Export the non-deterministic XP-8 values in the contract's shape.
+
+        A reviewed BI metadata PR copies them into ``central.lambda_network``
+        and ``central.documentdb_managed_secret_arn`` after step 1 (XP-8).
+        """
+        pulumi.export(
+            "lambda_network",
+            {
+                "subnet_ids": self.network.outputs.app_subnet_ids,
+                "bootstrap_job_security_group_id": (
+                    self.network.outputs.bootstrap_job_security_group_id
+                ),
+            },
+        )
+        pulumi.export(
+            "documentdb_managed_secret_arn",
+            self.data.documentdb.managed_secret_arn,
+        )
 
     def _compose_pre_hardening(
         self, settings: StackSettings, secrets: RuntimeSecretsDescriptor

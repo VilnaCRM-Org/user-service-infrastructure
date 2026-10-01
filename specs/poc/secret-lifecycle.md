@@ -61,12 +61,18 @@ children of a packaged component. The component-level transformation on the
 secret, network and messaging planes stays as a second layer. The guard fails
 the program on any Random, TLS or `SecretVersion` type and on any type outside
 the closed allowlist of the hardened graph. `HARDENED_TYPES` is exactly the set
-the hardened graph renders: nine tagged types (VPC, subnet, route table,
-internet gateway, EIP, NAT gateway, security group, Secrets Manager secret and
-SQS queue), four untagged or self-tagged types (route-table association, ECR
-repository, Route 53 record and SES identity) and the six component tokens.
-`TAGGABLE_TYPES` only selects what the planes tag; it admits no type. Widening
-the allowlist is a reviewed change.
+the hardened graph renders. S1.1 rendered nine tagged types (VPC, subnet, route
+table, internet gateway, EIP, NAT gateway, security group, Secrets Manager
+secret and SQS queue), four untagged or self-tagged types (route-table
+association, ECR repository, Route 53 record and SES identity) and six
+component tokens. S1.3 adds the data and compute planes: twelve tagged types
+(log group, DocumentDB cluster, instance, cluster parameter group and subnet
+group, ECS cluster, service and task definition, load balancer, listener,
+target group and the ALB log bucket), seven untagged types (the ECR lifecycle
+policy and the six ALB log bucket settings) and three component tokens (data
+plane, compute plane and ALB access logs). ElastiCache stays outside it until
+S1.4. `TAGGABLE_TYPES` only selects what the planes tag; it admits no type.
+Widening the allowlist is a reviewed change.
 
 The guard is type-level plus the listed property checks
 (`HARDENED_PROPERTY_CHECKS`). The SES identity's `dkimSigningAttributes` may
@@ -80,11 +86,25 @@ An opaque value, such as an input type or an `Output`, fails closed.
 module calls a provider function, and any call fails the program before the
 provider runs it. A story that needs an invoke adds a reviewed allowlist.
 
-When the data and compute planes rejoin the hardened graph (S1.3, S4.10), that
-story widens the allowlist with property checks of its own: DocumentDB
-`manageMasterUserPassword` must be true with no `masterPassword` or
-`masterPasswordWo`; ElastiCache carries no `authToken`; and TaskDefinition
-environment names must not overlap the declared secret names.
+S1.3 added two property checks with the data and compute planes. A DocumentDB
+`Cluster` must have `manageMasterUserPassword` literally true, no
+`masterPassword` or `masterPasswordWo`, engine `docdb` and engine version
+`5.0.0`. A `TaskDefinition`'s environment names must not overlap its secret
+names, every environment value must be credential-free (no AWS access key, URL
+userinfo or credential query parameter) and every `valueFrom` must be a bare
+secret ARN. Its container definitions are checked once they are a resolved
+string: the engine transform sees that string before an `up` writes it, and
+`ComputePlane` checks the same environment rules when it serializes them. An
+unresolved value (an SDK `Output` or a preview `Unknown`) is not yet
+inspectable and passes that check only. An elastic DocumentDB cluster
+(`aws:docdb/elasticCluster:ElasticCluster`) fails at every step (V-17). Redis
+joins in S1.4 with its own check: ElastiCache carries no `authToken`.
+
+The guard is bound to the contract's `workload_step` (FR-34, AD-18). Step 1
+refuses every step-2 type: the seed `Invocation`, `SecretRotation`,
+`SecretPolicy`, autoscaling targets and policies, and `ScheduledAction`. Step 2
+still refuses each one until its own story adds it to the allowlist; the
+create-only step-2 admission is S4.9.
 
 Residuals the guard does not inspect: free-form inputs of allowed types (for
 example a secret description, a tag value, a queue policy or a DNS record
@@ -165,14 +185,31 @@ On the hardened path the DocumentDB cluster is declared with
 `manage_master_user_password=True` and no `master_password`, so DocumentDB owns
 and rotates the primary password in its own managed secret. Pulumi never holds
 or generates it. A `documentDbPassword` (or `documentDbMasterPassword`) config
-key makes `DataPlane` raise before it registers anything, instead of being
-ignored. The hardened `WorkloadPhaseStack` does not compose the data plane yet,
-so that refusal applies to a workload stack only once S1.3 composes it. Until
-then the seam is exercised by a `DataPlane` built outside the stack guard. S1.3
-owns the composition-level N test: a native preview of the hardened workload
-with a secret `documentDbPassword` must fail without echoing its value. The
+key is refused instead of being ignored. Since S1.3 the hardened
+`WorkloadPhaseStack` composes the data plane under its stack-wide guard and
+refuses that key itself, before any resource registers; `DataPlane` refuses it
+again before its own registration. A native preview of the hardened workload
+with a secret `documentDbPassword` fails without echoing its value. The
 pre-hardening shape keeps its generated password until S4.10 removes that
 branch (AD-25).
+
+The application authenticates as the ECS task role with `MONGODB-AWS` (S1.3,
+FR-02). `MONGODB_URL` is a plain environment value with no userinfo:
+`mongodb://<endpoint>:<port>/<db>?tls=true&tlsCAFile=<ca>&replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false&authSource=%24external&authMechanism=MONGODB-AWS`,
+with the database and CA path URL-encoded. No `document_db_url` secret exists
+on the hardened path. IAM authentication exists only on instance-based
+DocumentDB 5.0 clusters (V-17, from the AWS DocumentDB IAM identity
+authentication guide, A-01), so any other engine version raises before the data
+plane registers and an elastic cluster fails the guard. The live check is S4.6
+step 4.
+
+After step 1 the stack exports the XP-8 values in the contract's shape:
+`lambda_network` (`subnet_ids`, the app subnets, and
+`bootstrap_job_security_group_id`) and `documentdb_managed_secret_arn`. The
+bootstrap-job security group has no ingress and egresses only inside the VPC,
+to the DocumentDB port and to 443 for the Secrets Manager interface endpoint;
+the DocumentDB security group admits it beside the service group. S3.3 and S3.4
+narrow those egress rules to the endpoint and DocumentDB groups (FR-18).
 
 Exception A-05 (D-4): pulumi-aws 7.23.0 exposes `manage_master_user_password`
 and `master_user_secrets` but no `master_user_secret_kms_key_id`. The managed

@@ -33,6 +33,20 @@ REGISTRIES = {
 }
 
 
+# Synthetic provider identities shaped like the XP-8 contract fields.
+MANAGED_SECRET_ARN = (
+    "arn:aws:secretsmanager:eu-central-1:891377212104:secret:"
+    "rds!cluster-00000000-0000-4000-8000-000000000003-AbCdEf"
+)
+XP8_IDS = {
+    **{
+        f"user-service-app-subnet-{index}": f"subnet-0123456789abcdef{index}"
+        for index in (1, 2)
+    },
+    "user-service-bootstrap-job-sg": "sg-0123456789abcdef0",
+}
+
+
 def _mutate(value, registries, mutation):
     if mutation == "type":
         return None
@@ -87,6 +101,13 @@ def _generated_outputs(args, values):
         values["versionId"] = "1" * 32
     if args.typ == "aws:sesv2/emailIdentity:EmailIdentity":
         values["dkimSigningAttributes"] = {"tokens": [letter * 32 for letter in "abc"]}
+    if args.typ == "aws:docdb/cluster:Cluster":
+        values["endpoint"] = f"{args.inputs['clusterIdentifier']}.cluster.local"
+        if args.inputs.get("manageMasterUserPassword") is True:
+            # DocumentDB reports its one managed primary secret (S1.2, XP-8).
+            values["masterUserSecrets"] = [
+                {"secretArn": MANAGED_SECRET_ARN, "secretStatus": "active"}
+            ]
     return values
 
 
@@ -175,43 +196,83 @@ def _bridge(contract, config, aws_config, mutation, *, generated_child=False):
             _add_secret_material(run_workload_phase(projection), mutation)
 
 
-def _add_secret_material(stack, mutation):
-    """Re-add a forbidden generator or version under the hardened owner (N case)."""
+def _mutation_config(mutation):
+    """Composition-level N cases: a non-IAM engine or a configured password."""
+    if mutation.startswith("engine-"):
+        return {"documentDbEngineVersion": mutation.removeprefix("engine-")}
+    if mutation == "password-config":
+        return {"documentDbPassword": "synthetic-documentdb-password"}
+    return {}
+
+
+def _fixture_builders(options):
+    """Map each N-case kind to the forbidden registration it attempts."""
+    import json
+
     import pulumi_aws as aws
     import pulumi_random as random
 
-    import pulumi
-
-    # The owner varies: a runtime-secrets child, a direct stack child or a
-    # root resource with no parent at all (F1: the guard is stack-wide).
-    owner, _, kind = mutation.rpartition(":")
-    parents = {"": stack.runtime_secrets, "stack": stack, "root": None}
-    options = pulumi.ResourceOptions(parent=parents[owner])
-    if kind == "random-password":
-        random.RandomPassword("fixture-material", length=16, opts=options)
-    if kind == "secret-version":
-        aws.secretsmanager.SecretVersion(
+    task_definitions = json.dumps(
+        [
+            {
+                "name": "fixture",
+                "environment": [
+                    {"name": "DSN", "value": "https://user:synthetic@host"}
+                ],
+            }
+        ]
+    )
+    return {
+        "random-password": lambda: random.RandomPassword(
+            "fixture-material", length=16, opts=options
+        ),
+        "secret-version": lambda: aws.secretsmanager.SecretVersion(
             "fixture-version",
             secret_id="synthetic",
             secret_string="synthetic",
             opts=options,
-        )
-    if kind == "ssm-parameter":
-        aws.ssm.Parameter(
+        ),
+        "ssm-parameter": lambda: aws.ssm.Parameter(
             "fixture-parameter", type="String", value="synthetic", opts=options
-        )
-    # N1: data-plane types that carry a credential in a typed input are not
-    # allowlisted until their story adds reviewed property checks.
-    if kind == "docdb-cluster":
-        aws.docdb.Cluster(
+        ),
+        # N1: an allowlisted DocumentDB cluster still refuses a primary password.
+        "docdb-cluster": lambda: aws.docdb.Cluster(
             "fixture-cluster",
             master_username="synthetic",
             master_password="synthetic-not-a-secret",
             opts=options,
-        )
-    # N1: an allowlisted SES identity still refuses a BYODKIM private key.
-    if kind == "byodkim-identity":
-        aws.sesv2.EmailIdentity(
+        ),
+        # N (V-17): a managed-password cluster on a non-IAM engine fails.
+        "docdb-cluster-4": lambda: aws.docdb.Cluster(
+            "fixture-cluster",
+            engine="docdb",
+            engine_version="4.0.0",
+            manage_master_user_password=True,
+            opts=options,
+        ),
+        # N (V-17): an elastic cluster has no IAM authentication.
+        "docdb-elastic-cluster": lambda: aws.docdb.ElasticCluster(
+            "fixture-elastic-cluster",
+            admin_user_name="synthetic",
+            admin_user_password="synthetic-not-a-secret",
+            auth_type="PLAIN_TEXT",
+            shard_capacity=2,
+            shard_count=1,
+            opts=options,
+        ),
+        # B (FR-34): a step-2 type never joins the step-1 graph.
+        "secret-policy": lambda: aws.secretsmanager.SecretPolicy(
+            "fixture-policy", secret_arn="synthetic", policy="{}", opts=options
+        ),
+        # FR-03 N: a plain environment value may not carry userinfo.
+        "userinfo-task": lambda: aws.ecs.TaskDefinition(
+            "fixture-task",
+            family="fixture",
+            container_definitions=task_definitions,
+            opts=options,
+        ),
+        # N1: an allowlisted SES identity still refuses a BYODKIM private key.
+        "byodkim-identity": lambda: aws.sesv2.EmailIdentity(
             "fixture-identity",
             email_identity="fixture.example",
             dkim_signing_attributes={
@@ -220,10 +281,26 @@ def _add_secret_material(stack, mutation):
                 "domain_signing_selector": "fixture",
             },
             opts=options,
-        )
-    # N2: a hardened program calls no provider function.
-    if kind == "random-password-invoke":
-        aws.secretsmanager.get_random_password(password_length=16)
+        ),
+        # N2: a hardened program calls no provider function.
+        "random-password-invoke": lambda: aws.secretsmanager.get_random_password(
+            password_length=16
+        ),
+    }
+
+
+def _add_secret_material(stack, mutation):
+    """Re-add a forbidden generator or version under the hardened owner (N case)."""
+    import pulumi
+
+    # The owner varies: a runtime-secrets child, a direct stack child or a
+    # root resource with no parent at all (F1: the guard is stack-wide).
+    owner, _, kind = mutation.rpartition(":")
+    parents = {"": stack.runtime_secrets, "stack": stack, "root": None}
+    options = pulumi.ResourceOptions(parent=parents[owner])
+    builder = _fixture_builders(options).get(kind)
+    if builder is not None:
+        builder()
 
 
 class EngineTransforms:
@@ -285,6 +362,18 @@ def _transformed_invoke(monitor, request):
     return mocks.MockMonitor.Invoke(monitor, request)
 
 
+def _record_exports(exports):
+    """Record each resolved stack export; mocks register no stack outputs."""
+    import pulumi
+
+    def record(name, value):
+        pulumi.Output.from_input(value).apply(
+            lambda resolved: exports.__setitem__(name, resolved)
+        )
+
+    pulumi.export = record
+
+
 def _probe(root, mode, mutation, coverage_path):
     """Run both actual component compositions in independent Python runtimes."""
     sys.path[:0] = [
@@ -316,8 +405,8 @@ def _probe(root, mode, mutation, coverage_path):
     from pulumi.runtime import mocks, rpc, set_all_config, settings, stack
     from test_environment_component import SimpleMocks
 
-    registrations, outputs = {}, {}
-
+    registrations, outputs, exports = {}, {}, {}
+    _record_exports(exports)
     engine = EngineTransforms()
 
     class Monitor(mocks.MockMonitor):
@@ -357,6 +446,7 @@ def _probe(root, mode, mutation, coverage_path):
         def new_resource(self, args):
             resource_id, values = super().new_resource(args)
             values = _generated_outputs(args, values)
+            resource_id = XP8_IDS.get(args.name, resource_id)
             return _workload_queue_outputs(args, resource_id, values)
 
         call = _synthetic_call
@@ -393,6 +483,7 @@ def _probe(root, mode, mutation, coverage_path):
         ),
         "appEnv": "prod",
     }
+    config.update(_mutation_config(mutation))
     config["certificateArn"] = _fixture_contract(root, config)["workload"]["external"][
         "domain"
     ]["certificate_arn"]
@@ -473,6 +564,7 @@ def _probe(root, mode, mutation, coverage_path):
                 "engine_transforms": len(engine.registered),
                 "engine_applied": engine.applied,
                 "invoke_transforms": len(engine.invokes),
+                "exports": exports,
             },
             default=str,
         )

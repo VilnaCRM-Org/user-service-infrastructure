@@ -104,3 +104,142 @@ def test_hardened_ecs_secret_from_another_account_or_name_is_refused():
         arns["app_secret"] = _Resolved(arn)
         with pytest.raises(ValueError, match="declaration"):
             _hardened(arns).ecs_secrets()
+
+
+DOCUMENTDB_ENDPOINT = "synthetic.cluster-abc.eu-central-1.docdb.amazonaws.com"
+SECRET_ARN = ARNS["app_secret"]
+
+
+def test_hardened_documentdb_url_and_engine_guards():
+    """FR-02 and V-17 helpers that the native preview reaches only as unknowns."""
+    from app.data import (
+        _managed_secret_arn,
+        documentdb_iam_url,
+        require_iam_documentdb_engine,
+    )
+
+    url = documentdb_iam_url(DOCUMENTDB_ENDPOINT, 27017, "user service", "/ca.pem")
+    assert url.startswith(f"mongodb://{DOCUMENTDB_ENDPOINT}:27017/user%20service?")
+    assert url.endswith("&authSource=%24external&authMechanism=MONGODB-AWS")
+    with pytest.raises(ValueError, match="userinfo"):
+        documentdb_iam_url("user:x@" + DOCUMENTDB_ENDPOINT, 27017, "db", "/ca.pem")
+    assert require_iam_documentdb_engine("5.0.0") is None
+    with pytest.raises(ValueError, match="V-17"):
+        require_iam_documentdb_engine("4.0.0")
+    managed = SimpleNamespace(secret_arn="arn:synthetic")
+    assert _managed_secret_arn([managed]) == "arn:synthetic"
+    with pytest.raises(ValueError, match="exactly one managed secret"):
+        _managed_secret_arn([])
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        (None, "plain string"),
+        ("AKIA" + "SYNTHETIC0000000", "access key"),
+        ("https://user:x@sqs.example/queue", "userinfo"),
+        ("https://sqs.example/queue?secret_key=x", "credential parameter"),
+    ],
+)
+def test_credential_bearing_environment_values_are_refused(value, message):
+    """FR-03 N (AD-20): no key, userinfo or credential parameter."""
+    from app.compute import require_credential_free
+
+    with pytest.raises(ValueError, match=message):
+        require_credential_free(value)
+
+
+def test_plain_environment_and_hardened_scale_guards(monkeypatch):
+    from app import compute
+
+    rows = [{"name": "APP_SECRET", "value": "x"}]
+    with pytest.raises(ValueError, match="overlap"):
+        compute.require_plain_environment(rows, [{"name": "APP_SECRET"}])
+    fake = SimpleNamespace(apply=lambda callback: callback("https://sqs/queue"))
+    monkeypatch.setattr(compute.pulumi.Output, "from_input", lambda _: fake)
+    plane = object.__new__(compute.ComputePlane)
+    assert plane._queue_dsn("ignored", "eu-central-1") == (
+        "https://sqs/queue?region=eu-central-1&auto_setup=false"
+    )
+    for name in ("validate_runtime_roles", "validate_health_check_runtime"):
+        monkeypatch.setattr(compute, name, lambda *_: None)
+    secrets = SimpleNamespace(
+        descriptor=SimpleNamespace(hardened=True, validate_target=lambda _: None)
+    )
+    with pytest.raises(ValueError, match="zero tasks"):
+        compute.ComputePlane(
+            "compute",
+            settings=SimpleNamespace(
+                is_managed=True, environment="test", runtime=None, queues=None
+            ),
+            network=None,
+            data=None,
+            messaging=None,
+            runtime_secrets=secrets,
+        )
+
+
+def _task(engine, environment, secrets=None):
+    import pulumi
+
+    container = {"environment": environment, "secrets": secrets or []}
+    key = "containerDefinitions" if engine else "container_definitions"
+    value = container if environment is None else json.dumps([container])
+    return pulumi.ResourceTransformArgs(
+        custom=True,
+        type_="aws:ecs/taskDefinition:TaskDefinition",
+        name="probe",
+        props={key: value},
+        opts=None,
+    )
+
+
+@pytest.mark.parametrize("engine", [False, True])
+def test_task_definition_property_check_reads_resolved_definitions(engine):
+    """The guard checks a resolved JSON string and defers an unresolved value."""
+    from app.workload_phase import _reject_secret_material
+
+    plain = [{"name": "APP_ENV", "value": "prod"}]
+    secret = [{"name": "APP_SECRET", "valueFrom": SECRET_ARN}]
+    assert _reject_secret_material(_task(engine, plain, secret)) is None
+    assert _reject_secret_material(_task(engine, None)) is None
+    for environment, secrets in (
+        ([{"name": "APP_SECRET", "value": "x"}], secret),
+        (plain, [{"name": "B", "valueFrom": SECRET_ARN + ":::" + "1" * 32}]),
+        (["APP_ENV=prod"], None),
+        ([{"name": ["A"], "value": "x"}], None),
+    ):
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _reject_secret_material(_task(engine, environment, secrets))
+    import pulumi
+
+    for value in ("not-json", "{}"):
+        args = pulumi.ResourceTransformArgs(
+            custom=True,
+            type_="aws:ecs/taskDefinition:TaskDefinition",
+            name="probe",
+            props={"containerDefinitions": value},
+            opts=None,
+        )
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _reject_secret_material(args)
+
+
+@pytest.mark.parametrize("step", [1, 2])
+def test_step_two_and_elastic_types_are_refused(step):
+    """FR-34 B and V-17 N at the guard."""
+    from app.workload_phase import STEP_TWO_TYPES, _reject_secret_material
+
+    import pulumi
+
+    def args(kind):
+        return pulumi.ResourceTransformArgs(
+            custom=True, type_=kind, name="probe", props={}, opts=None
+        )
+
+    with pytest.raises(ValueError, match="instance-based"):
+        _reject_secret_material(args("aws:docdb/elasticCluster:ElasticCluster"), step)
+    message = "step-2 resource" if step == 1 else "unreviewed type"
+    for kind in STEP_TWO_TYPES:
+        with pytest.raises(ValueError, match=message):
+            _reject_secret_material(args(kind), step)

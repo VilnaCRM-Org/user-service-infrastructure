@@ -365,7 +365,8 @@ def _step_two_contract(work):
 
 
 def test_native_step_two_previews_autoscaling_through_the_provider(native_stack):
-    """S2.1 (FR-11, AD-10): the provider checks the step-2 autoscaling inputs."""
+    """S2.1 and S2.2 (FR-11, FR-12, AD-10): the provider checks the step-2
+    autoscaling inputs, including the worker backlog metric math."""
     stack, work = native_stack
     _step_two_contract(work)
     _hardened(stack, work)
@@ -382,6 +383,7 @@ def test_native_step_two_previews_autoscaling_through_the_provider(native_stack)
         "worker-scaling-target",
         "web-cpu-tracking",
         "web-request-tracking",
+        "worker-backlog-tracking",
         *(f"{svc}-{kind}-1" for svc in ("web", "worker") for kind in ("start", "stop")),
     }
     for service in ("web", "worker"):
@@ -414,6 +416,34 @@ def test_native_step_two_previews_autoscaling_through_the_provider(native_stack)
         metric["predefinedMetricSpecification"]["predefinedMetricType"]
         == "ALBRequestCountPerTarget"
     )
+    backlog = scaling["worker-backlog-tracking"].new.inputs
+    tracking = backlog["targetTrackingScalingPolicyConfiguration"]
+    assert tracking["targetValue"] == 100
+    assert (tracking["scaleOutCooldown"], tracking["scaleInCooldown"]) == (60, 300)
+    queries = {
+        query["id"]: query
+        for query in tracking["customizedMetricSpecification"]["metrics"]
+    }
+    assert list(queries) == [
+        "send_email",
+        "insert_user_batch",
+        "domain_events",
+        "running_tasks",
+        "backlog",
+        "tasks",
+        "backlog_per_task",
+    ]
+    assert {
+        query["metricStat"]["metric"]["dimensions"][0]["value"]
+        for name, query in queries.items()
+        if name in ("send_email", "insert_user_batch", "domain_events")
+    } == {"send-email", "insert-user-batch", "domain-events"}
+    running = queries["running_tasks"]["metricStat"]
+    assert running["metric"]["namespace"] == "ECS/ContainerInsights"
+    assert running["metric"]["metricName"] == "RunningTaskCount"
+    assert queries["tasks"]["expression"] == "IF(running_tasks > 1, running_tasks, 1)"
+    assert queries["backlog_per_task"]["expression"] == "backlog / tasks"
+    assert queries["backlog_per_task"]["returnData"] is True
 
 
 def test_native_hardened_data_plane_uses_the_managed_password(native_stack):

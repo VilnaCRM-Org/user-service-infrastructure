@@ -58,11 +58,39 @@ resources, and root resources with no parent), and
 children of a packaged component. The component-level transformation on the
 secret, network and messaging planes stays as a second layer. The guard fails
 the program on any Random, TLS or `SecretVersion` type and on any type outside
-the closed allowlist of the hardened graph (`HARDENED_TYPES`: the taggable
-workload types, the route-table association, ECR repository, Route 53 record
-and SES identity types, and the component tokens); widening that list is a
-reviewed change. The stack that renders no hardened contract registers no such
-guard.
+the closed allowlist of the hardened graph. `HARDENED_TYPES` is exactly the set
+the hardened graph renders: nine tagged types (VPC, subnet, route table,
+internet gateway, EIP, NAT gateway, security group, Secrets Manager secret and
+SQS queue), four untagged or self-tagged types (route-table association, ECR
+repository, Route 53 record and SES identity) and the six component tokens.
+`TAGGABLE_TYPES` only selects what the planes tag; it admits no type. Widening
+the allowlist is a reviewed change.
+
+The guard is type-level plus the listed property checks
+(`HARDENED_PROPERTY_CHECKS`). The SES identity's `dkimSigningAttributes` may
+hold only `nextSigningKeyLength`; a BYODKIM `domainSigningPrivateKey` or
+selector fails before registration. The check reads both key casings:
+snake_case on the SDK transformation path and camelCase on the engine path.
+An opaque value, such as an input type or an `Output`, fails closed.
+
+`WorkloadPhaseStack` also registers a deny-all engine invoke transform through
+`pulumi.runtime.register_invoke_transform`. Its allowlist (`HARDENED_INVOKES`)
+is empty: no hardened module calls a provider function, and any call fails the
+program before the provider runs it.
+
+When the data and compute planes rejoin the hardened graph (S1.3, S4.10), that
+story widens the allowlist with property checks of its own: DocumentDB
+`manageMasterUserPassword` must be true with no `masterPassword` or
+`masterPasswordWo`; ElastiCache carries no `authToken`; and TaskDefinition
+environment names must not overlap the declared secret names.
+
+Residuals the guard does not inspect: free-form inputs of allowed types (for
+example a secret description, a tag value, a queue policy or a DNS record
+value), values passed to `pulumi.export` or `register_outputs`, which are not
+resource inputs, and default-provider config. Review of the program source and
+of the stack config remains the control for these.
+
+The stack that renders no hardened contract registers no such guard.
 
 A seeded secret has no version until the seed runs; after that its identity
 and first version are preserved. The seed input is exactly
@@ -83,10 +111,15 @@ purposes plus `documentdb_primary`. A TEST receipt names only account
 receipt is TEST-only (`urn:pulumi:test::`, mode `recovery-abandon`) and the
 import receipt's mode is `recovery-import`. A schema cannot compare two values,
 so the S4.11 receipt library must enforce that a retained secret's `import_id`
-equals its `secret.arn`. JSON Schema `pattern` runs as `re.search`, where `$`
-also matches before a trailing newline: fixed-length fields pin their length,
-and the S4.11 library must re-check every variable-length field with
-`re.fullmatch`.
+equals its `secret.arn`, and that no URN appears in both `deleted` and `retain`
+of one abandon receipt. A PROD step receipt names only account `933245420672`
+secret, KMS, image and certificate ARNs. JSON Schema `pattern` runs as
+`re.search`, where `$` also matches before a trailing newline. A hardened
+contract is therefore validated a second time with every schema pattern applied
+by `re.fullmatch` (all `poc-test-v1` patterns are anchored), so no hardened
+string field accepts a trailing newline. In the receipt schemas, fixed-length
+fields pin their length, and the S4.11 library must re-check every
+variable-length field with `re.fullmatch`.
 
 V-8 (provider source): pulumi-aws 7.23.0 builds on terraform-provider-aws
 v6.36.0 with no Secrets Manager patch. Reading `Secret` calls only

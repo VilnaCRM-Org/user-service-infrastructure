@@ -200,6 +200,30 @@ def _add_secret_material(stack, mutation):
         aws.ssm.Parameter(
             "fixture-parameter", type="String", value="synthetic", opts=options
         )
+    # N1: data-plane types that carry a credential in a typed input are not
+    # allowlisted until their story adds reviewed property checks.
+    if kind == "docdb-cluster":
+        aws.docdb.Cluster(
+            "fixture-cluster",
+            master_username="synthetic",
+            master_password="synthetic-not-a-secret",
+            opts=options,
+        )
+    # N1: an allowlisted SES identity still refuses a BYODKIM private key.
+    if kind == "byodkim-identity":
+        aws.sesv2.EmailIdentity(
+            "fixture-identity",
+            email_identity="fixture.example",
+            dkim_signing_attributes={
+                # Base64 of "synthetic": a well-formed, non-secret key value.
+                "domain_signing_private_key": "c3ludGhldGlj",
+                "domain_signing_selector": "fixture",
+            },
+            opts=options,
+        )
+    # N2: a hardened program calls no provider function.
+    if kind == "random-password-invoke":
+        aws.secretsmanager.get_random_password(password_length=16)
 
 
 class EngineTransforms:
@@ -207,9 +231,14 @@ class EngineTransforms:
 
     def __init__(self):
         self.registered = []
+        self.invokes = []
+        self.applied = []
 
     def register_stack_transform(self, transform):
         self.registered.append(transform)
+
+    def register_invoke_transform(self, transform):
+        self.invokes.append(transform)
 
     def apply(self, request):
         """Apply each registered engine transform as the engine would."""
@@ -226,6 +255,34 @@ class EngineTransforms:
                 opts=pulumi.ResourceOptions(),
             )
             assert transform(args) is None
+            self.applied.append(request.name)
+
+    def apply_invoke(self, request):
+        """Apply each registered invoke transform before the mock answers."""
+        from pulumi.runtime import rpc
+
+        import pulumi
+
+        for transform in self.invokes:
+            args = pulumi.InvokeTransformArgs(
+                token=request.tok,
+                args=rpc.deserialize_properties(request.args),
+                opts=pulumi.InvokeOptions(),
+            )
+            assert transform(args) is None
+
+
+def _synthetic_call(_mocks, _args):
+    """Answer an unguarded invoke with a synthetic non-secret value."""
+    return {"id": "synthetic", "randomPassword": "synthetic-not-a-secret"}
+
+
+def _transformed_invoke(monitor, request):
+    """Apply the engine invoke transforms before the mock monitor answers."""
+    from pulumi.runtime import mocks
+
+    monitor.engine.apply_invoke(request)
+    return mocks.MockMonitor.Invoke(monitor, request)
 
 
 def _probe(root, mode, mutation, coverage_path):
@@ -291,6 +348,8 @@ def _probe(root, mode, mutation, coverage_path):
             outputs[request.urn] = rpc.deserialize_properties(request.outputs)
             return super().RegisterResourceOutputs(request)
 
+        Invoke = _transformed_invoke
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
@@ -300,14 +359,19 @@ def _probe(root, mode, mutation, coverage_path):
             values = _generated_outputs(args, values)
             return _workload_queue_outputs(args, resource_id, values)
 
+        call = _synthetic_call
+
     recorder = GeneratedMocks()
+    monitor = Monitor(recorder)
+    monitor.engine = engine
     mocks.set_mocks(
         recorder,
         project="user-service-infrastructure",
         stack="test",
-        monitor=Monitor(recorder),
+        monitor=monitor,
     )
     settings.SETTINGS.feature_support["transforms"] = True
+    settings.SETTINGS.feature_support["invokeTransforms"] = True
     settings.SETTINGS.callbacks = engine
     config = {
         "environment": "test",
@@ -407,6 +471,8 @@ def _probe(root, mode, mutation, coverage_path):
                 "error": error,
                 "aws_config": aws_config,
                 "engine_transforms": len(engine.registered),
+                "engine_applied": engine.applied,
+                "invoke_transforms": len(engine.invokes),
             },
             default=str,
         )

@@ -155,6 +155,13 @@ def test_plain_environment_and_hardened_scale_guards(monkeypatch):
     rows = [{"name": "APP_SECRET", "value": "x"}]
     with pytest.raises(ValueError, match="overlap"):
         compute.require_plain_environment(rows, [{"name": "APP_SECRET"}])
+    # The native preview leaves the container JSON unknown, so serialize here.
+    plain = [{"environment": rows, "secrets": [{"name": "OTHER"}]}]
+    assert compute.ComputePlane._serialize_container(plain) == json.dumps(plain)
+    with pytest.raises(ValueError, match="overlap"):
+        compute.ComputePlane._serialize_container(
+            [{"environment": rows, "secrets": [{"name": "APP_SECRET"}]}]
+        )
     fake = SimpleNamespace(apply=lambda callback: callback("https://sqs/queue"))
     monkeypatch.setattr(compute.pulumi.Output, "from_input", lambda _: fake)
     plane = object.__new__(compute.ComputePlane)

@@ -267,6 +267,14 @@ def _scaling_semantics(scaling: dict[str, Any]) -> None:
         raise ValueError("consumed scaling names must name declared entries")
 
 
+def _distinct_cmk_semantics(cmk: dict[str, Any]) -> None:
+    """Refuse two D-4 keys (previous JWT key included) sharing an ARN or alias."""
+    for field, label in (("arn", "ARNs"), ("alias", "aliases")):
+        values = [key[field] for key in cmk.values()]
+        if len(set(values)) != len(values):
+            raise ValueError(f"central CMK {label} must be distinct")
+
+
 def _central_semantics(workload: dict[str, Any]) -> None:
     """Bind secrets to reviewed central functions, distinct roles and the D-4 key.
 
@@ -279,10 +287,7 @@ def _central_semantics(workload: dict[str, Any]) -> None:
     roles = [value for key, value in central.items() if key.endswith("_role_arn")]
     if len(set(roles)) != len(roles):
         raise ValueError("central role ARNs must be distinct")
-    for field, label in (("arn", "ARNs"), ("alias", "aliases")):
-        values = [key[field] for key in central["cmk"].values()]
-        if len(set(values)) != len(values):
-            raise ValueError(f"central CMK {label} must be distinct")
+    _distinct_cmk_semantics(central["cmk"])
     functions = central["rotation_function_arns"]
     for secret in workload["secret_lifecycle"]["references"].values():
         if secret["kms_key_arn"] != central["cmk"]["runtime"]["arn"]:

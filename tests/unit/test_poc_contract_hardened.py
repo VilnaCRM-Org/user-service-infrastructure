@@ -318,3 +318,62 @@ def test_missing_central_metadata_blocks_admission_before_any_read(missing):
         admission.inspect_release(contract, authority, gh=forbidden, download=forbidden)
     with pytest.raises(ValueError, match="poc-test-v1 schema"):
         project_workload_phase(source(contract), contract, {})
+
+
+SAME_ACCOUNT_KEY = (
+    "arn:aws:kms:eu-central-1:891377212104:key/00000000-0000-4000-8000-000000000099"
+)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "workload.central.cmk.jwt.arn",
+        "workload.central.cmk.two_factor.arn",
+        # Any other same-account key, such as the aws/secretsmanager key.
+        SAME_ACCOUNT_KEY,
+    ],
+)
+@pytest.mark.parametrize("purpose", ["app_secret", "oauth_passphrase"])
+def test_hardened_secret_must_use_the_runtime_cmk(key, purpose):
+    """D-4 (F2): every declared secret is encrypted by the runtime CMK."""
+    contract = hardened()
+    if key.startswith("workload."):
+        target = contract
+        for part in key.split("."):
+            target = target[part]
+        key = target
+    references(contract)[purpose]["kms_key_arn"] = key
+    with pytest.raises(ValueError, match="runtime CMK"):
+        _validate_document(contract)
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [("runtime", "jwt"), ("runtime", "two_factor"), ("jwt", "two_factor")],
+)
+def test_hardened_cmk_arns_are_pairwise_distinct(first, second):
+    contract = hardened()
+    cmk = contract["workload"]["central"]["cmk"]
+    cmk[second]["arn"] = cmk[first]["arn"]
+    with pytest.raises(ValueError, match="CMK ARNs must be distinct"):
+        _validate_document(contract)
+
+
+def test_rotation_schedule_days_must_be_an_exact_integer():
+    """F-2: ``90.0`` equals the schema const but is not an exact integer."""
+    contract = hardened()
+    references(contract)["app_secret"]["rotation"]["schedule_days"] = 90.0
+    with pytest.raises(ValueError, match="exact"):
+        _validate_document(contract)
+
+
+def test_hardened_key_arns_refuse_a_trailing_newline():
+    """F7: ``$`` matches before a final newline, so key ARNs pin their length."""
+    contract = hardened()
+    runtime = contract["workload"]["central"]["cmk"]["runtime"]
+    runtime["arn"] += "\n"
+    for secret in references(contract).values():
+        secret["kms_key_arn"] = runtime["arn"]
+    with pytest.raises(ValueError, match="poc-test-v1 schema"):
+        _validate_document(contract)

@@ -72,7 +72,7 @@ def _master_credentials(
     7.23.0 has no ``master_user_secret_kms_key_id``, and none is ever passed.
     """
     if password is None:
-        return {"manage_master_user_password": True}
+        return {"manage_master_user_password": True}  # nosec B105
     return {"master_password": password}
 
 

@@ -1,0 +1,263 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:vilnacrm:poc-workload-accepted-receipt:v1",
+  "title": "Accepted-workload receipt: the first passing start observation of a lineage",
+  "description": "Local shape only. Publication, issuer, run binding and checkpoint authenticity are established by the receipt library, never by this schema. Metadata only: no secret value, resource input or resource output appears. It binds the success receipt and the verified same-run start observation artifact; drift and releases require it.",
+  "$comment": "Draft 2020-12 pattern is applied with re.search, so '$' also matches before a trailing newline. Fixed-length fields pin minLength = maxLength; the S4.11 receipt library must re-check every variable-length field with re.fullmatch.",
+  "$defs": {
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "etag",
+        "sha256"
+      ],
+      "properties": {
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+          "not": {
+            "const": "null"
+          }
+        },
+        "etag": {
+          "type": "string",
+          "minLength": 34,
+          "maxLength": 34,
+          "pattern": "^\"[0-9a-f]{32}\"$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "operation_phase": {
+      "enum": [
+        "stop",
+        "hold",
+        "start"
+      ]
+    },
+    "positive_integer": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "resumed_operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "first",
+            "step2",
+            "rollback-zero",
+            "policy-update",
+            "rebuild-first"
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/operation_phase"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "rollback-zero"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "phase"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "phase"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "sha256": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "stack": {
+      "enum": [
+        "test",
+        "prod"
+      ]
+    },
+    "workload_operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "sequence"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "first",
+            "step2",
+            "resume",
+            "rollback-zero",
+            "policy-update",
+            "rebuild-first",
+            "recovery-import",
+            "recovery-abandon"
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/operation_phase"
+        },
+        "sequence": {
+          "$ref": "#/$defs/positive_integer"
+        },
+        "resumes": {
+          "$ref": "#/$defs/resumed_operation"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "rollback-zero"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "phase"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "phase"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "resume"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "resumes"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "resumes"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "success_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_id",
+        "run_id",
+        "run_attempt",
+        "checkpoint_sha256"
+      ],
+      "properties": {
+        "receipt_id": {
+          "$ref": "#/$defs/positive_integer"
+        },
+        "run_id": {
+          "$ref": "#/$defs/positive_integer"
+        },
+        "run_attempt": {
+          "$ref": "#/$defs/positive_integer"
+        },
+        "checkpoint_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "stack",
+    "workload_operation",
+    "run_id",
+    "run_attempt",
+    "success_receipt",
+    "checkpoint",
+    "observation"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "poc-workload-accepted-receipt-v1"
+    },
+    "stack": {
+      "$ref": "#/$defs/stack"
+    },
+    "workload_operation": {
+      "$ref": "#/$defs/workload_operation"
+    },
+    "run_id": {
+      "$ref": "#/$defs/positive_integer"
+    },
+    "run_attempt": {
+      "$ref": "#/$defs/positive_integer"
+    },
+    "success_receipt": {
+      "$ref": "#/$defs/success_binding"
+    },
+    "checkpoint": {
+      "$ref": "#/$defs/checkpoint"
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "artifact_id",
+        "archive_sha256",
+        "file_sha256"
+      ],
+      "properties": {
+        "kind": {
+          "const": "start"
+        },
+        "artifact_id": {
+          "$ref": "#/$defs/positive_integer"
+        },
+        "archive_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "file_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,667 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:vilnacrm:poc-workload-step-receipt:v1",
+  "title": "Workload step receipt: one per admitted up-plan, success or failure",
+  "description": "Local shape only. Publication, issuer, run binding and checkpoint authenticity are established by the receipt library, never by this schema. Metadata only: no secret value, resource input or resource output appears. A success receipt records the projection inputs and program trees the scheduled path rebuilds from; a failed receipt names its cause.",
+  "$comment": "Draft 2020-12 pattern is applied with re.search, so '$' also matches before a trailing newline. Fixed-length fields pin minLength = maxLength; the S4.11 receipt library must re-check every variable-length field with re.fullmatch.",
+  "$defs": {
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "etag",
+        "sha256"
+      ],
+      "properties": {
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+          "not": {
+            "const": "null"
+          }
+        },
+        "etag": {
+          "type": "string",
+          "minLength": 34,
+          "maxLength": 34,
+          "pattern": "^\"[0-9a-f]{32}\"$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "git_object": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "operation_phase": {
+      "enum": [
+        "stop",
+        "hold",
+        "start"
+      ]
+    },
+    "positive_integer": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "resumed_operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "first",
+            "step2",
+            "rollback-zero",
+            "policy-update",
+            "rebuild-first"
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/operation_phase"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "rollback-zero"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "phase"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "phase"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "secret_arn": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^arn:aws:secretsmanager:eu-central-1:[0-9]{12}:secret:[A-Za-z0-9/_+=.@!-]+-[A-Za-z0-9]{6}$"
+    },
+    "secret_version": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9-]{32,64}$",
+          "not": {
+            "pattern": "^[0-9A-Fa-f]{64}$"
+          }
+        }
+      ]
+    },
+    "sha256": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "stack": {
+      "enum": [
+        "test",
+        "prod"
+      ]
+    },
+    "workload_operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "sequence"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "first",
+            "step2",
+            "resume",
+            "rollback-zero",
+            "policy-update",
+            "rebuild-first",
+            "recovery-import",
+            "recovery-abandon"
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/operation_phase"
+        },
+        "sequence": {
+          "$ref": "#/$defs/positive_integer"
+        },
+        "resumes": {
+          "$ref": "#/$defs/resumed_operation"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "rollback-zero"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "phase"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "phase"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "resume"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "resumes"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "resumes"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "secret_metadata": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 7,
+      "propertyNames": {
+        "enum": [
+          "app_secret",
+          "oauth_encryption_key",
+          "oauth_passphrase",
+          "two_factor_encryption_key",
+          "oauth_private_key",
+          "oauth_public_key",
+          "documentdb_primary"
+        ]
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "arn",
+          "version_id",
+          "kms_key_arn",
+          "owner"
+        ],
+        "properties": {
+          "arn": {
+            "$ref": "#/$defs/secret_arn"
+          },
+          "version_id": {
+            "$ref": "#/$defs/secret_version"
+          },
+          "kms_key_arn": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "minLength": 78,
+                "maxLength": 78,
+                "pattern": "^arn:aws:kms:eu-central-1:[0-9]{12}:key/[0-9a-f-]{36}$"
+              }
+            ]
+          },
+          "owner": {
+            "enum": [
+              "service-seeded",
+              "service-managed"
+            ]
+          }
+        }
+      }
+    },
+    "source_admission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_sha256",
+        "head_sha",
+        "base_sha",
+        "path",
+        "blob_sha",
+        "schema_sha256",
+        "validator_sha256"
+      ],
+      "properties": {
+        "contract_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "head_sha": {
+          "$ref": "#/$defs/git_object"
+        },
+        "base_sha": {
+          "$ref": "#/$defs/git_object"
+        },
+        "path": {
+          "enum": [
+            "specs/poc/poc-test.json",
+            "specs/poc/poc-prod.json"
+          ]
+        },
+        "blob_sha": {
+          "$ref": "#/$defs/git_object"
+        },
+        "schema_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "validator_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "image_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "uri",
+        "manifest_media_type",
+        "config_digest",
+        "config_size",
+        "platform"
+      ],
+      "properties": {
+        "uri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[0-9]{12}\\.dkr\\.ecr\\.eu-central-1\\.amazonaws\\.com/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$"
+        },
+        "manifest_media_type": {
+          "enum": [
+            "application/vnd.docker.distribution.manifest.v2+json",
+            "application/vnd.oci.image.manifest.v1+json"
+          ]
+        },
+        "config_digest": {
+          "type": "string",
+          "minLength": 71,
+          "maxLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "config_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "platform": {
+          "enum": [
+            "linux/amd64",
+            "linux/arm64"
+          ]
+        }
+      }
+    },
+    "certificate_observation": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "parameter_arn",
+            "parameter_version",
+            "certificate_arn"
+          ],
+          "properties": {
+            "parameter_arn": {
+              "type": "string",
+              "minLength": 98,
+              "maxLength": 98,
+              "pattern": "^arn:aws:ssm:eu-central-1:[0-9]{12}:parameter/vilnacrm/(?:test|prod)/user-service/gateway-certificate-arn$"
+            },
+            "parameter_version": {
+              "$ref": "#/$defs/positive_integer"
+            },
+            "certificate_arn": {
+              "type": "string",
+              "minLength": 86,
+              "maxLength": 86,
+              "pattern": "^arn:aws:acm:eu-central-1:[0-9]{12}:certificate/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          }
+        }
+      ]
+    },
+    "projection_inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "images",
+        "certificate"
+      ],
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/source_admission"
+        },
+        "images": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "web",
+            "worker"
+          ],
+          "properties": {
+            "web": {
+              "$ref": "#/$defs/image_row"
+            },
+            "worker": {
+              "$ref": "#/$defs/image_row"
+            }
+          }
+        },
+        "certificate": {
+          "$ref": "#/$defs/certificate_observation"
+        }
+      }
+    },
+    "program_trees": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scripts",
+        "pulumi",
+        "policy",
+        "schemas",
+        "pyproject.toml",
+        "uv.lock"
+      ],
+      "properties": {
+        "scripts": {
+          "$ref": "#/$defs/git_object"
+        },
+        "pulumi": {
+          "$ref": "#/$defs/git_object"
+        },
+        "policy": {
+          "$ref": "#/$defs/git_object"
+        },
+        "schemas": {
+          "$ref": "#/$defs/git_object"
+        },
+        "pyproject.toml": {
+          "$ref": "#/$defs/git_object"
+        },
+        "uv.lock": {
+          "$ref": "#/$defs/git_object"
+        }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "stack",
+    "workload_operation",
+    "outcome",
+    "checkpoint",
+    "run_id",
+    "run_attempt",
+    "source_sha",
+    "contract_digest",
+    "projection_digest",
+    "generated_files_digest",
+    "secret_metadata"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "poc-workload-step-receipt-v1"
+    },
+    "stack": {
+      "$ref": "#/$defs/stack"
+    },
+    "workload_operation": {
+      "$ref": "#/$defs/workload_operation"
+    },
+    "outcome": {
+      "enum": [
+        "success",
+        "failed"
+      ]
+    },
+    "cause": {
+      "enum": [
+        "apply",
+        "result-inspection"
+      ]
+    },
+    "checkpoint": {
+      "$ref": "#/$defs/checkpoint"
+    },
+    "run_id": {
+      "$ref": "#/$defs/positive_integer"
+    },
+    "run_attempt": {
+      "$ref": "#/$defs/positive_integer"
+    },
+    "source_sha": {
+      "$ref": "#/$defs/git_object"
+    },
+    "contract_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "projection_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "generated_files_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "secret_metadata": {
+      "$ref": "#/$defs/secret_metadata"
+    },
+    "projection_inputs": {
+      "$ref": "#/$defs/projection_inputs"
+    },
+    "program_trees": {
+      "$ref": "#/$defs/program_trees"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "stack": {
+            "const": "test"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "secret_metadata": {
+            "additionalProperties": {
+              "properties": {
+                "arn": {
+                  "pattern": "^arn:aws:secretsmanager:eu-central-1:891377212104:secret:"
+                },
+                "kms_key_arn": {
+                  "pattern": "^arn:aws:kms:eu-central-1:891377212104:key/"
+                }
+              }
+            }
+          },
+          "projection_inputs": {
+            "properties": {
+              "images": {
+                "properties": {
+                  "web": {
+                    "properties": {
+                      "uri": {
+                        "pattern": "^891377212104\\.dkr\\."
+                      }
+                    }
+                  },
+                  "worker": {
+                    "properties": {
+                      "uri": {
+                        "pattern": "^891377212104\\.dkr\\."
+                      }
+                    }
+                  }
+                }
+              },
+              "certificate": {
+                "properties": {
+                  "parameter_arn": {
+                    "const": "arn:aws:ssm:eu-central-1:891377212104:parameter/vilnacrm/test/user-service/gateway-certificate-arn"
+                  },
+                  "certificate_arn": {
+                    "pattern": "^arn:aws:acm:eu-central-1:891377212104:certificate/"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "stack": {
+            "const": "prod"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "secret_metadata": {
+            "additionalProperties": {
+              "properties": {
+                "arn": {
+                  "pattern": "^arn:aws:secretsmanager:eu-central-1:933245420672:secret:"
+                },
+                "kms_key_arn": {
+                  "pattern": "^arn:aws:kms:eu-central-1:933245420672:key/"
+                }
+              }
+            }
+          },
+          "projection_inputs": {
+            "properties": {
+              "images": {
+                "properties": {
+                  "web": {
+                    "properties": {
+                      "uri": {
+                        "pattern": "^933245420672\\.dkr\\."
+                      }
+                    }
+                  },
+                  "worker": {
+                    "properties": {
+                      "uri": {
+                        "pattern": "^933245420672\\.dkr\\."
+                      }
+                    }
+                  }
+                }
+              },
+              "certificate": {
+                "properties": {
+                  "parameter_arn": {
+                    "pattern": "^arn:aws:ssm:eu-central-1:933245420672:parameter/vilnacrm/prod/"
+                  },
+                  "certificate_arn": {
+                    "pattern": "^arn:aws:acm:eu-central-1:933245420672:certificate/"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "oneOf": [
+    {
+      "properties": {
+        "outcome": {
+          "const": "success"
+        }
+      },
+      "required": [
+        "projection_inputs",
+        "program_trees"
+      ],
+      "not": {
+        "required": [
+          "cause"
+        ]
+      }
+    },
+    {
+      "properties": {
+        "outcome": {
+          "const": "failed"
+        }
+      },
+      "required": [
+        "cause"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "projection_inputs"
+            ]
+          },
+          {
+            "required": [
+              "program_trees"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

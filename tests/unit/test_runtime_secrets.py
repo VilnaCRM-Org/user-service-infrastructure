@@ -17,6 +17,22 @@ from test_environment_component import (
 from test_poc_workload_phase import graph
 
 ROOT = Path(__file__).parents[2]
+SECRET_MATERIAL = ("random:", "tls:", "aws:secretsmanager/secretVersion:SecretVersion")
+# V-8 provider-source record (first case of S1.1). pulumi-aws 7.23.0 builds on
+# hashicorp/terraform-provider-aws v6.36.0 (upstream submodule commit
+# 4981ec2b44ea4892c1ee4f0c1ed23b761a55f44d); none of its 25 patches touches
+# internal/service/secretsmanager. Read paths at that commit:
+#   secret.go resourceSecretRead -> DescribeSecret, GetResourcePolicy
+#   secret_rotation.go resourceSecretRotationRead -> DescribeSecret
+#   secret_policy.go resourceSecretPolicyRead -> GetResourcePolicy
+# None of their create, read, update or delete paths calls GetSecretValue; only
+# secret_version.go does, which is why no SecretVersion may be declared (FR-09).
+V8_PROVIDER_VERSION = "7.23.0"
+V8_METADATA_READ_TYPES = {
+    "aws:secretsmanager/secret:Secret",
+    "aws:secretsmanager/secretRotation:SecretRotation",
+    "aws:secretsmanager/secretPolicy:SecretPolicy",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -330,3 +346,349 @@ def test_legacy_planes_reject_missing_material_before_registration(monkeypatch, 
     ):
         with pytest.raises(ValueError, match="requires application secrets"):
             plane("legacy", **arguments)
+
+
+def _hardened_contract():
+    return json.loads(
+        (
+            ROOT / "tests/fixtures/poc-contract/workload-hardened.synthetic.json"
+        ).read_text()
+    )
+
+
+def test_hardened_descriptor_reports_only_seeded_declarations(contract):
+    assert module.RuntimeSecretsDescriptor(contract).hardened is False
+    descriptor = module.RuntimeSecretsDescriptor(_hardened_contract())
+    assert descriptor.hardened is True
+    assert set(descriptor.references) == {
+        "app_secret",
+        "oauth_encryption_key",
+        "oauth_passphrase",
+        "two_factor_encryption_key",
+        "oauth_private_key",
+        "oauth_public_key",
+    }
+
+
+def test_v8_hardened_secret_types_are_read_by_metadata_only(tmp_path):
+    from poc_provider_runtime import PINS
+
+    assert {pin.name: pin.version for pin in PINS}["aws"] == V8_PROVIDER_VERSION
+    receipt = graph(tmp_path, "hardened")
+    assert receipt["error"] is None
+    managed = {
+        row["type"]
+        for row in receipt["registrations"].values()
+        if row["type"].startswith("aws:secretsmanager/")
+    }
+    assert managed and managed <= V8_METADATA_READ_TYPES
+
+
+def test_hardened_projection_renders_seeded_metadata_and_no_secret_material(tmp_path):
+    baseline, receipt = graph(tmp_path, "registry"), graph(tmp_path, "hardened")
+    assert baseline["error"] is receipt["error"] is None
+    rows = receipt["registrations"]
+    assert {name: rows[name] for name in baseline["registrations"]} == baseline[
+        "registrations"
+    ]
+    types = [row["type"] for row in rows.values()]
+    assert not [kind for kind in types if kind.startswith(SECRET_MATERIAL)]
+    assert not [kind for kind in types if kind.startswith("aws:iam/")]
+    assert "aws:lambda/function:Function" not in types
+    declarations = _hardened_contract()["workload"]["secret_lifecycle"]["references"]
+    secrets = {
+        name: row
+        for name, row in rows.items()
+        if row["type"] == "aws:secretsmanager/secret:Secret"
+    }
+    assert set(secrets) == {f"runtime-{purpose}" for purpose in declarations}
+    for purpose, declaration in declarations.items():
+        row = secrets[f"runtime-{purpose}"]
+        assert row["protect"] and row["additional_secret_outputs"] == []
+        assert row["inputs"]["name"] == declaration["name"]
+        assert row["inputs"]["kmsKeyId"] == declaration["kms_key_arn"]
+        assert set(row["inputs"]) == {"name", "kmsKeyId", "tags"}
+    component = rows["runtime-secrets"]["urn"]
+    assert receipt["outputs"][component]["versionIds"] == {}
+    assert set(receipt["outputs"][component]["secretArns"]) == set(declarations)
+    assert {"network", "messaging"} <= set(rows)
+    assert not {"data", "compute"} & set(rows)
+
+
+def test_pre_hardening_projection_keeps_its_generators_until_s4_10(tmp_path):
+    rows = graph(tmp_path, "bridge")["registrations"]
+    types = [row["type"] for row in rows.values()]
+    assert len([kind for kind in types if kind.startswith(("random:", "tls:"))]) == 7
+    assert types.count("aws:secretsmanager/secretVersion:SecretVersion") == 10
+    assert {"data", "compute"} <= set(rows)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "random-password",
+        "secret-version",
+        # N1 (F1): outside the runtime-secrets component, the stack-wide guard
+        # still refuses material parented to the stack or to no resource.
+        "stack:random-password",
+        "root:random-password",
+        "stack:secret-version",
+        "root:secret-version",
+    ],
+)
+def test_readding_secret_material_to_the_hardened_graph_fails(tmp_path, mutation):
+    receipt = graph(tmp_path, "hardened", mutation)
+    assert receipt["error"] == "Hardened workload graph must not hold secret material"
+    assert not [
+        name
+        for name, row in receipt["registrations"].items()
+        if row["type"].startswith(SECRET_MATERIAL)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("addition", "kind"),
+    [
+        ("ssm-parameter", "aws:ssm/parameter:Parameter"),
+        ("stack:ssm-parameter", "aws:ssm/parameter:Parameter"),
+        ("root:ssm-parameter", "aws:ssm/parameter:Parameter"),
+        # N1: a taggable data-plane type is not allowlisted before its story;
+        # a DocumentDB master password must never reach a hardened graph.
+        ("stack:docdb-cluster", "aws:docdb/cluster:Cluster"),
+        ("root:docdb-cluster", "aws:docdb/cluster:Cluster"),
+    ],
+)
+def test_unlisted_type_in_the_hardened_graph_fails(tmp_path, addition, kind):
+    """F3: the hardened graph is a closed allowlist, not a denylist."""
+    receipt = graph(tmp_path, "hardened", addition)
+    assert receipt["error"] == "Hardened workload graph holds an unreviewed type"
+    assert kind not in {row["type"] for row in receipt["registrations"].values()}
+
+
+@pytest.mark.parametrize("owner", ["", "stack:", "root:"])
+def test_byodkim_identity_in_the_hardened_graph_fails(tmp_path, owner):
+    """N1: an allowlisted SES identity may not carry a BYODKIM private key."""
+    receipt = graph(tmp_path, "hardened", f"{owner}byodkim-identity")
+    assert receipt["error"] == "Hardened workload graph holds an unreviewed property"
+    assert "fixture-identity" not in receipt["registrations"]
+
+
+def test_provider_function_in_the_hardened_program_fails(tmp_path):
+    """N2: the deny-all invoke guard refuses a provider read in a hardened run."""
+    receipt = graph(tmp_path, "hardened", "root:random-password-invoke")
+    assert (
+        receipt["error"] == "Hardened workload graph must not call a provider function"
+    )
+    # The same invoke passes without the hardened guard, so the guard refuses it.
+    assert graph(tmp_path, "bridge", "root:random-password-invoke")["error"] is None
+
+
+def test_hardened_inventory_has_no_version_references_or_derived_secrets():
+    resource = object.__new__(module.RuntimeSecrets)
+    resource.references = _hardened_contract()["workload"]["secret_lifecycle"][
+        "references"
+    ]
+    resource.secret_arns = dict.fromkeys(resource.references, "synthetic-arn")
+    resource.version_ids = {}
+    with pytest.raises(ValueError, match="incomplete"):
+        resource.ecs_secrets()
+    for purpose in sorted(module.DERIVED):
+        with pytest.raises(ValueError, match="invalid or duplicated"):
+            resource.persist_url(purpose, "synthetic")
+
+
+def test_hardened_guard_is_registered_stack_wide_with_the_engine(tmp_path):
+    """F1/N5: the engine transform reaches every hardened registration."""
+    hardened, bridge = graph(tmp_path, "hardened"), graph(tmp_path, "bridge")
+    assert (hardened["engine_transforms"], hardened["invoke_transforms"]) == (1, 1)
+    assert (bridge["engine_transforms"], bridge["invoke_transforms"]) == (0, 0)
+    assert bridge["engine_applied"] == []
+    # Only the root stack registers before the guard; the engine transform
+    # then runs exactly once on every other hardened registration.
+    registered = [
+        name
+        for name, row in hardened["registrations"].items()
+        if row["type"] != "pulumi:pulumi:Stack"
+    ]
+    assert sorted(hardened["engine_applied"]) == sorted(registered)
+    assert len(registered) == len(hardened["registrations"]) - 1
+
+
+@pytest.mark.parametrize(
+    ("kind", "message"),
+    [
+        ("random:index/randomPassword:RandomPassword", "secret material"),
+        ("tls:index/privateKey:PrivateKey", "secret material"),
+        ("aws:secretsmanager/secretVersion:SecretVersion", "secret material"),
+        ("aws:ssm/parameter:Parameter", "unreviewed type"),
+        ("awsx:ec2:Vpc", "unreviewed type"),
+        ("pulumi:providers:random", "unreviewed type"),
+    ],
+)
+def test_engine_transform_refuses_packaged_component_children(kind, message):
+    """A packaged component's child reaches only the engine-level transform."""
+    from app.workload_phase import _reject_secret_material
+
+    import pulumi
+
+    args = pulumi.ResourceTransformArgs(
+        custom=True, type_=kind, name="child", props={}, opts=pulumi.ResourceOptions()
+    )
+    with pytest.raises(ValueError, match=message):
+        _reject_secret_material(args)
+
+
+def test_hardened_allowlist_is_exactly_the_rendered_graph(tmp_path):
+    """F3/N1: the allowlist is the rendered set; TAGGABLE_TYPES only tags."""
+    from app.workload_phase import (
+        HARDENED_COMPONENT_TYPES,
+        HARDENED_TAGGED_TYPES,
+        HARDENED_TYPES,
+        HARDENED_UNTAGGED_TYPES,
+        TAGGABLE_TYPES,
+    )
+
+    rendered = {
+        row["type"] for row in graph(tmp_path, "hardened")["registrations"].values()
+    } - {"pulumi:pulumi:Stack"}
+    assert rendered == HARDENED_TYPES
+    assert (
+        len(HARDENED_TAGGED_TYPES),
+        len(HARDENED_UNTAGGED_TYPES),
+        len(HARDENED_COMPONENT_TYPES),
+    ) == (9, 4, 6)
+    assert HARDENED_TAGGED_TYPES < TAGGABLE_TYPES
+    assert not HARDENED_UNTAGGED_TYPES & TAGGABLE_TYPES
+    for kind in (
+        "aws:docdb/cluster:Cluster",
+        "aws:elasticache/replicationGroup:ReplicationGroup",
+        "aws:ecs/taskDefinition:TaskDefinition",
+    ):
+        assert kind in TAGGABLE_TYPES and kind not in HARDENED_TYPES
+    assert not [kind for kind in HARDENED_TYPES if kind.startswith(SECRET_MATERIAL)]
+
+
+EMAIL_IDENTITY = "aws:sesv2/emailIdentity:EmailIdentity"
+
+
+def _transform_args(engine, kind, props):
+    """Build the SDK (snake_case) or engine (camelCase) argument bag."""
+    import pulumi
+
+    if engine:
+        return pulumi.ResourceTransformArgs(
+            custom=True, type_=kind, name="probe", props=props, opts=None
+        )
+    return pulumi.ResourceTransformationArgs(
+        resource=None, type_=kind, name="probe", props=props, opts=None
+    )
+
+
+@pytest.mark.parametrize(
+    ("engine", "attributes", "accepted"),
+    [
+        (False, None, True),
+        (False, {"next_signing_key_length": "RSA_2048_BIT"}, True),
+        (True, {"nextSigningKeyLength": "RSA_2048_BIT"}, True),
+        (False, {"domain_signing_private_key": "synthetic"}, False),
+        (True, {"domainSigningPrivateKey": "synthetic"}, False),
+        (
+            False,
+            {
+                "next_signing_key_length": "RSA_2048_BIT",
+                "domain_signing_selector": "fixture",
+            },
+            False,
+        ),
+        (True, {"nextSigningKeyLength": "x", "domainSigningSelector": "x"}, False),
+        # An opaque value, such as an input type or an Output, fails closed.
+        (False, "opaque", False),
+        (True, ["nextSigningKeyLength"], False),
+    ],
+)
+def test_ses_identity_holds_only_the_easy_dkim_key_length(engine, attributes, accepted):
+    """N1: both the SDK and the engine path refuse a BYODKIM signing key."""
+    from app.workload_phase import _reject_secret_material
+
+    key = "dkimSigningAttributes" if engine else "dkim_signing_attributes"
+    props = {"emailIdentity": "fixture.example", key: attributes}
+    args = _transform_args(engine, EMAIL_IDENTITY, props)
+    if accepted:
+        assert _reject_secret_material(args) is None
+    else:
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _reject_secret_material(args)
+
+
+@pytest.mark.parametrize("engine", [False, True])
+def test_unrendered_data_and_compute_types_are_refused_on_both_paths(engine):
+    """N1: no master password, auth token or task environment before S1.3/S4.10."""
+    from app.workload_phase import _reject_secret_material
+
+    for kind, props in (
+        ("aws:docdb/cluster:Cluster", {"masterPassword": "synthetic"}),
+        ("aws:elasticache/replicationGroup:ReplicationGroup", {"authToken": "x"}),
+        ("aws:ecs/taskDefinition:TaskDefinition", {"containerDefinitions": "[]"}),
+    ):
+        with pytest.raises(ValueError, match="unreviewed type"):
+            _reject_secret_material(_transform_args(engine, kind, props))
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "aws:secretsmanager/getRandomPassword:getRandomPassword",
+        "aws:secretsmanager/getSecretVersion:getSecretVersion",
+        "aws:index/getCallerIdentity:getCallerIdentity",
+        "random:index/getRandom:getRandom",
+    ],
+)
+def test_invoke_guard_denies_every_provider_function(token):
+    """N2: the allowlist is empty, so every invoke token fails closed."""
+    from app.workload_phase import _reject_invoke
+
+    import pulumi
+
+    args = pulumi.InvokeTransformArgs(token=token, args={}, opts=pulumi.InvokeOptions())
+    with pytest.raises(ValueError, match="must not call a provider function"):
+        _reject_invoke(args)
+
+
+def test_hardened_modules_make_no_provider_function_call():
+    """N2: grep proof that the hardened program reads no provider data."""
+    import re
+
+    modules = [
+        *sorted((ROOT / "pulumi/app").glob("*.py")),
+        ROOT / "scripts/poc_workload_phase_entrypoint.py",
+    ]
+    calls = re.compile(
+        r"\b(?:aws|random|tls)\.(?:[a-z0-9_]+\.)*get_[a-z_]+\(|\binvoke\("
+    )
+    assert calls.search("aws.secretsmanager.get_random_password(password_length=8)")
+    assert calls.search("pulumi.runtime.invoke(token, {})")
+    assert not [str(path) for path in modules if calls.search(path.read_text())]
+
+
+def test_secret_lifecycle_spec_records_the_hardened_contract():
+    """F-4: the hardened section names its markers and the guard's real reach."""
+    text = (ROOT / "specs/poc/secret-lifecycle.md").read_text()
+    section = text[text.index("## Hardened (seeded) declarations") :]
+    for marker in (
+        "rotation-seed",
+        "validate_seed_input",
+        f"pulumi-aws {V8_PROVIDER_VERSION}",
+        "register_stack_transformation",
+        "register_resource_transform",
+        "runtime CMK",
+        "re.fullmatch",
+        "register_invoke_transform",
+        "dkimSigningAttributes",
+        "manageMasterUserPassword",
+        "pulumi.export",
+        "register_outputs",
+        "default-provider config",
+        "both `deleted` and `retain`",
+    ):
+        assert marker in section, marker
+    assert "a transformation fails the program" not in section

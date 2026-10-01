@@ -28,7 +28,11 @@ import pulumi  # noqa: E402
 
 root = Path(__file__).parent
 scenario = json.loads((root / "scenario.json").read_text())
-contract = json.loads((root / "contract.json").read_text())
+mode = scenario["mode"]
+hardened = mode.startswith("hardened")
+contract = json.loads(
+    (root / ("hardened-contract.json" if hardened else "contract.json")).read_text()
+)
 registries = {
     kind: {key: row[key] for key in ("logical_name", "name")}
     for kind, row in contract["registries"].items()
@@ -39,9 +43,71 @@ metadata = SimpleNamespace(
     owner="team-user-service",
     cost_center="core",
 )
-mode = scenario["mode"]
 if mode == "registry":
     RegistryPhaseStack(registries=registries)
+elif hardened:
+    # A workload_step contract renders the hardened composition (AD-25).
+    workload = WorkloadPhaseStack(
+        settings=resolve_stack_settings(metadata, generated_secrets=True),
+        registries=registries,
+        secrets=RuntimeSecretsDescriptor(contract),
+    )
+    # N1 (F1, F3): material or an unlisted type under any owner fails the program.
+    owner, _, kind = scenario.get("addition", ":").partition(":")
+    parent = {
+        "runtime-secrets": workload.runtime_secrets,
+        "stack": workload,
+        "root": None,
+    }.get(owner)
+    options = pulumi.ResourceOptions(parent=parent)
+    if kind == "random-password":
+        import pulumi_random as random
+
+        random.RandomPassword("fixture-material", length=16, opts=options)
+    if kind == "secret-version":
+        import pulumi_aws as aws
+
+        aws.secretsmanager.SecretVersion(
+            "fixture-version",
+            secret_id="synthetic",
+            secret_string="synthetic",
+            opts=options,
+        )
+    if kind == "ssm-parameter":
+        import pulumi_aws as aws
+
+        aws.ssm.Parameter(
+            "fixture-parameter", type="String", value="synthetic", opts=options
+        )
+    # N1: a credential-bearing data-plane type is refused before its story.
+    if kind == "docdb-cluster":
+        import pulumi_aws as aws
+
+        aws.docdb.Cluster(
+            "fixture-cluster",
+            master_username="synthetic",
+            master_password="synthetic-not-a-secret",
+            opts=options,
+        )
+    # N1: an allowlisted SES identity still refuses a BYODKIM private key.
+    if kind == "byodkim-identity":
+        import pulumi_aws as aws
+
+        aws.sesv2.EmailIdentity(
+            "fixture-identity",
+            email_identity="fixture.example",
+            dkim_signing_attributes={
+                # Base64 of "synthetic": a well-formed, non-secret key value.
+                "domain_signing_private_key": "c3ludGhldGlj",
+                "domain_signing_selector": "fixture",
+            },
+            opts=options,
+        )
+    # N2: the engine invoke guard refuses a provider function call.
+    if kind == "random-password-invoke":
+        import pulumi_aws as aws
+
+        aws.secretsmanager.get_random_password(password_length=16)
 elif mode == "legacy-workload":
     # The installed entrypoint stays metadata-only. Exercise the legacy managed
     # topology through this explicit integration-only program instead.

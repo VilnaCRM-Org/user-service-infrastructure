@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, ValidationError, validators
 
 SCHEMA_PATH = Path(__file__).parents[1] / "schemas" / "poc-test-v1.schema.json"
 MAX_BYTES = 131072
@@ -93,10 +93,34 @@ def load(path: Path) -> dict[str, Any]:
 
 
 def _shape(contract: dict[str, Any]) -> None:
+    # Schema ``pattern`` runs as ``re.search``: ``$`` also matches before a final
+    # newline. ``_hardened_semantics`` re-validates a ``workload_step`` contract
+    # with ``re.fullmatch`` patterns; the pre-hardening shape keeps ``re.search``
+    # (AD-25), and the S4.11 receipt library must re-check receipt fields.
     schema = json.loads(SCHEMA_PATH.read_text())
     validator = Draft202012Validator(schema)
     if next(validator.iter_errors(contract), None) is not None:
         raise ValueError("contract violates poc-test-v1 schema")
+
+
+def _fullmatch_pattern(_validator, pattern, instance, _schema):
+    """Apply a schema ``pattern`` to the whole string, as ECMA-262 ``$`` does."""
+    if type(instance) is str and re.fullmatch(pattern, instance) is None:
+        yield ValidationError("string does not fully match its schema pattern")
+
+
+# Every poc-test-v1 pattern is anchored with ``^`` and ``$``, so a full match
+# only adds the refusal of a trailing newline that ``re.search`` accepts.
+_FullmatchValidator = validators.extend(
+    Draft202012Validator, {"pattern": _fullmatch_pattern}
+)
+
+
+def _fullmatch_shape(contract: dict[str, Any]) -> None:
+    """Refuse any hardened string that only matches before a final newline (N3)."""
+    validator = _FullmatchValidator(json.loads(SCHEMA_PATH.read_text()))
+    if next(validator.iter_errors(contract), None) is not None:
+        raise ValueError("hardened contract strings must fully match the schema")
 
 
 def _mail_semantics(mail: dict[str, Any]) -> None:
@@ -179,12 +203,75 @@ def _workload_semantics(workload: dict[str, Any], registries: dict[str, Any]) ->
         raise ValueError("secret identities must be distinct")
 
 
+def _strict_integers(contract: dict[str, Any]) -> None:
+    """Reject JSON numbers such as ``1.0`` where the contract means an integer."""
+    scaling = contract["scaling"]
+    references = contract["workload"]["secret_lifecycle"]["references"]
+    values = [
+        contract["workload_step"],
+        contract["workload_operation"]["sequence"],
+        *(entry["seq"] for entry in [*scaling["starts"], *scaling["stops"]]),
+        *(
+            secret["rotation"]["schedule_days"]
+            for secret in references.values()
+            if type(secret["rotation"]) is dict
+        ),
+    ]
+    if any(type(value) is not int for value in values):
+        raise ValueError("hardened contract integers must be exact")
+
+
+def _scaling_semantics(scaling: dict[str, Any]) -> None:
+    """Keep one-time actions append-only and consumed names bound to entries."""
+    names = set()
+    for kind in ("start", "stop"):
+        sequence = [entry["seq"] for entry in scaling[kind + "s"]]
+        if sequence != sorted(set(sequence)):
+            raise ValueError("scaling entries must have strictly increasing seq")
+        names.update(f"{kind}-{seq}" for seq in sequence)
+    if not set(scaling["consumed"]) <= names:
+        raise ValueError("consumed scaling names must name declared entries")
+
+
+def _central_semantics(workload: dict[str, Any]) -> None:
+    """Bind secrets to reviewed central functions, distinct roles and the D-4 key.
+
+    D-4: one runtime CMK encrypts every declared secret; the JWT and 2FA CMKs
+    are separate keys. S1.9 extends this binding to the other runtime data.
+    """
+    central = workload["central"]
+    roles = [value for key, value in central.items() if key.endswith("_role_arn")]
+    if len(set(roles)) != len(roles):
+        raise ValueError("central role ARNs must be distinct")
+    keys = [key["arn"] for key in central["cmk"].values()]
+    if len(set(keys)) != len(keys):
+        raise ValueError("central CMK ARNs must be distinct")
+    functions = central["rotation_function_arns"]
+    for secret in workload["secret_lifecycle"]["references"].values():
+        if secret["kms_key_arn"] != central["cmk"]["runtime"]["arn"]:
+            raise ValueError("declared secret must use the runtime CMK")
+        rotation = secret["rotation"]
+        if type(rotation) is dict and rotation["function_ref"] not in functions:
+            raise ValueError("rotation function missing from central metadata")
+
+
+def _hardened_semantics(contract: dict[str, Any]) -> None:
+    """Check the seeded shape; it exists only with ``workload_step`` (AD-25)."""
+    if "workload_step" not in contract:
+        return
+    _fullmatch_shape(contract)
+    _strict_integers(contract)
+    _scaling_semantics(contract["scaling"])
+    _central_semantics(contract["workload"])
+
+
 def _semantics(contract: dict[str, Any]) -> None:
     """Apply registry semantics and workload-only semantic bindings."""
     registries = contract["registries"]
     _registry_semantics(registries)
     if contract["phase"] == "workload":
         _workload_semantics(contract["workload"], registries)
+        _hardened_semantics(contract)
 
 
 def _validate_document(contract: dict[str, Any]) -> None:
@@ -218,14 +305,20 @@ def _validate_transition(previous: dict[str, Any], contract: dict[str, Any]) -> 
             raise ValueError("stack or registry ownership changed")
     _registry_transition(previous, contract)
     if previous["phase"] == "workload":
-        before = previous["workload"]["secret_lifecycle"]["references"]
-        after = contract["workload"]["secret_lifecycle"]["references"]
-        for purpose, secret in before.items():
-            if secret["owner"] == "service-generated" and secret != after[purpose]:
-                raise ValueError(
-                    "generated secret rotation or replacement requires a separate "
-                    "contract"
-                )
+        _secret_transition(previous, contract)
+
+
+def _secret_transition(previous: dict[str, Any], contract: dict[str, Any]) -> None:
+    """Keep declared secrets immutable and never switch the generation model."""
+    if ("workload_step" in previous) != ("workload_step" in contract):
+        raise ValueError("secret generation model change requires a state migration")
+    before = previous["workload"]["secret_lifecycle"]["references"]
+    after = contract["workload"]["secret_lifecycle"]["references"]
+    for purpose, secret in before.items():
+        if after.get(purpose) != secret:
+            raise ValueError(
+                "generated secret rotation or replacement requires a separate contract"
+            )
 
 
 def validate(

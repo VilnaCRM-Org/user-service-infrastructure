@@ -152,6 +152,546 @@
           ]
         }
       }
+    },
+    "workload_role_arn": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^arn:aws:iam::891377212104:role/[A-Za-z0-9_+=,.@/-]+$"
+    },
+    "lambda_function_arn": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^arn:aws:lambda:eu-central-1:891377212104:function:[A-Za-z0-9_-]{1,64}$"
+    },
+    "function_ref": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$"
+    },
+    "cmk_key": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "arn",
+        "alias"
+      ],
+      "properties": {
+        "arn": {
+          "type": "string",
+          "minLength": 78,
+          "maxLength": 78,
+          "pattern": "^arn:aws:kms:eu-central-1:891377212104:key/[0-9a-f-]{36}$"
+        },
+        "alias": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 256,
+          "pattern": "^alias/[A-Za-z0-9/_-]+$"
+        }
+      }
+    },
+    "value_kind": {
+      "enum": [
+        "hex-256",
+        "base64-256",
+        "rsa-4096-private-pem",
+        "rsa-4096-public-pem"
+      ]
+    },
+    "rotation_function": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "function_ref",
+        "schedule_days"
+      ],
+      "properties": {
+        "function_ref": {
+          "$ref": "#/$defs/function_ref"
+        },
+        "schedule_days": {
+          "const": 90
+        }
+      }
+    },
+    "rotated_secret": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kms_key_arn",
+        "owner",
+        "rotation",
+        "value_kind"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 512,
+          "pattern": "^/user-service-infrastructure/runtime/test/[A-Za-z0-9/_+=.@-]+$"
+        },
+        "kms_key_arn": {
+          "type": "string",
+          "minLength": 78,
+          "maxLength": 78,
+          "pattern": "^arn:aws:kms:eu-central-1:891377212104:key/[0-9a-f-]{36}$"
+        },
+        "owner": {
+          "const": "service-seeded"
+        },
+        "value_kind": {
+          "$ref": "#/$defs/value_kind"
+        },
+        "rotation": {
+          "$ref": "#/$defs/rotation_function"
+        }
+      }
+    },
+    "interim_secret": {
+      "description": "A KMS-bound purpose kept declared until its KMS move; gate 1 rejects it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kms_key_arn",
+        "owner",
+        "rotation",
+        "value_kind"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 512,
+          "pattern": "^/user-service-infrastructure/runtime/test/[A-Za-z0-9/_+=.@-]+$"
+        },
+        "kms_key_arn": {
+          "type": "string",
+          "minLength": 78,
+          "maxLength": 78,
+          "pattern": "^arn:aws:kms:eu-central-1:891377212104:key/[0-9a-f-]{36}$"
+        },
+        "owner": {
+          "const": "service-seeded"
+        },
+        "value_kind": {
+          "$ref": "#/$defs/value_kind"
+        },
+        "rotation": {
+          "const": "non_rotatable"
+        }
+      }
+    },
+    "legacy_secret_lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner",
+        "namespace",
+        "generation",
+        "guard_amendment",
+        "provider_refresh_actions",
+        "review",
+        "references"
+      ],
+      "properties": {
+        "owner": {
+          "const": "service"
+        },
+        "namespace": {
+          "const": "/user-service-infrastructure/runtime/test/"
+        },
+        "generation": {
+          "const": "generate-once-persist-explicit-rotation"
+        },
+        "guard_amendment": {
+          "const": "pending-independent-reviewed-amendment"
+        },
+        "provider_refresh_actions": {
+          "const": [
+            "secretsmanager:GetSecretValue"
+          ]
+        },
+        "review": {
+          "$ref": "#/$defs/review"
+        },
+        "references": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "document_db_password",
+            "redis_auth_token",
+            "app_secret",
+            "oauth_encryption_key",
+            "oauth_passphrase",
+            "two_factor_encryption_key",
+            "oauth_private_key",
+            "oauth_public_key",
+            "document_db_url",
+            "redis_url"
+          ],
+          "properties": {
+            "document_db_password": {
+              "$ref": "#/$defs/secret"
+            },
+            "redis_auth_token": {
+              "$ref": "#/$defs/secret"
+            },
+            "app_secret": {
+              "$ref": "#/$defs/secret"
+            },
+            "oauth_encryption_key": {
+              "$ref": "#/$defs/secret"
+            },
+            "oauth_passphrase": {
+              "$ref": "#/$defs/secret"
+            },
+            "two_factor_encryption_key": {
+              "$ref": "#/$defs/secret"
+            },
+            "oauth_private_key": {
+              "$ref": "#/$defs/secret"
+            },
+            "oauth_public_key": {
+              "$ref": "#/$defs/secret"
+            },
+            "document_db_url": {
+              "$ref": "#/$defs/secret"
+            },
+            "redis_url": {
+              "$ref": "#/$defs/secret"
+            }
+          }
+        }
+      }
+    },
+    "hardened_secret_lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner",
+        "namespace",
+        "generation",
+        "guard_amendment",
+        "review",
+        "references"
+      ],
+      "properties": {
+        "owner": {
+          "const": "service"
+        },
+        "namespace": {
+          "const": "/user-service-infrastructure/runtime/test/"
+        },
+        "generation": {
+          "const": "rotation-seed"
+        },
+        "guard_amendment": {
+          "const": "pending-independent-reviewed-amendment"
+        },
+        "review": {
+          "$ref": "#/$defs/review"
+        },
+        "references": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "app_secret",
+            "oauth_encryption_key"
+          ],
+          "properties": {
+            "app_secret": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/rotated_secret"
+                },
+                {
+                  "properties": {
+                    "value_kind": {
+                      "const": "hex-256"
+                    }
+                  }
+                }
+              ]
+            },
+            "oauth_encryption_key": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/rotated_secret"
+                },
+                {
+                  "properties": {
+                    "value_kind": {
+                      "const": "hex-256"
+                    }
+                  }
+                }
+              ]
+            },
+            "oauth_passphrase": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/interim_secret"
+                },
+                {
+                  "properties": {
+                    "value_kind": {
+                      "const": "hex-256"
+                    }
+                  }
+                }
+              ]
+            },
+            "two_factor_encryption_key": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/interim_secret"
+                },
+                {
+                  "properties": {
+                    "value_kind": {
+                      "const": "base64-256"
+                    }
+                  }
+                }
+              ]
+            },
+            "oauth_private_key": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/interim_secret"
+                },
+                {
+                  "properties": {
+                    "value_kind": {
+                      "const": "rsa-4096-private-pem"
+                    }
+                  }
+                }
+              ]
+            },
+            "oauth_public_key": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/interim_secret"
+                },
+                {
+                  "properties": {
+                    "value_kind": {
+                      "const": "rsa-4096-public-pem"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "operation_phase": {
+      "enum": [
+        "stop",
+        "hold",
+        "start"
+      ]
+    },
+    "resumed_operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "first",
+            "step2",
+            "rollback-zero",
+            "policy-update",
+            "rebuild-first"
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/operation_phase"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "rollback-zero"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "phase"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "phase"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "workload_operation": {
+      "description": "Reviewed operation of this contract. Recovery modes come only from the recovery workflow.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "sequence"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "first",
+            "step2",
+            "resume",
+            "rollback-zero",
+            "policy-update",
+            "rebuild-first"
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/operation_phase"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "resumes": {
+          "$ref": "#/$defs/resumed_operation"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "rollback-zero"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "phase"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "phase"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "resume"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "resumes"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "resumes"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "scaling_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "seq",
+        "at"
+      ],
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 999999
+        },
+        "at": {
+          "description": "UTC time of the one-time action, rendered as at(<at>).",
+          "type": "string",
+          "pattern": "^20[0-9]{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$"
+        }
+      }
+    },
+    "scaling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "starts",
+        "stops",
+        "consumed"
+      ],
+      "properties": {
+        "starts": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/scaling_action"
+          }
+        },
+        "stops": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/scaling_action"
+          }
+        },
+        "consumed": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(?:start|stop)-[1-9][0-9]{0,5}$"
+          }
+        },
+        "scheduled_scaling_suspended": {
+          "description": "Persistent TEST-only hold flag; absent means false.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "admission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "test",
+        "prod"
+      ],
+      "properties": {
+        "test": {
+          "type": "boolean"
+        },
+        "prod": {
+          "enum": [
+            false,
+            "preview",
+            true
+          ]
+        }
+      }
     }
   },
   "type": "object",
@@ -388,6 +928,94 @@
               "minLength": 1,
               "maxLength": 512,
               "pattern": "^arn:aws:iam::891377212104:role/[A-Za-z0-9_+=,.@/-]+$"
+            },
+            "app_rotation_role_arn": {
+              "$ref": "#/$defs/workload_role_arn"
+            },
+            "redeploy_role_arn": {
+              "$ref": "#/$defs/workload_role_arn"
+            },
+            "bootstrap_job_role_arn": {
+              "$ref": "#/$defs/workload_role_arn"
+            },
+            "restore_operator_role_arn": {
+              "$ref": "#/$defs/workload_role_arn"
+            },
+            "restore_reader_role_arn": {
+              "$ref": "#/$defs/workload_role_arn"
+            },
+            "apply_role_arn": {
+              "$ref": "#/$defs/workload_role_arn"
+            },
+            "recovery_role_arn": {
+              "$ref": "#/$defs/workload_role_arn"
+            },
+            "exercise_role_arn": {
+              "$ref": "#/$defs/workload_role_arn"
+            },
+            "rotation_function_arns": {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 8,
+              "propertyNames": {
+                "$ref": "#/$defs/function_ref"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/lambda_function_arn"
+              }
+            },
+            "redeploy_function_arn": {
+              "$ref": "#/$defs/lambda_function_arn"
+            },
+            "cmk": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "runtime",
+                "jwt",
+                "two_factor"
+              ],
+              "properties": {
+                "runtime": {
+                  "$ref": "#/$defs/cmk_key"
+                },
+                "jwt": {
+                  "$ref": "#/$defs/cmk_key"
+                },
+                "two_factor": {
+                  "$ref": "#/$defs/cmk_key"
+                }
+              }
+            },
+            "lambda_network": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "subnet_ids",
+                "bootstrap_job_security_group_id"
+              ],
+              "properties": {
+                "subnet_ids": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 6,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^subnet-[0-9a-f]{8,17}$"
+                  }
+                },
+                "bootstrap_job_security_group_id": {
+                  "type": "string",
+                  "pattern": "^sg-[0-9a-f]{8,17}$"
+                }
+              }
+            },
+            "documentdb_managed_secret_arn": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^arn:aws:secretsmanager:eu-central-1:891377212104:secret:rds![A-Za-z0-9-]+-[A-Za-z0-9]{6}$"
             }
           }
         },
@@ -506,8 +1134,16 @@
                 "hosted_zone_id"
               ],
               "oneOf": [
-                {"required": ["certificate_arn"]},
-                {"required": ["certificate_parameter_name"]}
+                {
+                  "required": [
+                    "certificate_arn"
+                  ]
+                },
+                {
+                  "required": [
+                    "certificate_parameter_name"
+                  ]
+                }
               ],
               "properties": {
                 "fqdn": {
@@ -628,87 +1264,14 @@
           }
         },
         "secret_lifecycle": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "owner",
-            "namespace",
-            "generation",
-            "guard_amendment",
-            "provider_refresh_actions",
-            "review",
-            "references"
-          ],
-          "properties": {
-            "owner": {
-              "const": "service"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/legacy_secret_lifecycle"
             },
-            "namespace": {
-              "const": "/user-service-infrastructure/runtime/test/"
-            },
-            "generation": {
-              "const": "generate-once-persist-explicit-rotation"
-            },
-            "guard_amendment": {
-              "const": "pending-independent-reviewed-amendment"
-            },
-            "provider_refresh_actions": {
-              "const": [
-                "secretsmanager:GetSecretValue"
-              ]
-            },
-            "review": {
-              "$ref": "#/$defs/review"
-            },
-            "references": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "document_db_password",
-                "redis_auth_token",
-                "app_secret",
-                "oauth_encryption_key",
-                "oauth_passphrase",
-                "two_factor_encryption_key",
-                "oauth_private_key",
-                "oauth_public_key",
-                "document_db_url",
-                "redis_url"
-              ],
-              "properties": {
-                "document_db_password": {
-                  "$ref": "#/$defs/secret"
-                },
-                "redis_auth_token": {
-                  "$ref": "#/$defs/secret"
-                },
-                "app_secret": {
-                  "$ref": "#/$defs/secret"
-                },
-                "oauth_encryption_key": {
-                  "$ref": "#/$defs/secret"
-                },
-                "oauth_passphrase": {
-                  "$ref": "#/$defs/secret"
-                },
-                "two_factor_encryption_key": {
-                  "$ref": "#/$defs/secret"
-                },
-                "oauth_private_key": {
-                  "$ref": "#/$defs/secret"
-                },
-                "oauth_public_key": {
-                  "$ref": "#/$defs/secret"
-                },
-                "document_db_url": {
-                  "$ref": "#/$defs/secret"
-                },
-                "redis_url": {
-                  "$ref": "#/$defs/secret"
-                }
-              }
+            {
+              "$ref": "#/$defs/hardened_secret_lifecycle"
             }
-          }
+          ]
         },
         "service_components": {
           "const": [
@@ -816,6 +1379,29 @@
         "hosted_zone_name": "vilnacrmtest.com",
         "dkim": "easy-rsa-2048"
       }
+    },
+    "admission": {
+      "$ref": "#/$defs/admission"
+    },
+    "workload_step": {
+      "type": "integer",
+      "enum": [
+        1,
+        2
+      ]
+    },
+    "workload_operation": {
+      "$ref": "#/$defs/workload_operation"
+    },
+    "documentdb_secret_policy": {
+      "enum": [
+        "deny-other-readers",
+        "allow-rotation",
+        "tls-only"
+      ]
+    },
+    "scaling": {
+      "$ref": "#/$defs/scaling"
     }
   },
   "oneOf": [
@@ -847,6 +1433,176 @@
         "required": [
           "central"
         ]
+      }
+    }
+  ],
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "workload_step"
+        ]
+      },
+      "then": {
+        "required": [
+          "workload_operation",
+          "documentdb_secret_policy",
+          "scaling"
+        ],
+        "properties": {
+          "phase": {
+            "const": "workload"
+          },
+          "workload": {
+            "properties": {
+              "central": {
+                "required": [
+                  "app_rotation_role_arn",
+                  "redeploy_role_arn",
+                  "bootstrap_job_role_arn",
+                  "restore_operator_role_arn",
+                  "restore_reader_role_arn",
+                  "apply_role_arn",
+                  "recovery_role_arn",
+                  "exercise_role_arn",
+                  "rotation_function_arns",
+                  "redeploy_function_arn",
+                  "cmk"
+                ]
+              },
+              "secret_lifecycle": {
+                "$ref": "#/$defs/hardened_secret_lifecycle"
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "workload_operation"
+              ]
+            },
+            {
+              "required": [
+                "documentdb_secret_policy"
+              ]
+            },
+            {
+              "required": [
+                "scaling"
+              ]
+            }
+          ]
+        },
+        "properties": {
+          "workload": {
+            "properties": {
+              "central": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "app_rotation_role_arn"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "redeploy_role_arn"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "bootstrap_job_role_arn"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "restore_operator_role_arn"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "restore_reader_role_arn"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "apply_role_arn"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "recovery_role_arn"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "exercise_role_arn"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "rotation_function_arns"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "redeploy_function_arn"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "cmk"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "lambda_network"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "documentdb_managed_secret_arn"
+                      ]
+                    }
+                  ]
+                }
+              },
+              "secret_lifecycle": {
+                "$ref": "#/$defs/legacy_secret_lifecycle"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "workload_step"
+        ],
+        "properties": {
+          "workload_step": {
+            "const": 2
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "workload": {
+            "properties": {
+              "central": {
+                "required": [
+                  "lambda_network",
+                  "documentdb_managed_secret_arn"
+                ]
+              }
+            }
+          }
+        }
       }
     }
   ]

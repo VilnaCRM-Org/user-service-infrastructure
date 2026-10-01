@@ -1,0 +1,383 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:vilnacrm:poc-workload-abandon-receipt:v1",
+  "title": "Workload abandon receipt: TEST-only Kravalg-approved removal",
+  "description": "Local shape only. Publication, issuer, run binding and checkpoint authenticity are established by the receipt library, never by this schema. Metadata only: no secret value, resource input or resource output appears. TEST only. It binds the approved manifest, the deleted URNs and the retained resources a rebuild imports; a retained secret records only its ARN, current version ID and rotation state.",
+  "$comment": "Draft 2020-12 pattern is applied with re.search, so '$' also matches before a trailing newline. Fixed-length fields pin minLength = maxLength; the S4.11 receipt library must re-check every variable-length field with re.fullmatch.",
+  "$defs": {
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "etag",
+        "sha256"
+      ],
+      "properties": {
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+          "not": {
+            "const": "null"
+          }
+        },
+        "etag": {
+          "type": "string",
+          "minLength": 34,
+          "maxLength": 34,
+          "pattern": "^\"[0-9a-f]{32}\"$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "operation_phase": {
+      "enum": [
+        "stop",
+        "hold",
+        "start"
+      ]
+    },
+    "positive_integer": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "receipt_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_id",
+        "checkpoint_sha256"
+      ],
+      "properties": {
+        "receipt_id": {
+          "$ref": "#/$defs/positive_integer"
+        },
+        "checkpoint_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "resumed_operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "first",
+            "step2",
+            "rollback-zero",
+            "policy-update",
+            "rebuild-first"
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/operation_phase"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "rollback-zero"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "phase"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "phase"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "secret_arn": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^arn:aws:secretsmanager:eu-central-1:[0-9]{12}:secret:[A-Za-z0-9/_+=.@!-]+-[A-Za-z0-9]{6}$"
+    },
+    "secret_version": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9-]{32,64}$",
+          "not": {
+            "pattern": "^[0-9A-Fa-f]{64}$"
+          }
+        }
+      ]
+    },
+    "sha256": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "urn": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^urn:pulumi:(?:test|prod)::user-service-infrastructure::[A-Za-z0-9:/$._-]+::[A-Za-z0-9._-]+$"
+    },
+    "workload_operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "sequence"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "first",
+            "step2",
+            "resume",
+            "rollback-zero",
+            "policy-update",
+            "rebuild-first",
+            "recovery-import",
+            "recovery-abandon"
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/operation_phase"
+        },
+        "sequence": {
+          "$ref": "#/$defs/positive_integer"
+        },
+        "resumes": {
+          "$ref": "#/$defs/resumed_operation"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "rollback-zero"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "phase"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "phase"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "resume"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "resumes"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "resumes"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "retained_resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "urn",
+        "import_id"
+      ],
+      "properties": {
+        "urn": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/urn"
+            },
+            {
+              "pattern": "^urn:pulumi:test::"
+            }
+          ]
+        },
+        "import_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "secret": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "arn",
+            "version_id",
+            "rotation_enabled"
+          ],
+          "properties": {
+            "arn": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/secret_arn"
+                },
+                {
+                  "pattern": "^arn:aws:secretsmanager:eu-central-1:891377212104:secret:"
+                }
+              ]
+            },
+            "version_id": {
+              "$ref": "#/$defs/secret_version"
+            },
+            "rotation_enabled": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      "$comment": "A retained secret's import_id must equal its secret.arn. JSON Schema cannot compare sibling values, so this schema pins import_id to the TEST secret ARN shape and the S4.11 receipt library enforces the equality.",
+      "if": {
+        "required": [
+          "secret"
+        ]
+      },
+      "then": {
+        "properties": {
+          "import_id": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/secret_arn"
+              },
+              {
+                "pattern": "^arn:aws:secretsmanager:eu-central-1:891377212104:secret:"
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "stack",
+    "workload_operation",
+    "checkpoint",
+    "run_id",
+    "run_attempt",
+    "predecessor",
+    "manifest",
+    "deleted",
+    "retain"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "poc-workload-abandon-receipt-v1"
+    },
+    "stack": {
+      "const": "test"
+    },
+    "workload_operation": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/workload_operation"
+        },
+        {
+          "properties": {
+            "mode": {
+              "const": "recovery-abandon"
+            }
+          }
+        }
+      ]
+    },
+    "checkpoint": {
+      "$ref": "#/$defs/checkpoint"
+    },
+    "run_id": {
+      "$ref": "#/$defs/positive_integer"
+    },
+    "run_attempt": {
+      "$ref": "#/$defs/positive_integer"
+    },
+    "predecessor": {
+      "$ref": "#/$defs/receipt_reference"
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "approver"
+      ],
+      "properties": {
+        "path": {
+          "const": "recovery/abandon-manifest.json"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "approver": {
+          "const": "Kravalg"
+        }
+      }
+    },
+    "deleted": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 512,
+      "uniqueItems": true,
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/urn"
+          },
+          {
+            "pattern": "^urn:pulumi:test::"
+          }
+        ]
+      }
+    },
+    "retain": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/retained_resource"
+      }
+    }
+  }
+}

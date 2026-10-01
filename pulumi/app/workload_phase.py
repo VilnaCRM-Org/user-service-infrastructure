@@ -5,6 +5,10 @@ admitted settings and registry data. Only the protected workload runner reaches
 this class, and only for a ``workload`` phase contract; verified releases,
 secrets, capabilities and native transition acceptance remain separate
 prerequisites of that path.
+
+Transition rule (AD-25): only a projection with ``workload_step`` renders the
+hardened composition, which holds no generator and no ``SecretVersion``. The
+pre-hardening composition stays unchanged until the topology story removes it.
 """
 
 from __future__ import annotations
@@ -30,6 +34,8 @@ from app.runtime_secrets import RuntimeSecrets, RuntimeSecretsDescriptor
 
 # Closed taggable resource types used by the four installed workload planes.
 # SecretVersion, lifecycle policies and route associations do not accept tags.
+# This set selects what ``_tag_resource`` tags; it never admits a type to the
+# hardened graph, which ``HARDENED_TYPES`` alone decides.
 TAGGABLE_TYPES = frozenset(
     {
         "aws:cloudwatch/logGroup:LogGroup",
@@ -57,6 +63,71 @@ TAGGABLE_TYPES = frozenset(
         "aws:sqs/queue:Queue",
     }
 )
+# Secret material may never enter a hardened graph or its Pulumi state (FR-09).
+SECRET_MATERIAL_TYPES = (
+    "random:",
+    "tls:",
+    "aws:secretsmanager/secretVersion:SecretVersion",
+)
+# Closed allowlist of the hardened graph (F3, N1): exactly the types it renders
+# today. Any other type, including a packaged component, fails; widening it is
+# a reviewed change. When the data and compute planes rejoin (S1.3, S4.10),
+# that story adds their types here together with property checks in
+# ``HARDENED_PROPERTY_CHECKS``: DocumentDB ``manageMasterUserPassword`` true and
+# no ``masterPassword`` or ``masterPasswordWo``; no ElastiCache ``authToken``;
+# and TaskDefinition environment names disjoint from the secret names.
+HARDENED_TAGGED_TYPES = frozenset(
+    {
+        "aws:ec2/eip:Eip",
+        "aws:ec2/internetGateway:InternetGateway",
+        "aws:ec2/natGateway:NatGateway",
+        "aws:ec2/routeTable:RouteTable",
+        "aws:ec2/securityGroup:SecurityGroup",
+        "aws:ec2/subnet:Subnet",
+        "aws:ec2/vpc:Vpc",
+        "aws:secretsmanager/secret:Secret",
+        "aws:sqs/queue:Queue",
+    }
+)
+HARDENED_UNTAGGED_TYPES = frozenset(
+    {
+        "aws:ec2/routeTableAssociation:RouteTableAssociation",
+        "aws:ecr/repository:Repository",
+        "aws:route53/record:Record",
+        "aws:sesv2/emailIdentity:EmailIdentity",
+    }
+)
+HARDENED_COMPONENT_TYPES = frozenset(
+    {
+        "user-service-infrastructure:core:EnvironmentSettings",
+        "user-service-infrastructure:messaging:Plane",
+        "user-service-infrastructure:network:Plane",
+        "user-service-infrastructure:registry:Plane",
+        "user-service-infrastructure:secrets:Runtime",
+        "user-service-infrastructure:stack:UserService",
+    }
+)
+HARDENED_TYPES = (
+    HARDENED_TAGGED_TYPES | HARDENED_UNTAGGED_TYPES | HARDENED_COMPONENT_TYPES
+)
+# The SES identity may only choose its Easy DKIM key length. A BYODKIM
+# ``domainSigningPrivateKey`` (or selector) would put a private key in state.
+# The SDK transformation sees snake_case keys, the engine transform camelCase.
+EASY_DKIM_KEYS = frozenset({"next_signing_key_length", "nextSigningKeyLength"})
+
+
+def _easy_dkim_only(props) -> bool:
+    """Accept no DKIM attributes or a plain map of the key length alone."""
+    return all(
+        props.get(key) is None
+        or (type(props[key]) is dict and set(props[key]) <= EASY_DKIM_KEYS)
+        for key in ("dkim_signing_attributes", "dkimSigningAttributes")
+    )
+
+
+# Reviewed property checks for allowlisted types whose typed inputs could
+# carry secret material. Every other allowlisted type has no such input.
+HARDENED_PROPERTY_CHECKS = {"aws:sesv2/emailIdentity:EmailIdentity": _easy_dkim_only}
 
 
 def _merge_tags(existing, baseline: dict[str, str]) -> dict[str, str]:
@@ -67,6 +138,48 @@ def _merge_tags(existing, baseline: dict[str, str]) -> dict[str, str]:
     ):
         raise ValueError("Workload resource overrides preserved baseline tags")
     return {**existing, **baseline}
+
+
+def _reject_secret_material(
+    args: pulumi.ResourceTransformationArgs | pulumi.ResourceTransformArgs,
+) -> None:
+    """Fail closed before secret material or an unreviewed type joins the graph.
+
+    One check serves the SDK transformation and the engine transform alike;
+    both argument types carry ``type_`` and ``None`` keeps the resource as is.
+    """
+    if args.type_.startswith(SECRET_MATERIAL_TYPES):
+        raise ValueError("Hardened workload graph must not hold secret material")
+    if args.type_ not in HARDENED_TYPES:
+        raise ValueError("Hardened workload graph holds an unreviewed type")
+    check = HARDENED_PROPERTY_CHECKS.get(args.type_)
+    if check is not None and not check(args.props):
+        raise ValueError("Hardened workload graph holds an unreviewed property")
+    return None
+
+
+def _reject_invoke(_args: pulumi.InvokeTransformArgs) -> None:
+    """Fail closed on every provider function call (N2).
+
+    The invoke allowlist is empty: no hardened module calls a provider
+    function. A story that needs one adds a reviewed allowlist and its tests.
+    """
+    raise ValueError("Hardened workload graph must not call a provider function")
+
+
+def _guard_hardened_stack() -> None:
+    """Guard the whole stack before its first hardened resource (FR-09, F1).
+
+    The SDK stack transformation reaches every resource this program builds,
+    whatever its parent, including the registry owner and root resources. The
+    engine resource transform also reaches the children of a packaged
+    component, which no in-process transformation sees. The engine invoke
+    transform refuses every provider function call (N2). The component-level
+    transformation in ``_compose_hardened`` stays as a second layer.
+    """
+    pulumi.runtime.register_stack_transformation(_reject_secret_material)
+    pulumi.runtime.register_resource_transform(_reject_secret_material)
+    pulumi.runtime.register_invoke_transform(_reject_invoke)
 
 
 class WorkloadPhaseStack(RegistryPhaseStack):
@@ -88,8 +201,42 @@ class WorkloadPhaseStack(RegistryPhaseStack):
         if type(secrets) is not RuntimeSecretsDescriptor:
             raise ValueError("Workload composition requires a secret declaration")
         secrets.validate_target(settings)
+        if secrets.hardened:
+            _guard_hardened_stack()
         super().__init__(registries=registries)
         self.settings = settings
+        if secrets.hardened:
+            self._compose_hardened(settings, secrets)
+        else:
+            self._compose_pre_hardening(settings, secrets)
+        # Keep existing root/UserService outputs unchanged. New child components
+        # expose workload outputs; an authenticated result observer can read them.
+
+    def _compose_hardened(
+        self, settings: StackSettings, secrets: RuntimeSecretsDescriptor
+    ) -> None:
+        """Compose seeded secret metadata and the credential-free planes only.
+
+        The data and compute planes join this branch once they need no generated
+        credential; no workload phase can be admitted before that composition.
+        """
+        opts = pulumi.ResourceOptions(
+            parent=self,
+            transformations=[_reject_secret_material, self._tag_resource],
+        )
+        self.runtime_secrets = RuntimeSecrets(
+            "runtime-secrets", descriptor=secrets, opts=opts
+        )
+        self.network = NetworkPlane(
+            "network", settings=settings, private_gateway=True, opts=opts
+        )
+        self.messaging = MessagingPlane("messaging", settings=settings, opts=opts)
+        self.runtime_secrets.complete()
+
+    def _compose_pre_hardening(
+        self, settings: StackSettings, secrets: RuntimeSecretsDescriptor
+    ) -> None:
+        """Keep the installed composition, generators included, unchanged."""
         # No provider override: preserve the installed default AWS provider,
         # including the existing ECR provider links and canonical account pins.
         opts = pulumi.ResourceOptions(parent=self, transformations=[self._tag_resource])
@@ -118,8 +265,6 @@ class WorkloadPhaseStack(RegistryPhaseStack):
             runtime_secrets=self.runtime_secrets,
             opts=opts,
         )
-        # Keep existing root/UserService outputs unchanged. New child components
-        # expose workload outputs; an authenticated result observer can read them.
 
     @staticmethod
     def _validate_target(settings: StackSettings, registries: RegistryInputs) -> None:

@@ -1,7 +1,9 @@
-"""Hardened task environment: plain IAM URL and credential-free DSNs (S1.3).
+"""Hardened task environment: plain IAM URLs and credential-free DSNs.
 
-FR-02 (MONGODB_URL is a plain value), FR-03 and AD-20 (no DSN or environment
-value carries a key or userinfo) and S1.7 F6 (bare-ARN ``valueFrom``).
+FR-02 (MONGODB_URL is a plain value, S1.3), FR-04 (the Redis IAM values are
+plain, S1.4), FR-08 B (the lockout URL equals the Redis URL), FR-03 and AD-20
+(no DSN or environment value carries a key or userinfo) and S1.7 F6
+(bare-ARN ``valueFrom``).
 """
 
 import json
@@ -86,6 +88,60 @@ def test_hardened_graph_holds_no_url_secret(hardened):
     for container in _containers(hardened).values():
         secret_names = {row["name"] for row in container["secrets"]}
         assert not secret_names & {"MONGODB_URL", "REDIS_URL", "REDIS_LOCKOUT_URL"}
+
+
+REDIS_ENV = (
+    "REDIS_URL",
+    "REDIS_LOCKOUT_URL",
+    "REDIS_IAM_USER_ID",
+    "REDIS_REPLICATION_GROUP_ID",
+    "AWS_REGION",
+)
+
+
+def test_redis_iam_values_are_plain_environment_values(hardened):
+    """FR-04 P: a ``rediss://`` URL with no userinfo and the signer inputs."""
+    rows = hardened["registrations"]
+    group = rows["user-service-redis"]["inputs"]
+    app = rows["user-service-redis-app-user"]["inputs"]
+    for container in _containers(hardened).values():
+        environment = _environment(container)
+        parts = urlsplit(environment["REDIS_URL"])
+        assert parts.scheme == "rediss" and "@" not in parts.netloc
+        assert (parts.path, parts.query) == ("", "")
+        assert (parts.hostname, parts.port) == (
+            "master.user-service-infrastructure-test-redis.euc1.cache.amazonaws.com",
+            6379,
+        )
+        assert environment["REDIS_IAM_USER_ID"] == app["userId"] == app["userName"]
+        assert environment["REDIS_REPLICATION_GROUP_ID"] == (
+            group["replicationGroupId"].lower()
+        )
+        assert environment["AWS_REGION"] == "eu-central-1"
+        assert not set(REDIS_ENV) & {row["name"] for row in container["secrets"]}
+
+
+def test_the_lockout_url_equals_the_redis_url(hardened):
+    """FR-08 B (assigned to S1.4): ``REDIS_LOCKOUT_URL`` is ``REDIS_URL``."""
+    for container in _containers(hardened).values():
+        environment = _environment(container)
+        assert environment["REDIS_LOCKOUT_URL"] == environment["REDIS_URL"]
+
+
+@pytest.mark.parametrize(
+    "environment",
+    [
+        [
+            {"name": "REDIS_URL", "value": "rediss://a:6379"},
+            {"name": "REDIS_LOCKOUT_URL", "value": "rediss://b:6379"},
+        ],
+        [{"name": "REDIS_LOCKOUT_URL", "value": "rediss://a:6379"}],
+    ],
+)
+def test_a_lockout_url_that_differs_from_the_redis_url_raises(environment):
+    """FR-08 B: the plain lockout URL must equal the plain Redis URL."""
+    with pytest.raises(ValueError, match="REDIS_LOCKOUT_URL must equal"):
+        require_plain_environment(environment, [])
 
 
 def test_queue_and_mailer_dsns_are_credential_free_with_region(hardened):
@@ -196,6 +252,7 @@ def test_a_key_or_userinfo_in_a_dsn_raises(value, message):
         "sender@user.vilnacrmtest.com",
         "^https://user\\.vilnacrmtest\\.com$",
         "mongodb://host:27017/db?authSource=%24external&authMechanism=MONGODB-AWS",
+        "rediss://master.synthetic.euc1.cache.amazonaws.com:6379",
         "AKIA-not-a-key",
         "",
     ],
@@ -210,6 +267,9 @@ def test_credential_free_values_pass_unchanged(value):
         ([{"name": "APP_SECRET", "value": "x"}], [{"name": "APP_SECRET"}]),
         ([{"name": "A", "value": "x"}, {"name": "A", "value": "y"}], []),
         ([{"name": "MONGODB_URL", "value": "mongodb://u:p@h/db"}], []),
+        # FR-04 N: userinfo in REDIS_URL, or a Redis URL that is also a secret.
+        ([{"name": "REDIS_URL", "value": "rediss://:synthetic@h:6379"}], []),
+        ([{"name": "REDIS_URL", "value": "rediss://h:6379"}], [{"name": "REDIS_URL"}]),
     ],
 )
 def test_overlapping_or_credential_environment_raises(environment, secrets):

@@ -111,6 +111,14 @@ def _generated_outputs(args, values):
     return values
 
 
+def _redis_outputs(args, values):
+    """Report the primary endpoint ElastiCache derives from the group ID."""
+    if args.typ == "aws:elasticache/replicationGroup:ReplicationGroup":
+        group = args.inputs["replicationGroupId"].lower()
+        values["primaryEndpointAddress"] = f"master.{group}.euc1.cache.amazonaws.com"
+    return values
+
+
 def _workload_queue_outputs(args, resource_id, values):
     """Keep synthetic SQS identities in the contract's TEST account."""
     if args.typ != "aws:sqs/queue:Queue":
@@ -202,6 +210,10 @@ def _mutation_config(mutation):
         return {"documentDbEngineVersion": mutation.removeprefix("engine-")}
     if mutation == "password-config":
         return {"documentDbPassword": "synthetic-documentdb-password"}
+    if mutation.startswith("redis-engine-"):
+        return {"redisEngineVersion": mutation.removeprefix("redis-engine-")}
+    if mutation == "redis-token-config":
+        return {"redisAuthToken": "synthetic-redis-token"}
     return {}
 
 
@@ -282,11 +294,46 @@ def _fixture_builders(options):
             },
             opts=options,
         ),
+        # FR-04 N (D-1): an AUTH token, TLS disabled or ``preferred``, an IAM
+        # user whose name differs from its ID, or a declared Redis secret.
+        "redis-auth-token": lambda: _redis_group(aws, options, auth_token="x" * 16),
+        "redis-tls-disabled": lambda: _redis_group(
+            aws, options, transit_encryption_enabled=False
+        ),
+        "redis-tls-preferred": lambda: _redis_group(
+            aws, options, transit_encryption_mode="preferred"
+        ),
+        "redis-user-mismatch": lambda: aws.elasticache.User(
+            "fixture-user",
+            user_id="fixture-app",
+            user_name="fixture-other",
+            engine="redis",
+            access_string="on ~* +@all",
+            authentication_mode={"type": "iam"},
+            opts=options,
+        ),
+        "redis-secret": lambda: aws.secretsmanager.Secret(
+            "fixture-secret",
+            name="/user-service-infrastructure/runtime/test/redis_url",
+            opts=options,
+        ),
         # N2: a hardened program calls no provider function.
         "random-password-invoke": lambda: aws.secretsmanager.get_random_password(
             password_length=16
         ),
     }
+
+
+def _redis_group(aws, options, **changes):
+    """Register an otherwise reviewed IAM replication group with one change."""
+    arguments = {
+        "description": "fixture",
+        "transit_encryption_enabled": True,
+        "transit_encryption_mode": "required",
+        "user_group_ids": ["fixture-users"],
+        **changes,
+    }
+    return aws.elasticache.ReplicationGroup("fixture-redis", opts=options, **arguments)
 
 
 def _add_secret_material(stack, mutation):
@@ -445,7 +492,7 @@ def _probe(root, mode, mutation, coverage_path):
     class GeneratedMocks(SimpleMocks):
         def new_resource(self, args):
             resource_id, values = super().new_resource(args)
-            values = _generated_outputs(args, values)
+            values = _redis_outputs(args, _generated_outputs(args, values))
             resource_id = XP8_IDS.get(args.name, resource_id)
             return _workload_queue_outputs(args, resource_id, values)
 

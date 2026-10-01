@@ -24,7 +24,13 @@ import json
 
 import pulumi
 from app.compute import INITIAL_SERVICE_SCALE, ComputePlane, require_plain_environment
-from app.data import DOCUMENTDB_IAM_ENGINE_VERSION, DataPlane
+from app.data import (
+    DOCUMENTDB_IAM_ENGINE_VERSION,
+    REDIS_DEFAULT_ACCESS_STRING,
+    REDIS_DEFAULT_USER_NAME,
+    REDIS_TRANSIT_ENCRYPTION_MODE,
+    DataPlane,
+)
 from app.environment import (
     DEFAULT_COST_CENTER,
     DEFAULT_OWNER,
@@ -32,6 +38,7 @@ from app.environment import (
     _default_tags_from_parts,
     _normalize_tag_value,
     reject_documentdb_password_config,
+    reject_redis_auth_token_config,
     resolve_config_value,
     validate_health_check_runtime,
     validate_runtime_roles,
@@ -69,6 +76,8 @@ TAGGABLE_TYPES = frozenset(
         "aws:ecs/taskDefinition:TaskDefinition",
         "aws:elasticache/replicationGroup:ReplicationGroup",
         "aws:elasticache/subnetGroup:SubnetGroup",
+        "aws:elasticache/user:User",
+        "aws:elasticache/userGroup:UserGroup",
         "aws:lb/listener:Listener",
         "aws:lb/loadBalancer:LoadBalancer",
         "aws:lb/targetGroup:TargetGroup",
@@ -99,9 +108,8 @@ STEP_TWO_TYPES = frozenset(
 ELASTIC_DOCUMENTDB_TYPE = "aws:docdb/elasticCluster:ElasticCluster"
 # Closed allowlist of the hardened graph (F3, N1): exactly the types it renders
 # today. Any other type, including a packaged component, fails; widening it is
-# a reviewed change. S1.3 added the data and compute planes with the property
-# checks in ``HARDENED_PROPERTY_CHECKS``. Redis (and its ``authToken`` check)
-# joins with S1.4 (D-1).
+# a reviewed change. S1.3 added the data and compute planes and S1.4 the Redis
+# IAM types (D-1), each with the property checks in ``HARDENED_PROPERTY_CHECKS``.
 HARDENED_TAGGED_TYPES = frozenset(
     {
         "aws:cloudwatch/logGroup:LogGroup",
@@ -119,6 +127,10 @@ HARDENED_TAGGED_TYPES = frozenset(
         "aws:ecs/cluster:Cluster",
         "aws:ecs/service:Service",
         "aws:ecs/taskDefinition:TaskDefinition",
+        "aws:elasticache/replicationGroup:ReplicationGroup",
+        "aws:elasticache/subnetGroup:SubnetGroup",
+        "aws:elasticache/user:User",
+        "aws:elasticache/userGroup:UserGroup",
         "aws:lb/listener:Listener",
         "aws:lb/loadBalancer:LoadBalancer",
         "aws:lb/targetGroup:TargetGroup",
@@ -245,11 +257,83 @@ def _plain_task_environment(props) -> bool:
         return False
 
 
+def _iam_redis_group(props) -> bool:
+    """Accept only a TLS-required replication group with one user group (S1.4).
+
+    No ``authToken`` input may be present, ``transitEncryptionEnabled`` must be
+    literally true and ``transitEncryptionMode`` exactly ``required`` (D-1,
+    V-9); the IAM users reach the group through one ``userGroupIds`` entry.
+    """
+    groups = _either(props, "user_group_ids", "userGroupIds")
+    return (
+        _either(props, "auth_token", "authToken") is None
+        and _either(props, "transit_encryption_enabled", "transitEncryptionEnabled")
+        is True
+        and _either(props, "transit_encryption_mode", "transitEncryptionMode")
+        == REDIS_TRANSIT_ENCRYPTION_MODE
+        and type(groups) is list
+        and len(groups) == 1
+    )
+
+
+def _iam_app_user(props) -> bool:
+    """An IAM user's name must equal its ID and may not be ``default`` (V-9)."""
+    name = _either(props, "user_name", "userName")
+    return (
+        type(name) is str
+        and name == _either(props, "user_id", "userId")
+        and name != REDIS_DEFAULT_USER_NAME
+    )
+
+
+def _disabled_default_user(props) -> bool:
+    """The ``default`` user has exactly the reviewed ``off`` access string (V-5)."""
+    return (
+        _either(props, "user_name", "userName") == REDIS_DEFAULT_USER_NAME
+        and _either(props, "access_string", "accessString")
+        == REDIS_DEFAULT_ACCESS_STRING
+    )
+
+
+# Each accepted ElastiCache authentication type and the user shape it allows.
+REDIS_USER_SHAPES = {
+    "iam": _iam_app_user,
+    "no-password-required": _disabled_default_user,
+}
+
+
+def _redis_user(props) -> bool:
+    """Accept the IAM app user or the disabled ``default`` user only (AD-02).
+
+    No password input may be present, and the authentication mode must be a
+    plain map holding only ``type``. Any other type, such as ``password``,
+    fails closed.
+    """
+    mode = _either(props, "authentication_mode", "authenticationMode")
+    plain = type(mode) is dict and set(mode) == {"type"} and type(mode["type"]) is str
+    shape = REDIS_USER_SHAPES.get(mode["type"]) if plain else None
+    return (
+        props.get("passwords") is None
+        and _either(props, "no_password_required", "noPasswordRequired") is None
+        and shape is not None
+        and shape(props)
+    )
+
+
+def _not_a_redis_secret(props) -> bool:
+    """Refuse a declared Redis secret: Redis authenticates with IAM (D-1)."""
+    name = props.get("name")
+    return type(name) is str and "redis" not in name.lower()
+
+
 # Reviewed property checks for allowlisted types whose typed inputs could
 # carry secret material. Every other allowlisted type has no such input.
 HARDENED_PROPERTY_CHECKS = {
     "aws:docdb/cluster:Cluster": _managed_iam_documentdb,
     "aws:ecs/taskDefinition:TaskDefinition": _plain_task_environment,
+    "aws:elasticache/replicationGroup:ReplicationGroup": _iam_redis_group,
+    "aws:elasticache/user:User": _redis_user,
+    "aws:secretsmanager/secret:Secret": _not_a_redis_secret,
     "aws:sesv2/emailIdentity:EmailIdentity": _easy_dkim_only,
 }
 
@@ -340,8 +424,10 @@ class WorkloadPhaseStack(RegistryPhaseStack):
             raise ValueError("Workload composition requires a secret declaration")
         secrets.validate_target(settings)
         if secrets.hardened:
-            # Refuse a configured primary password before any registration.
+            # Refuse a configured primary password or Redis AUTH token before
+            # any registration.
             reject_documentdb_password_config()
+            reject_redis_auth_token_config()
             _guard_hardened_stack(secrets.workload_step)
         super().__init__(registries=registries)
         self.settings = settings
@@ -359,7 +445,8 @@ class WorkloadPhaseStack(RegistryPhaseStack):
 
         Every plane is credential-free: seeded secret metadata, the network
         with the bootstrap-job SG, DocumentDB with the managed password and the
-        plain MONGODB-AWS URL, the queues, and ECS services at zero tasks. A
+        plain MONGODB-AWS URL, Redis with IAM users and required TLS (S1.4),
+        the queues, and ECS services at zero tasks. A
         step-2 contract renders the same set until each step-2 story adds its
         resources; the guard refuses those types at step 1.
         """

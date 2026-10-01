@@ -338,6 +338,24 @@ def reject_documentdb_password_config() -> None:
             )
 
 
+REDIS_AUTH_TOKEN_CONFIG_KEYS: Final[tuple[str, ...]] = ("redisAuthToken",)
+
+
+def reject_redis_auth_token_config() -> None:
+    """Refuse a configured Redis AUTH token on the hardened path (S1.4, D-1).
+
+    The hardened replication group authenticates with IAM only, so a
+    configured token would be ignored silently; fail instead.
+    """
+    config = pulumi.Config()
+    for key in REDIS_AUTH_TOKEN_CONFIG_KEYS:
+        if config.get(key) is not None:
+            raise ValueError(
+                f"{key} must not be configured: the hardened Redis replication "
+                "group authenticates with IAM (D-1)."
+            )
+
+
 def _secret_value(
     config: pulumi.Config,
     key: str,

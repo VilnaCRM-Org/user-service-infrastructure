@@ -48,7 +48,8 @@ if mode == "registry":
 elif hardened:
     # A workload_step contract renders the hardened composition (AD-25). Since
     # S1.3 it composes the data and compute planes under the stack-wide guard;
-    # a documentDbPassword or engine version arrives only through stack config.
+    # a documentDbPassword or engine version arrives only through stack config,
+    # as do S1.4's redisAuthToken and Redis engine version.
     workload = WorkloadPhaseStack(
         settings=resolve_stack_settings(metadata, generated_secrets=True),
         registries=registries,
@@ -125,6 +126,33 @@ elif hardened:
             },
             opts=options,
         )
+    # FR-04 N (D-1): an AUTH token, TLS ``preferred`` or a name that differs
+    # from the IAM user's ID fails the Redis property checks.
+    if kind.startswith("redis-"):
+        import pulumi_aws as aws
+
+        if kind == "redis-user-mismatch":
+            aws.elasticache.User(
+                "fixture-user",
+                user_id="fixture-app",
+                user_name="fixture-other",
+                engine="redis",
+                access_string="on ~* +@all",
+                authentication_mode={"type": "iam"},
+                opts=options,
+            )
+        else:
+            aws.elasticache.ReplicationGroup(
+                "fixture-redis",
+                description="fixture",
+                transit_encryption_enabled=True,
+                transit_encryption_mode=(
+                    "preferred" if kind == "redis-tls-preferred" else "required"
+                ),
+                user_group_ids=["fixture-users"],
+                auth_token="x" * 16 if kind == "redis-auth-token" else None,
+                opts=options,
+            )
     # N2: the engine invoke guard refuses a provider function call.
     if kind == "random-password-invoke":
         import pulumi_aws as aws

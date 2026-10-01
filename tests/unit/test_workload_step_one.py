@@ -1,8 +1,10 @@
-"""Hardened step-1 composition (S1.3): guard checks, network, XP-8 exports.
+"""Hardened step-1 composition (S1.3, S1.4): guard checks, network, XP-8.
 
-FR-02 (V-17: DocumentDB 5.0.0 instance-based only), FR-34 (the step-1 graph
-holds no step-2 type and its services start at zero tasks) and XP-8 (the
-subnet IDs, the bootstrap-job SG ID and the managed secret ARN).
+FR-02 (V-17: DocumentDB 5.0.0 instance-based only), FR-04 (Redis IAM: TLS
+required, no ``auth_token``, IAM user with ``user_name == user_id``, disabled
+``default`` user, no Redis secret), FR-34 (the step-1 graph holds no step-2
+type and its services start at zero tasks) and XP-8 (the subnet IDs, the
+bootstrap-job SG ID and the managed secret ARN).
 """
 
 import json
@@ -23,6 +25,9 @@ from test_runtime_secrets import _transform_args
 ROOT = Path(__file__).parents[2]
 CLUSTER = "aws:docdb/cluster:Cluster"
 TASK = "aws:ecs/taskDefinition:TaskDefinition"
+REPLICATION_GROUP = "aws:elasticache/replicationGroup:ReplicationGroup"
+USER = "aws:elasticache/user:User"
+SECRET = "aws:secretsmanager/secret:Secret"
 SECRET_ARN = (
     "arn:aws:secretsmanager:eu-central-1:891377212104:secret:"
     "/user-service-infrastructure/runtime/test/synthetic-app_secret-AbCdEf"
@@ -154,9 +159,143 @@ def test_property_checks_cover_every_secret_bearing_rendered_type():
     assert set(HARDENED_PROPERTY_CHECKS) == {
         CLUSTER,
         TASK,
+        REPLICATION_GROUP,
+        USER,
+        SECRET,
         "aws:sesv2/emailIdentity:EmailIdentity",
     }
     assert set(HARDENED_PROPERTY_CHECKS) <= HARDENED_TYPES
+
+
+def _casing(engine, props):
+    """Rename snake_case keys to camelCase on the engine path."""
+    if not engine:
+        return props
+    return {
+        "".join(
+            part if index == 0 else part.title()
+            for index, part in enumerate(key.split("_"))
+        ): value
+        for key, value in props.items()
+    }
+
+
+def _redis_group(engine, **changes):
+    props = {
+        "transit_encryption_enabled": True,
+        "transit_encryption_mode": "required",
+        "user_group_ids": ["synthetic-users"],
+        **changes,
+    }
+    return _transform_args(engine, REPLICATION_GROUP, _casing(engine, props))
+
+
+@pytest.mark.parametrize("engine", [False, True])
+def test_the_iam_replication_group_passes_the_guard(engine):
+    assert _reject_secret_material(_redis_group(engine)) is None
+    assert _reject_secret_material(_redis_group(engine, auth_token=None)) is None
+
+
+@pytest.mark.parametrize("engine", [False, True])
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"auth_token": "synthetic-token"},
+        {"auth_token": ""},
+        {"transit_encryption_enabled": False},
+        {"transit_encryption_enabled": None},
+        {"transit_encryption_enabled": "true"},
+        {"transit_encryption_mode": "preferred"},
+        {"transit_encryption_mode": None},
+        {"transit_encryption_mode": "REQUIRED"},
+        {"user_group_ids": None},
+        {"user_group_ids": []},
+        {"user_group_ids": ["a", "b"]},
+        {"user_group_ids": "synthetic-users"},
+    ],
+)
+def test_the_replication_group_check_refuses_a_token_or_weak_tls(engine, change):
+    """FR-04 N: ``auth_token`` set, TLS disabled or ``preferred`` raises."""
+    with pytest.raises(ValueError, match="unreviewed property"):
+        _reject_secret_material(_redis_group(engine, **change))
+
+
+def _user(engine, **changes):
+    props = {
+        "user_id": "synthetic-app",
+        "user_name": "synthetic-app",
+        "access_string": "on ~* +@all -@dangerous",
+        "authentication_mode": {"type": "iam"},
+        **changes,
+    }
+    return _transform_args(engine, USER, _casing(engine, props))
+
+
+def _default_user(engine, **changes):
+    defaults = {
+        "user_id": "synthetic-default",
+        "user_name": "default",
+        "access_string": "off -@all",
+        "authentication_mode": {"type": "no-password-required"},
+    }
+    return _user(engine, **{**defaults, **changes})
+
+
+@pytest.mark.parametrize("engine", [False, True])
+def test_the_iam_app_user_and_the_disabled_default_user_pass(engine):
+    assert _reject_secret_material(_user(engine)) is None
+    assert _reject_secret_material(_default_user(engine)) is None
+    assert _reject_secret_material(_user(engine, passwords=None)) is None
+
+
+@pytest.mark.parametrize("engine", [False, True])
+@pytest.mark.parametrize(
+    "builder",
+    [
+        # FR-04 N (V-9): an IAM user whose name differs from its ID.
+        lambda engine: _user(engine, user_name="synthetic-other"),
+        lambda engine: _user(engine, user_name=None),
+        lambda engine: _user(engine, user_id="default", user_name="default"),
+        lambda engine: _user(engine, authentication_mode={"type": "password"}),
+        lambda engine: _user(
+            engine, authentication_mode={"type": "iam", "passwords": ["x" * 16]}
+        ),
+        lambda engine: _user(engine, authentication_mode="iam"),
+        lambda engine: _user(engine, authentication_mode={"type": ["iam"]}),
+        lambda engine: _user(engine, authentication_mode={"Type": "iam"}),
+        lambda engine: _user(engine, authentication_mode=None),
+        lambda engine: _user(engine, passwords=["x" * 16]),
+        lambda engine: _user(engine, no_password_required=True),
+        # V-5: the default user stays disabled with no password.
+        lambda engine: _default_user(engine, access_string="on ~* +@all"),
+        lambda engine: _default_user(engine, access_string="off -@all on"),
+        lambda engine: _default_user(engine, user_name="synthetic-default"),
+        lambda engine: _default_user(engine, passwords=["x" * 16]),
+    ],
+)
+def test_the_user_check_refuses_a_password_or_name_mismatch(engine, builder):
+    with pytest.raises(ValueError, match="unreviewed property"):
+        _reject_secret_material(builder(engine))
+
+
+@pytest.mark.parametrize("engine", [False, True])
+@pytest.mark.parametrize(
+    ("name", "accepted"),
+    [
+        ("/user-service-infrastructure/runtime/test/app_secret", True),
+        ("/user-service-infrastructure/runtime/test/redis_url", False),
+        ("/user-service-infrastructure/runtime/test/REDIS-auth-token", False),
+        (None, False),
+    ],
+)
+def test_a_declared_redis_secret_fails_the_guard(engine, name, accepted):
+    """FR-04 N (D-1): no Redis secret may be declared."""
+    args = _transform_args(engine, SECRET, {"name": name})
+    if accepted:
+        assert _reject_secret_material(args) is None
+    else:
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _reject_secret_material(args)
 
 
 def test_the_step_one_graph_holds_no_step_two_type(hardened):
@@ -293,9 +432,98 @@ def test_a_password_config_fails_the_hardened_composition_first(tmp_path):
     ]
 
 
+def _rows(receipt, kind):
+    return [row for row in receipt["registrations"].values() if row["type"] == kind]
+
+
+def test_the_step_one_graph_composes_redis_with_iam(hardened):
+    """FR-04 P (AD-02): users, group, TLS-required group, no token or secret."""
+    rows = hardened["registrations"]
+    (group,) = _rows(hardened, REPLICATION_GROUP)
+    (user_group,) = _rows(hardened, "aws:elasticache/userGroup:UserGroup")
+    users = {row["inputs"]["userName"]: row["inputs"] for row in _rows(hardened, USER)}
+    app = users["user-service-infrastructure-test-app"]
+    inputs = group["inputs"]
+    assert (inputs["transitEncryptionEnabled"], inputs["transitEncryptionMode"]) == (
+        True,
+        "required",
+    )
+    assert not [key for key in inputs if key.startswith("authToken")]
+    assert inputs["userGroupIds"] == [user_group["inputs"]["userGroupId"]]
+    assert app["authenticationMode"] == {"type": "iam"}
+    assert app["userId"] == app["userName"]
+    assert users["default"]["accessString"] == "off -@all"
+    assert users["default"]["authenticationMode"] == {"type": "no-password-required"}
+    assert user_group["inputs"]["userIds"] == [
+        users["default"]["userId"],
+        app["userId"],
+    ]
+    assert not [
+        row
+        for row in _rows(hardened, SECRET)
+        if "redis" in row["inputs"]["name"].lower()
+    ]
+    assert rows["user-service-redis"]["parent"] == rows["data"]["urn"]
+
+
+def test_the_redis_sg_admits_only_the_service_sg(hardened):
+    """FR-04: Redis ingress from the service SG only; no rotation SG exists."""
+    rows = hardened["registrations"]
+    groups = {
+        name for name, row in rows.items() if row["type"].endswith(":SecurityGroup")
+    }
+    assert groups == {
+        "user-service-alb-sg",
+        "user-service-service-sg",
+        "user-service-bootstrap-job-sg",
+        "user-service-documentdb-sg",
+        "user-service-redis-sg",
+        "user-service-vpc-link-sg",
+    }
+    assert rows["user-service-redis-sg"]["inputs"]["ingress"] == [
+        {
+            "protocol": "tcp",
+            "fromPort": 6379,
+            "toPort": 6379,
+            "securityGroups": [rows["user-service-service-sg"]["id"]],
+        }
+    ]
+
+
+def test_a_redis_auth_token_config_fails_the_hardened_composition_first(tmp_path):
+    """FR-04 N: the stack refuses ``redisAuthToken`` before any resource."""
+    receipt = graph(tmp_path, "hardened", "redis-token-config")
+    assert "redisAuthToken must not be configured" in receipt["error"]
+    assert "synthetic-redis-token" not in receipt["error"]
+    assert not [
+        row
+        for row in receipt["registrations"].values()
+        if row["type"].startswith("aws:")
+    ]
+
+
+def test_a_redis_engine_without_iam_fails_the_hardened_composition(tmp_path):
+    """N (V-9): Redis OSS 6.2 has no IAM auth; nothing ElastiCache registers."""
+    receipt = graph(tmp_path, "hardened", "redis-engine-6.2")
+    assert "V-9" in receipt["error"]
+    assert not [
+        row
+        for row in receipt["registrations"].values()
+        if row["type"].startswith(("aws:elasticache/", "aws:docdb/"))
+    ]
+
+
 @pytest.mark.parametrize(
     ("addition", "message"),
     [
+        ("root:redis-auth-token", "unreviewed property"),
+        ("stack:redis-auth-token", "unreviewed property"),
+        ("root:redis-tls-disabled", "unreviewed property"),
+        ("root:redis-tls-preferred", "unreviewed property"),
+        ("stack:redis-user-mismatch", "unreviewed property"),
+        ("root:redis-user-mismatch", "unreviewed property"),
+        (":redis-secret", "unreviewed property"),
+        ("root:redis-secret", "unreviewed property"),
         ("stack:docdb-cluster", "unreviewed property"),
         ("root:docdb-cluster", "unreviewed property"),
         ("root:docdb-cluster-4", "unreviewed property"),

@@ -296,7 +296,32 @@ def test_native_hardened_workload_renders_no_secret_material(native_stack):
     assert not [kind for kind in types if kind.startswith("aws:iam/")]
     assert not [kind for kind in types if kind.startswith(STEP_TWO)]
     assert "aws:lambda/function:Function" not in types
-    assert not [kind for kind in types if kind.startswith("aws:elasticache/")]
+    # S1.4 (FR-04, D-1): Redis IAM users, the group and a TLS-required group.
+    assert sorted(kind for kind in types if kind.startswith("aws:elasticache/")) == [
+        "aws:elasticache/replicationGroup:ReplicationGroup",
+        "aws:elasticache/subnetGroup:SubnetGroup",
+        "aws:elasticache/user:User",
+        "aws:elasticache/user:User",
+        "aws:elasticache/userGroup:UserGroup",
+    ]
+    (group,) = [
+        row
+        for row in actual.values()
+        if row.type == "aws:elasticache/replicationGroup:ReplicationGroup"
+    ]
+    inputs = group.new.inputs
+    assert inputs["transitEncryptionEnabled"] is True
+    assert inputs["transitEncryptionMode"] == "required"
+    assert not [key for key in inputs if key.startswith("authToken")]
+    assert len(inputs["userGroupIds"]) == 1
+    users = [row for row in actual.values() if row.type == "aws:elasticache/user:User"]
+    modes = {row.new.inputs["userName"]: row.new.inputs for row in users}
+    assert modes["default"]["accessString"] == "off -@all"
+    app = modes["user-service-infrastructure-test-app"]
+    # The provider's Check adds its ``__defaults`` marker to the nested input.
+    assert app["authenticationMode"]["type"] == "iam"
+    assert "passwords" not in app["authenticationMode"]
+    assert app["userId"] == app["userName"]
     services = [row for row in actual.values() if row.type == "aws:ecs/service:Service"]
     assert [row.new.inputs["desiredCount"] for row in services] == [0, 0]
     assert any(
@@ -354,9 +379,41 @@ def test_native_hardened_workload_rejects_a_non_iam_engine(native_stack):
     assert not [row for row in resources(events) if row.type.startswith("aws:docdb")]
 
 
+def test_native_hardened_workload_rejects_a_redis_auth_token_config(native_stack):
+    """FR-04 N: a configured Redis AUTH token fails before any registration."""
+    stack, work = native_stack
+    _hardened(stack, work)
+    synthetic = "synthetic-redis-token-do-not-echo"
+    stack.set_config("redisAuthToken", auto.ConfigValue(value=synthetic, secret=True))
+    events = []
+    with pytest.raises(AutomationRuntimeError) as failure:
+        stack.preview(on_event=events.append)
+    assert "redisAuthToken must not be configured" in str(failure.value)
+    assert synthetic not in str(failure.value)
+    assert not [row for row in resources(events) if row.type.startswith("aws:")]
+
+
+def test_native_hardened_workload_rejects_a_non_iam_redis_engine(native_stack):
+    """N (V-9): Redis OSS 6.2 has no IAM authentication."""
+    stack, work = native_stack
+    _hardened(stack, work)
+    stack.set_config("redisEngineVersion", auto.ConfigValue(value="6.2"))
+    events = []
+    with pytest.raises(AutomationRuntimeError) as failure:
+        stack.preview(on_event=events.append)
+    assert "V-9" in str(failure.value)
+    assert not [
+        row for row in resources(events) if row.type.startswith("aws:elasticache")
+    ]
+
+
 @pytest.mark.parametrize(
     ("addition", "message", "kind"),
     [
+        # FR-04 N (D-1): the Redis property checks on the engine path too.
+        ("root:redis-auth-token", "unreviewed property", None),
+        ("stack:redis-tls-preferred", "unreviewed property", None),
+        ("root:redis-user-mismatch", "unreviewed property", None),
         ("runtime-secrets:random-password", "must not hold secret material", None),
         # N1 (F1): outside the component, the stack-wide guard still applies.
         ("stack:random-password", "must not hold secret material", None),

@@ -132,6 +132,35 @@ def test_hardened_documentdb_url_and_engine_guards():
         _managed_secret_arn([])
 
 
+def test_hardened_redis_url_engine_and_lockout_guards():
+    """FR-04, V-9 and FR-08 B helpers the native preview reaches as unknowns."""
+    from app.compute import ComputePlane
+    from app.data import redis_iam_url, require_iam_redis_engine
+
+    assert redis_iam_url("master.synthetic", 6379) == "rediss://master.synthetic:6379"
+    with pytest.raises(ValueError, match="userinfo"):
+        redis_iam_url(":synthetic@master.synthetic", 6379)
+    assert require_iam_redis_engine("7.1") is None
+    with pytest.raises(ValueError, match="V-9"):
+        require_iam_redis_engine("6.2")
+    url = {"name": "REDIS_URL", "value": "rediss://a:6379"}
+    same = [url, {"name": "REDIS_LOCKOUT_URL", "value": "rediss://a:6379"}]
+    plain = [{"environment": same, "secrets": []}]
+    assert ComputePlane._serialize_container(plain) == json.dumps(plain)
+    with pytest.raises(ValueError, match="REDIS_LOCKOUT_URL must equal"):
+        ComputePlane._serialize_container(
+            [
+                {
+                    "environment": [
+                        url,
+                        {"name": "REDIS_LOCKOUT_URL", "value": "rediss://b:6379"},
+                    ],
+                    "secrets": [],
+                }
+            ]
+        )
+
+
 @pytest.mark.parametrize(
     ("value", "message"),
     [

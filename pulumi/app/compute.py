@@ -151,12 +151,18 @@ def require_plain_environment(
 
     Only ``secrets[].valueFrom`` may reference secret material; every plain
     value must be credential-free and no name may be both plain and secret.
+    A plain ``REDIS_LOCKOUT_URL`` must equal ``REDIS_URL`` (FR-08 B, S1.4).
     """
     names = [row["name"] for row in environment]
     if len(set(names)) != len(names) or set(names) & {row["name"] for row in secrets}:
         raise ValueError("Workload environment names overlap secret names")
     for row in environment:
         require_credential_free(row["value"])
+    values = {row["name"]: row["value"] for row in environment}
+    if "REDIS_LOCKOUT_URL" in values and (
+        values["REDIS_LOCKOUT_URL"] != values.get("REDIS_URL")
+    ):
+        raise ValueError("REDIS_LOCKOUT_URL must equal REDIS_URL (FR-08)")
 
 
 @dataclass(frozen=True)
@@ -519,11 +525,30 @@ class ComputePlane(pulumi.ComponentResource):
             return data.documentdb.instances
         return data.outputs.documentdb_instances
 
-    def _data_environment(self, data: DataPlane) -> list[dict[str, pulumi.Input[str]]]:
-        """Pass the hardened MONGODB-AWS URL as a plain value (FR-02, S1.3)."""
+    def _data_environment(
+        self, settings: StackSettings, data: DataPlane
+    ) -> list[dict[str, pulumi.Input[str]]]:
+        """Pass the hardened data-plane IAM values as plain env (S1.3, S1.4).
+
+        MONGODB-AWS (FR-02) and Redis IAM (FR-04): ``REDIS_URL`` and
+        ``REDIS_LOCKOUT_URL`` are the same credential-free ``rediss://`` URL;
+        the token signer needs the user ID, the lower-case replication-group
+        ID and the region.
+        """
         if not self._hardened:
             return []
-        return [{"name": "MONGODB_URL", "value": data.documentdb.mongodb_url}]
+        redis = data.redis
+        return [
+            {"name": "MONGODB_URL", "value": data.documentdb.mongodb_url},
+            {"name": "REDIS_URL", "value": redis.url},
+            {"name": "REDIS_LOCKOUT_URL", "value": redis.url},
+            {"name": "REDIS_IAM_USER_ID", "value": redis.iam_user_id},
+            {
+                "name": "REDIS_REPLICATION_GROUP_ID",
+                "value": redis.replication_group_id,
+            },
+            {"name": "AWS_REGION", "value": settings.region},
+        ]
 
     def _create_repository_lifecycle(
         self,
@@ -697,7 +722,7 @@ class ComputePlane(pulumi.ComponentResource):
                 include_worker_name=False,
             )
             + self._trusted_proxy_environment()
-            + self._data_environment(data),
+            + self._data_environment(settings, data),
             secrets=self._common_secrets(data, runtime_secret_arns),
             port_mappings=[
                 {
@@ -761,7 +786,7 @@ class ComputePlane(pulumi.ComponentResource):
                 messaging,
                 include_worker_name=True,
             )
-            + self._data_environment(data),
+            + self._data_environment(settings, data),
             secrets=self._common_secrets(data, runtime_secret_arns),
             port_mappings=None,
             writable_paths=WORKER_WRITABLE_PATHS,

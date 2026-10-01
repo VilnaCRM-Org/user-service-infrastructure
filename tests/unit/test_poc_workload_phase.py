@@ -47,6 +47,90 @@ XP8_IDS = {
 }
 
 
+# Synthetic ARN suffixes of the web load balancer and its target group.
+ARN_SUFFIX_TYPES = {
+    "aws:lb/loadBalancer:LoadBalancer": "app",
+    "aws:lb/targetGroup:TargetGroup": "targetgroup",
+}
+# Each one-time action time of the scaling variants below (UTC, ``at()``).
+AT = {
+    "start-1": "2026-10-02T08:00:00",
+    "stop-1": "2026-10-03T08:00:00",
+    "start-2": "2026-10-04T08:00:00",
+}
+
+
+def _entries(*names):
+    """Build the ``scaling.starts``/``scaling.stops`` lists of these entries."""
+    lists = {"starts": [], "stops": []}
+    for name in names:
+        kind, seq = name.split("-")
+        lists[kind + "s"].append({"seq": int(seq), "at": AT[name]})
+    return lists
+
+
+# Contract variants of the hardened probe (S2.1, FR-11 B1-B3): the step-2
+# operation, its one-time entries, consumed names and the hold flag.
+SCALING_VARIANTS = {
+    "step2": ({"mode": "step2", "sequence": 2}, ("start-1",), (), False),
+    "step2-stop": (
+        {"mode": "rollback-zero", "phase": "stop", "sequence": 3},
+        ("start-1", "stop-1"),
+        (),
+        False,
+    ),
+    "step2-hold": (
+        {"mode": "rollback-zero", "phase": "hold", "sequence": 4},
+        ("start-1", "stop-1"),
+        (),
+        True,
+    ),
+    "step2-policy-update": (
+        {"mode": "policy-update", "sequence": 5},
+        ("start-1", "stop-1"),
+        (),
+        True,
+    ),
+    "step2-restart": (
+        {"mode": "rollback-zero", "phase": "start", "sequence": 5},
+        ("start-1", "stop-1", "start-2"),
+        (),
+        False,
+    ),
+    "step2-moved": (
+        {"mode": "rollback-zero", "phase": "start", "sequence": 5},
+        ("start-1", "stop-1", "start-2"),
+        (),
+        False,
+    ),
+    "step2-consumed": (
+        {"mode": "rollback-zero", "phase": "start", "sequence": 5},
+        ("start-1", "stop-1", "start-2"),
+        ("start-1",),
+        False,
+    ),
+}
+
+
+def _scaling_variant(contract, mode, mutation):
+    """Apply one hardened step-2 variant; any other probe keeps its contract."""
+    if mode != "hardened" or mutation not in SCALING_VARIANTS:
+        return
+    operation, names, consumed, suspended = SCALING_VARIANTS[mutation]
+    from test_poc_contract_hardened import XP8
+
+    contract["workload_step"] = 2
+    contract["workload_operation"] = operation
+    contract["workload"]["central"].update(copy.deepcopy(XP8))
+    scaling = contract["scaling"]
+    scaling.update(_entries(*names), consumed=list(consumed))
+    if suspended:
+        scaling["scheduled_scaling_suspended"] = True
+    if mutation == "step2-moved":
+        # B2: an earlier entry's time changes (S4.9 admission refuses it).
+        scaling["starts"][0]["at"] = "2026-10-02T09:00:00"
+
+
 def _mutate(value, registries, mutation):
     if mutation == "type":
         return None
@@ -108,6 +192,13 @@ def _generated_outputs(args, values):
             values["masterUserSecrets"] = [
                 {"secretArn": MANAGED_SECRET_ARN, "secretStatus": "active"}
             ]
+    return values
+
+
+def _arn_suffix_outputs(args, values):
+    """The ALB request-count resource label joins both ARN suffixes (S2.1)."""
+    if args.typ in ARN_SUFFIX_TYPES:
+        values["arnSuffix"] = f"{ARN_SUFFIX_TYPES[args.typ]}/{args.name}/123"
     return values
 
 
@@ -543,6 +634,7 @@ def _probe(root, mode, mutation, coverage_path):
             str(root / "pulumi/app/data.py"),
             str(root / "pulumi/app/compute.py"),
             str(root / "pulumi/app/access_logs.py"),
+            str(root / "pulumi/app/autoscaling.py"),
             str(root / "pulumi/app/environment.py"),
             str(root / "scripts/poc_workload_phase_entrypoint.py"),
         ],
@@ -576,6 +668,7 @@ def _probe(root, mode, mutation, coverage_path):
                 "dependencies": list(request.dependencies),
                 "version": request.version,
                 "additional_secret_outputs": list(request.additionalSecretOutputs),
+                "ignore_changes": list(request.ignoreChanges),
                 "custom_timeouts": {
                     key: getattr(request.customTimeouts, key)
                     for key in ("create", "update", "delete")
@@ -597,6 +690,7 @@ def _probe(root, mode, mutation, coverage_path):
         def new_resource(self, args):
             resource_id, values = super().new_resource(args)
             values = _redis_outputs(args, _generated_outputs(args, values))
+            values = _arn_suffix_outputs(args, values)
             resource_id = XP8_IDS.get(args.name, resource_id)
             return _workload_queue_outputs(args, resource_id, values)
 
@@ -672,6 +766,7 @@ def _probe(root, mode, mutation, coverage_path):
         contract = _fixture_contract(
             root, config, {"hardened": "workload-hardened"}.get(mode, "workload")
         )
+        _scaling_variant(contract, mode, mutation)
         if mode in {"bridge", "generated-child", "hardened"}:
             _bridge(
                 contract,

@@ -634,15 +634,132 @@
         }
       }
     },
+    "capacity_count": {
+      "description": "ECS task count; 5000 is the ECS tasks-per-service quota.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5000
+    },
+    "cooldown_seconds": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "web_capacity": {
+      "description": "D-16 web capacity and target tracking (FR-11, AD-10).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "min_capacity",
+        "max_capacity",
+        "target_tracking"
+      ],
+      "properties": {
+        "min_capacity": {
+          "$ref": "#/$defs/capacity_count"
+        },
+        "max_capacity": {
+          "$ref": "#/$defs/capacity_count"
+        },
+        "target_tracking": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cpu_utilization_percent",
+            "alb_request_count_per_target",
+            "scale_out_cooldown_seconds",
+            "scale_in_cooldown_seconds"
+          ],
+          "properties": {
+            "cpu_utilization_percent": {
+              "description": "ECSServiceAverageCPUUtilization target.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "alb_request_count_per_target": {
+              "description": "ALBRequestCountPerTarget target, requests per target per minute.",
+              "type": "integer",
+              "minimum": 1
+            },
+            "scale_out_cooldown_seconds": {
+              "$ref": "#/$defs/cooldown_seconds"
+            },
+            "scale_in_cooldown_seconds": {
+              "$ref": "#/$defs/cooldown_seconds"
+            }
+          }
+        }
+      }
+    },
+    "worker_capacity": {
+      "description": "D-16 worker capacity and backlog target (FR-12; S2.2 renders the policy).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "min_capacity",
+        "max_capacity",
+        "backlog"
+      ],
+      "properties": {
+        "min_capacity": {
+          "$ref": "#/$defs/capacity_count"
+        },
+        "max_capacity": {
+          "$ref": "#/$defs/capacity_count"
+        },
+        "backlog": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "visible_messages_per_task",
+            "scale_out_cooldown_seconds",
+            "scale_in_cooldown_seconds"
+          ],
+          "properties": {
+            "visible_messages_per_task": {
+              "description": "Visible messages per running task over the work queues.",
+              "type": "integer",
+              "minimum": 1
+            },
+            "scale_out_cooldown_seconds": {
+              "$ref": "#/$defs/cooldown_seconds"
+            },
+            "scale_in_cooldown_seconds": {
+              "$ref": "#/$defs/cooldown_seconds"
+            }
+          }
+        }
+      }
+    },
+    "scaling_capacity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "web",
+        "worker"
+      ],
+      "properties": {
+        "web": {
+          "$ref": "#/$defs/web_capacity"
+        },
+        "worker": {
+          "$ref": "#/$defs/worker_capacity"
+        }
+      }
+    },
     "scaling": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "starts",
         "stops",
-        "consumed"
+        "consumed",
+        "capacity"
       ],
       "properties": {
+        "capacity": {
+          "$ref": "#/$defs/scaling_capacity"
+        },
         "starts": {
           "type": "array",
           "maxItems": 64,

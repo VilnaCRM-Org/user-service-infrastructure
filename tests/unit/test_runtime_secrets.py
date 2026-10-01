@@ -659,21 +659,28 @@ def test_hardened_allowlist_is_exactly_the_rendered_graph(tmp_path):
         HARDENED_TAGGED_TYPES,
         HARDENED_TYPES,
         HARDENED_UNTAGGED_TYPES,
+        STEP_TWO_TYPES,
         TAGGABLE_TYPES,
     )
 
-    rendered = {
-        row["type"] for row in graph(tmp_path, "hardened")["registrations"].values()
-    } - {"pulumi:pulumi:Stack"}
-    assert rendered == HARDENED_TYPES
+    def rendered(mutation):
+        rows = graph(tmp_path, "hardened", mutation)["registrations"].values()
+        return {row["type"] for row in rows} - {"pulumi:pulumi:Stack"}
+
+    # The step-2 graph renders every allowlisted type; step 1 renders all but
+    # the step-2 types (FR-34), which the guard refuses there.
+    assert rendered("step2") == HARDENED_TYPES
+    assert rendered("none") == HARDENED_TYPES - STEP_TWO_TYPES
     # S1.3 added the data and compute planes: 12 tagged, 7 untagged and 3
     # component types over S1.1's (9, 4, 6). S1.4 adds the four ElastiCache
     # types: the replication group, its subnet group, the users and the group.
+    # S2.1 adds the tagged scalable target, the untagged policy and scheduled
+    # action, and the autoscaling component.
     assert (
         len(HARDENED_TAGGED_TYPES),
         len(HARDENED_UNTAGGED_TYPES),
         len(HARDENED_COMPONENT_TYPES),
-    ) == (25, 11, 9)
+    ) == (26, 13, 10)
     assert {kind for kind in HARDENED_TYPES if kind.startswith("aws:elasticache/")} == {
         "aws:elasticache/replicationGroup:ReplicationGroup",
         "aws:elasticache/subnetGroup:SubnetGroup",

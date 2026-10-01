@@ -205,6 +205,7 @@ def test_reviewed_operations_carry_their_phase_or_resumed_operation(operation):
     contract = step_two()
     contract["workload_operation"] = operation
     contract["scaling"] = {
+        **contract["scaling"],
         "starts": [{"seq": 1, "at": "2026-10-02T08:00:00"}],
         "stops": [{"seq": 1, "at": "2026-10-03T08:00:00"}],
         "consumed": ["start-1"],
@@ -436,6 +437,7 @@ def test_hardened_string_fields_refuse_a_trailing_newline(path):
     contract = step_two() if kind else hardened()
     if kind == "scaled":
         contract["scaling"] = {
+            **contract["scaling"],
             "starts": [{"seq": 1, "at": "2026-10-02T08:00:00"}],
             "stops": [],
             "consumed": ["start-1"],

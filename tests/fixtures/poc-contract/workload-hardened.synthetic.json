@@ -32,7 +32,28 @@
   "scaling": {
     "starts": [],
     "stops": [],
-    "consumed": []
+    "consumed": [],
+    "capacity": {
+      "web": {
+        "min_capacity": 1,
+        "max_capacity": 2,
+        "target_tracking": {
+          "cpu_utilization_percent": 60,
+          "alb_request_count_per_target": 1000,
+          "scale_out_cooldown_seconds": 60,
+          "scale_in_cooldown_seconds": 300
+        }
+      },
+      "worker": {
+        "min_capacity": 1,
+        "max_capacity": 2,
+        "backlog": {
+          "visible_messages_per_task": 100,
+          "scale_out_cooldown_seconds": 60,
+          "scale_in_cooldown_seconds": 300
+        }
+      }
+    }
   },
   "registries": {
     "web": {

@@ -203,6 +203,16 @@ def _workload_semantics(workload: dict[str, Any], registries: dict[str, Any]) ->
         raise ValueError("secret identities must be distinct")
 
 
+def _capacity_integers(capacity: dict[str, Any]) -> list[Any]:
+    """Return every D-16 count, target and cooldown of the capacity block."""
+    web, worker = capacity["web"], capacity["worker"]
+    return [
+        *(capacity[service][key] for service in SCALED_SERVICES for key in BOUNDS),
+        *web["target_tracking"].values(),
+        *worker["backlog"].values(),
+    ]
+
+
 def _strict_integers(contract: dict[str, Any]) -> None:
     """Reject JSON numbers such as ``1.0`` where the contract means an integer."""
     scaling = contract["scaling"]
@@ -211,6 +221,7 @@ def _strict_integers(contract: dict[str, Any]) -> None:
         contract["workload_step"],
         contract["workload_operation"]["sequence"],
         *(entry["seq"] for entry in [*scaling["starts"], *scaling["stops"]]),
+        *_capacity_integers(scaling["capacity"]),
         *(
             secret["rotation"]["schedule_days"]
             for secret in references.values()
@@ -219,6 +230,29 @@ def _strict_integers(contract: dict[str, Any]) -> None:
     ]
     if any(type(value) is not int for value in values):
         raise ValueError("hardened contract integers must be exact")
+
+
+# The ECS services the scalable targets name (AD-10) and their capacity bounds.
+SCALED_SERVICES = ("web", "worker")
+BOUNDS = ("min_capacity", "max_capacity")
+# D-16: a PROD minimum of 2 keeps one task per AZ.
+PROD_MIN_CAPACITY = 2
+
+
+def _capacity_semantics(capacity: dict[str, Any], environment: str) -> None:
+    """Bind each service's bounds: ``1 <= min <= max``, PROD ``min >= 2`` (D-16).
+
+    FR-11: a minimum below 1 or above the maximum raises. The PROD contract
+    schema is S4.14's; this check takes the environment so it serves both.
+    """
+    for service in SCALED_SERVICES:
+        minimum, maximum = (capacity[service][key] for key in BOUNDS)
+        if minimum < 1:
+            raise ValueError("scaling capacity minimum must be at least 1")
+        if minimum > maximum:
+            raise ValueError("scaling capacity minimum must not exceed its maximum")
+        if environment == "prod" and minimum < PROD_MIN_CAPACITY:
+            raise ValueError("PROD scaling capacity minimum must be at least 2")
 
 
 def _scaling_semantics(scaling: dict[str, Any]) -> None:
@@ -262,6 +296,7 @@ def _hardened_semantics(contract: dict[str, Any]) -> None:
     _fullmatch_shape(contract)
     _strict_integers(contract)
     _scaling_semantics(contract["scaling"])
+    _capacity_semantics(contract["scaling"]["capacity"], contract["environment"])
     _central_semantics(contract["workload"])
 
 
@@ -306,6 +341,28 @@ def _validate_transition(previous: dict[str, Any], contract: dict[str, Any]) -> 
     _registry_transition(previous, contract)
     if previous["phase"] == "workload":
         _secret_transition(previous, contract)
+        _scaling_transition(previous, contract)
+
+
+def _target_state(scaling: dict[str, Any]) -> tuple[Any, bool]:
+    """Return what renders the scalable targets: capacity and the hold flag."""
+    return scaling["capacity"], scaling.get("scheduled_scaling_suspended", False)
+
+
+def _scaling_transition(previous: dict[str, Any], contract: dict[str, Any]) -> None:
+    """Refuse a new stop entry in a plan that also changes the target (N, AD-10).
+
+    Suspending scheduled scaling also blocks one-time actions, so the stop and
+    the hold are two plans: a contract that appends a ``scaling.stops`` entry
+    keeps the capacity and the ``scheduled_scaling_suspended`` flag unchanged.
+    """
+    if "workload_step" not in contract:
+        return
+    before, after = previous["scaling"], contract["scaling"]
+    stops = {entry["seq"] for entry in before["stops"]}
+    appended = any(entry["seq"] not in stops for entry in after["stops"])
+    if appended and _target_state(before) != _target_state(after):
+        raise ValueError("a stop plan must not change the scalable target")
 
 
 def _secret_transition(previous: dict[str, Any], contract: dict[str, Any]) -> None:

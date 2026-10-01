@@ -14,7 +14,9 @@ Two-step first workload (FR-34, AD-18): step 1 renders the network, data,
 secret metadata and ECS services at zero tasks; no step-2 type (seed, rotation,
 secret policy, autoscaling or scheduled action) may join it. Step 2 adds only
 those types, each with its own story (S1.5, S1.6, S2.1, S2.2, S2.6); its
-create-only admission is S4.9. After step 1 the XP-8 values are exported.
+create-only admission is S4.9. After step 1 the XP-8 values are exported. S2.1
+adds the autoscaling plane: the scalable targets, the web target-tracking
+policies and the one-time start and stop actions (AD-10).
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from pulumi.output import Unknown
 from pulumi.runtime.rpc import is_rpc_secret
 
 import pulumi
+from app.autoscaling import AutoscalingPlane
 from app.compute import INITIAL_SERVICE_SCALE, ComputePlane, require_plain_containers
 from app.data import (
     DOCUMENTDB_IAM_ENGINE_VERSION,
@@ -66,6 +69,7 @@ from app.runtime_secrets import RuntimeSecrets, RuntimeSecretsDescriptor
 # hardened graph, which ``HARDENED_TYPES`` alone decides.
 TAGGABLE_TYPES = frozenset(
     {
+        "aws:appautoscaling/target:Target",
         "aws:cloudwatch/logGroup:LogGroup",
         "aws:docdb/cluster:Cluster",
         "aws:docdb/clusterInstance:ClusterInstance",
@@ -99,6 +103,7 @@ SECRET_MATERIAL_TYPES = (
     "tls:",
     "aws:secretsmanager/secretVersion:SecretVersion",
 )
+AUTOSCALING_COMPONENT_TYPE = "user-service-infrastructure:autoscaling:Plane"
 # Step-2 types (FR-34, AD-18): a step-1 graph never holds one. Each joins the
 # allowlist only with its own story; until then the allowlist refuses it too.
 STEP_TWO_TYPES = frozenset(
@@ -109,6 +114,7 @@ STEP_TWO_TYPES = frozenset(
         "aws:lambda/invocation:Invocation",
         "aws:secretsmanager/secretPolicy:SecretPolicy",
         "aws:secretsmanager/secretRotation:SecretRotation",
+        AUTOSCALING_COMPONENT_TYPE,
     }
 )
 # IAM authentication exists only on instance-based DocumentDB 5.0 (V-17, A-01).
@@ -116,12 +122,16 @@ ELASTIC_DOCUMENTDB_TYPE = "aws:docdb/elasticCluster:ElasticCluster"
 # Closed allowlist of the hardened graph (F3, N1): exactly the types it renders
 # today. Any other type, including a packaged component, fails; widening it is
 # a reviewed change. S1.3 added the data and compute planes and S1.4 the Redis
-# IAM types (D-1). ``HARDENED_PROPERTY_CHECKS`` reviews the inputs of the types
-# that could carry secret material or open access; the ElastiCache subnet
-# group has no such input and no check, while the Redis user group's check
-# refuses the open built-in ``default`` user (S1.4 gate F1).
+# IAM types (D-1); S2.1 adds the step-2 autoscaling target, policy, scheduled
+# action and component (AD-10), which only a step-2 graph renders.
+# ``HARDENED_PROPERTY_CHECKS`` reviews the inputs of the types that could carry
+# secret material or open access; the ElastiCache subnet group has no such
+# input and no check, while the Redis user group's check refuses the open
+# built-in ``default`` user (S1.4 gate F1). The autoscaling types have no
+# secret input in pulumi-aws 7.23.0, so they have no check.
 HARDENED_TAGGED_TYPES = frozenset(
     {
+        "aws:appautoscaling/target:Target",
         "aws:cloudwatch/logGroup:LogGroup",
         "aws:docdb/cluster:Cluster",
         "aws:docdb/clusterInstance:ClusterInstance",
@@ -149,8 +159,11 @@ HARDENED_TAGGED_TYPES = frozenset(
         "aws:sqs/queue:Queue",
     }
 )
+# The Application Auto Scaling policy and scheduled action accept no tags.
 HARDENED_UNTAGGED_TYPES = frozenset(
     {
+        "aws:appautoscaling/policy:Policy",
+        "aws:appautoscaling/scheduledAction:ScheduledAction",
         "aws:ec2/routeTableAssociation:RouteTableAssociation",
         "aws:ecr/lifecyclePolicy:LifecyclePolicy",
         "aws:ecr/repository:Repository",
@@ -167,6 +180,7 @@ HARDENED_UNTAGGED_TYPES = frozenset(
 )
 HARDENED_COMPONENT_TYPES = frozenset(
     {
+        AUTOSCALING_COMPONENT_TYPE,
         "user-service-infrastructure:compute:AccessLogs",
         "user-service-infrastructure:compute:Plane",
         "user-service-infrastructure:core:EnvironmentSettings",
@@ -736,9 +750,9 @@ class WorkloadPhaseStack(RegistryPhaseStack):
         Every plane is credential-free: seeded secret metadata, the network
         with the bootstrap-job SG, DocumentDB with the managed password and the
         plain MONGODB-AWS URL, Redis with IAM users and required TLS (S1.4),
-        the queues, and ECS services at zero tasks. A
-        step-2 contract renders the same set until each step-2 story adds its
-        resources; the guard refuses those types at step 1.
+        the queues, and ECS services at zero tasks. A step-2 contract adds the
+        autoscaling plane (S2.1); the other step-2 stories add their resources
+        in turn, and the guard refuses every step-2 type at step 1.
         """
         opts = pulumi.ResourceOptions(
             parent=self,
@@ -777,6 +791,14 @@ class WorkloadPhaseStack(RegistryPhaseStack):
             initial_service_scale=INITIAL_SERVICE_SCALE,
             opts=opts,
         )
+        if secrets.workload_step == 2:
+            self.autoscaling = AutoscalingPlane(
+                "autoscaling",
+                settings=settings,
+                services=self.compute.scalable_services,
+                scaling=secrets.scaling,
+                opts=opts,
+            )
         self._export_xp8()
 
     def _export_xp8(self) -> None:

@@ -343,7 +343,5 @@ _ARN = f"arn:aws:secretsmanager:eu-central-1:891377212104:secret:{_NAME}-AbCdEf"
 )
 def test_secret_arn_regex_in_both_modes(json_key, reference, accepted):
     """N2: json_key=False is the exact ARN; json_key=True adds only `:key::`."""
-    pattern = secret_arn_regex(
-        "eu-central-1", "891377212104", _NAME, json_key=json_key
-    )
+    pattern = secret_arn_regex("eu-central-1", "891377212104", _NAME, json_key=json_key)
     assert bool(re.fullmatch(pattern, reference)) is accepted

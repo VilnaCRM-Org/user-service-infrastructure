@@ -29,10 +29,19 @@ def _validate_secret_shape(secret: Any, declaration: dict[str, Any]) -> None:
 
 
 def _validate_secret_version(version: Any, *, seeded: bool = False) -> None:
-    """Accept only native version identifiers; a seeded secret may have none yet."""
+    """Accept only native version identifiers; a seeded secret may have none yet.
+
+    A VersionId is the caller's ClientRequestToken: 32-64 of ``[A-Za-z0-9-]``.
+    AWS only recommends a UUID, so the charset stays; a hex-256 value shape,
+    which the charset admits, is refused as possible secret material.
+    """
     if seeded and version is None:
         return
-    if type(version) is not str or not re.fullmatch(r"[A-Za-z0-9-]{32,64}", version):
+    if (
+        type(version) is not str
+        or not re.fullmatch(r"[A-Za-z0-9-]{32,64}", version)
+        or re.fullmatch(r"[0-9A-Fa-f]{64}", version)
+    ):
         raise ValueError("Observed secret version invalid")
 
 

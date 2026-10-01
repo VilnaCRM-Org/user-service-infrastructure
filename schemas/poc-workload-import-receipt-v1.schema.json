@@ -3,6 +3,7 @@
   "$id": "urn:vilnacrm:poc-workload-import-receipt:v1",
   "title": "Workload import receipt: recovery import bound to the new checkpoint",
   "description": "Local shape only. Publication, issuer, run binding and checkpoint authenticity are established by the receipt library, never by this schema. Metadata only: no secret value, resource input or resource output appears. It lists exactly the URNs the recovery import adopted.",
+  "$comment": "Draft 2020-12 pattern is applied with re.search, so '$' also matches before a trailing newline. Fixed-length fields pin minLength = maxLength; the S4.11 receipt library must re-check every variable-length field with re.fullmatch.",
   "$defs": {
     "checkpoint": {
       "type": "object",
@@ -24,8 +25,8 @@
         },
         "etag": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 512,
+          "minLength": 34,
+          "maxLength": 34,
           "pattern": "^\"[0-9a-f]{32}\"$"
         },
         "sha256": {
@@ -106,8 +107,8 @@
     },
     "sha256": {
       "type": "string",
-      "minLength": 1,
-      "maxLength": 512,
+      "minLength": 64,
+      "maxLength": 64,
       "pattern": "^[0-9a-f]{64}$"
     },
     "stack": {
@@ -218,7 +219,18 @@
       "$ref": "#/$defs/stack"
     },
     "workload_operation": {
-      "$ref": "#/$defs/workload_operation"
+      "allOf": [
+        {
+          "$ref": "#/$defs/workload_operation"
+        },
+        {
+          "properties": {
+            "mode": {
+              "const": "recovery-import"
+            }
+          }
+        }
+      ]
     },
     "checkpoint": {
       "$ref": "#/$defs/checkpoint"
@@ -241,5 +253,43 @@
         "$ref": "#/$defs/urn"
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "stack": {
+            "const": "test"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "imported": {
+            "items": {
+              "pattern": "^urn:pulumi:test::"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "stack": {
+            "const": "prod"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "imported": {
+            "items": {
+              "pattern": "^urn:pulumi:prod::"
+            }
+          }
+        }
+      }
+    }
+  ]
 }

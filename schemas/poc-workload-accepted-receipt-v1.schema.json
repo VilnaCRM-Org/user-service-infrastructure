@@ -3,6 +3,7 @@
   "$id": "urn:vilnacrm:poc-workload-accepted-receipt:v1",
   "title": "Accepted-workload receipt: the first passing start observation of a lineage",
   "description": "Local shape only. Publication, issuer, run binding and checkpoint authenticity are established by the receipt library, never by this schema. Metadata only: no secret value, resource input or resource output appears. It binds the success receipt and the verified same-run start observation artifact; drift and releases require it.",
+  "$comment": "Draft 2020-12 pattern is applied with re.search, so '$' also matches before a trailing newline. Fixed-length fields pin minLength = maxLength; the S4.11 receipt library must re-check every variable-length field with re.fullmatch.",
   "$defs": {
     "checkpoint": {
       "type": "object",
@@ -24,8 +25,8 @@
         },
         "etag": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 512,
+          "minLength": 34,
+          "maxLength": 34,
           "pattern": "^\"[0-9a-f]{32}\"$"
         },
         "sha256": {
@@ -90,8 +91,8 @@
     },
     "sha256": {
       "type": "string",
-      "minLength": 1,
-      "maxLength": 512,
+      "minLength": 64,
+      "maxLength": 64,
       "pattern": "^[0-9a-f]{64}$"
     },
     "stack": {

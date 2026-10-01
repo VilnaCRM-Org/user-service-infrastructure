@@ -3,6 +3,7 @@
   "$id": "urn:vilnacrm:poc-workload-step-receipt:v1",
   "title": "Workload step receipt: one per admitted up-plan, success or failure",
   "description": "Local shape only. Publication, issuer, run binding and checkpoint authenticity are established by the receipt library, never by this schema. Metadata only: no secret value, resource input or resource output appears. A success receipt records the projection inputs and program trees the scheduled path rebuilds from; a failed receipt names its cause.",
+  "$comment": "Draft 2020-12 pattern is applied with re.search, so '$' also matches before a trailing newline. Fixed-length fields pin minLength = maxLength; the S4.11 receipt library must re-check every variable-length field with re.fullmatch.",
   "$defs": {
     "checkpoint": {
       "type": "object",
@@ -24,8 +25,8 @@
         },
         "etag": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 512,
+          "minLength": 34,
+          "maxLength": 34,
           "pattern": "^\"[0-9a-f]{32}\"$"
         },
         "sha256": {
@@ -35,8 +36,8 @@
     },
     "git_object": {
       "type": "string",
-      "minLength": 1,
-      "maxLength": 512,
+      "minLength": 40,
+      "maxLength": 40,
       "pattern": "^[0-9a-f]{40}$"
     },
     "operation_phase": {
@@ -108,15 +109,18 @@
         {
           "type": "string",
           "minLength": 1,
-          "maxLength": 512,
-          "pattern": "^[A-Za-z0-9-]{32,64}$"
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9-]{32,64}$",
+          "not": {
+            "pattern": "^[0-9A-Fa-f]{64}$"
+          }
         }
       ]
     },
     "sha256": {
       "type": "string",
-      "minLength": 1,
-      "maxLength": 512,
+      "minLength": 64,
+      "maxLength": 64,
       "pattern": "^[0-9a-f]{64}$"
     },
     "stack": {
@@ -203,9 +207,17 @@
     "secret_metadata": {
       "type": "object",
       "minProperties": 1,
-      "maxProperties": 16,
+      "maxProperties": 7,
       "propertyNames": {
-        "pattern": "^[a-z][a-z0-9_]{0,63}$"
+        "enum": [
+          "app_secret",
+          "oauth_encryption_key",
+          "oauth_passphrase",
+          "two_factor_encryption_key",
+          "oauth_private_key",
+          "oauth_public_key",
+          "documentdb_primary"
+        ]
       },
       "additionalProperties": {
         "type": "object",
@@ -230,8 +242,8 @@
               },
               {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 512,
+                "minLength": 78,
+                "maxLength": 78,
                 "pattern": "^arn:aws:kms:eu-central-1:[0-9]{12}:key/[0-9a-f-]{36}$"
               }
             ]
@@ -309,8 +321,8 @@
         },
         "config_digest": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 512,
+          "minLength": 71,
+          "maxLength": 71,
           "pattern": "^sha256:[0-9a-f]{64}$"
         },
         "config_size": {
@@ -342,17 +354,17 @@
           "properties": {
             "parameter_arn": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 512,
-              "pattern": "^arn:aws:ssm:eu-central-1:[0-9]{12}:parameter/[A-Za-z0-9/_.-]+$"
+              "minLength": 98,
+              "maxLength": 98,
+              "pattern": "^arn:aws:ssm:eu-central-1:[0-9]{12}:parameter/vilnacrm/(?:test|prod)/user-service/gateway-certificate-arn$"
             },
             "parameter_version": {
               "$ref": "#/$defs/positive_integer"
             },
             "certificate_arn": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 512,
+              "minLength": 86,
+              "maxLength": 86,
               "pattern": "^arn:aws:acm:eu-central-1:[0-9]{12}:certificate/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
             }
           }
@@ -494,6 +506,89 @@
       "$ref": "#/$defs/program_trees"
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "stack": {
+            "const": "test"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "secret_metadata": {
+            "additionalProperties": {
+              "properties": {
+                "arn": {
+                  "pattern": "^arn:aws:secretsmanager:eu-central-1:891377212104:secret:"
+                },
+                "kms_key_arn": {
+                  "pattern": "^arn:aws:kms:eu-central-1:891377212104:key/"
+                }
+              }
+            }
+          },
+          "projection_inputs": {
+            "properties": {
+              "images": {
+                "properties": {
+                  "web": {
+                    "properties": {
+                      "uri": {
+                        "pattern": "^891377212104\\.dkr\\."
+                      }
+                    }
+                  },
+                  "worker": {
+                    "properties": {
+                      "uri": {
+                        "pattern": "^891377212104\\.dkr\\."
+                      }
+                    }
+                  }
+                }
+              },
+              "certificate": {
+                "properties": {
+                  "parameter_arn": {
+                    "const": "arn:aws:ssm:eu-central-1:891377212104:parameter/vilnacrm/test/user-service/gateway-certificate-arn"
+                  },
+                  "certificate_arn": {
+                    "pattern": "^arn:aws:acm:eu-central-1:891377212104:certificate/"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "stack": {
+            "const": "prod"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "projection_inputs": {
+            "properties": {
+              "certificate": {
+                "properties": {
+                  "parameter_arn": {
+                    "pattern": ":parameter/vilnacrm/prod/"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "oneOf": [
     {
       "properties": {

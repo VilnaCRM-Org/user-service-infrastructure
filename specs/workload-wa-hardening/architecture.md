@@ -345,7 +345,23 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     floor.
   - Web: target tracking on `ALBRequestCountPerTarget` (resource label) and
     CPU.
-  - Worker: metric math (A-17) with a zero-task guard.
+  - Worker: metric math (A-17) with a zero-task guard. As implemented in S2.2
+    (`pulumi/app/autoscaling.py`; gates S22-M1, S22-M2):
+    - Three `AWS/SQS` `ApproximateNumberOfMessagesVisible` queries (`Sum`),
+      one for each work queue: `send_email`, `insert_user_batch` and
+      `domain_events`.
+    - One `ECS/ContainerInsights` `RunningTaskCount` query (`Average`) for the
+      worker service.
+    - `tasks = IF(running_tasks > 1, running_tasks, 1)`.
+    - `backlog_per_task = (sum of the three queues) / tasks`, the only series
+      returned.
+    - The floor of 1 is a planning choice that meets the AD-10 zero-task guard
+      (there is no division by zero).
+    - **Missing data:** if any input has no datapoint, the returned series has
+      none either, so the policy stays in `INSUFFICIENT_DATA`. It never divides
+      by zero.
+    - S4.6 step 12 observes whether `RunningTaskCount` publishes 0 or no data
+      at zero tasks. `FILL()` is considered only after that observation.
   - The ECS services use `ignore_changes=["desiredCount"]` (AD-23).
   - **Per-action times (R5-M3).** The contract lists every one-time action
     with its own time: `scaling.starts: [{seq, at}]` and

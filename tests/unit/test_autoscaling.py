@@ -622,8 +622,9 @@ def test_the_work_queue_names_refuse_a_non_work_or_repeated_queue(field, name):
 
 def test_zero_running_tasks_never_divide_by_zero(render):
     """FR-12 B: the only division is by the guarded task count, which is
-    ``max(RunningTaskCount, 1)``; both IF branches are at least 1, and a
-    missing or zero task count falls to the scalar 1 (CloudWatch IF).
+    ``max(RunningTaskCount, 1)``; both IF branches are at least 1, so a zero
+    count falls to the scalar 1. A missing datapoint yields no series
+    (INSUFFICIENT_DATA), never a division by zero.
     """
     metrics = {metric["id"]: metric for metric in _backlog_metrics(render("step2"))}
     expressions = {

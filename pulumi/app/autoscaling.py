@@ -19,8 +19,10 @@ policy (S2.2). Every value comes from the reviewed contract (D-16).
   ``stop-<seq>`` name in ``scaling.consumed`` is not rendered.
 - The worker backlog policy (A-17) tracks the visible messages of the three
   work queues, summed and divided by the worker's Container Insights
-  ``RunningTaskCount``. The divisor is ``max(RunningTaskCount, 1)``, so zero
-  or missing running tasks never divide by zero (the AD-10 zero-task guard).
+  ``RunningTaskCount``. The divisor is ``max(RunningTaskCount, 1)``, so a zero
+  count never divides by zero (the AD-10 zero-task guard; the floor of 1 is a
+  planning choice). If any input has no datapoint, the returned series has
+  none and the policy stays in INSUFFICIENT_DATA; it never divides by zero.
   No dead-letter or health-check queue enters the math.
 """
 
@@ -69,7 +71,9 @@ ACTION_KINDS = ("start", "stop")
 BACKLOG_POLICY = ("worker-backlog-tracking", "worker-backlog")
 WORK_QUEUES = ("send_email", "insert_user_batch", "domain_events")
 # The only division is by ``tasks = max(RunningTaskCount, 1)``: both IF branches
-# are at least 1, so zero or missing running tasks never divide by zero (AD-10).
+# are at least 1, so a zero count never divides by zero (AD-10). If any input
+# has no datapoint, the series has none (INSUFFICIENT_DATA); S4.6 step 12
+# observes zero-task publishing before FILL() is considered.
 BACKLOG_EXPRESSIONS = (
     ("backlog", " + ".join(WORK_QUEUES), False),
     ("tasks", "IF(running_tasks > 1, running_tasks, 1)", False),

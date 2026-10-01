@@ -74,9 +74,9 @@ snake_case on the SDK transformation path and camelCase on the engine path.
 An opaque value, such as an input type or an `Output`, fails closed.
 
 `WorkloadPhaseStack` also registers a deny-all engine invoke transform through
-`pulumi.runtime.register_invoke_transform`. Its allowlist (`HARDENED_INVOKES`)
-is empty: no hardened module calls a provider function, and any call fails the
-program before the provider runs it.
+`pulumi.runtime.register_invoke_transform`. Its allowlist is empty: no hardened
+module calls a provider function, and any call fails the program before the
+provider runs it. A story that needs an invoke adds a reviewed allowlist.
 
 When the data and compute planes rejoin the hardened graph (S1.3, S4.10), that
 story widens the allowlist with property checks of its own: DocumentDB

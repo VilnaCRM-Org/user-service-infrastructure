@@ -634,22 +634,24 @@ def test_unrendered_data_and_compute_types_are_refused_on_both_paths(engine):
             _reject_secret_material(_transform_args(engine, kind, props))
 
 
-def test_invoke_guard_is_a_closed_allowlist(monkeypatch):
-    """N2: an empty allowlist refuses every token; a reviewed token passes."""
-    from app import workload_phase
+@pytest.mark.parametrize(
+    "token",
+    [
+        "aws:secretsmanager/getRandomPassword:getRandomPassword",
+        "aws:secretsmanager/getSecretVersion:getSecretVersion",
+        "aws:index/getCallerIdentity:getCallerIdentity",
+        "random:index/getRandom:getRandom",
+    ],
+)
+def test_invoke_guard_denies_every_provider_function(token):
+    """N2: the allowlist is empty, so every invoke token fails closed."""
+    from app.workload_phase import _reject_invoke
 
     import pulumi
 
-    args = pulumi.InvokeTransformArgs(
-        token="aws:secretsmanager/getRandomPassword:getRandomPassword",
-        args={},
-        opts=pulumi.InvokeOptions(),
-    )
-    assert workload_phase.HARDENED_INVOKES == frozenset()
+    args = pulumi.InvokeTransformArgs(token=token, args={}, opts=pulumi.InvokeOptions())
     with pytest.raises(ValueError, match="must not call a provider function"):
-        workload_phase._reject_invoke(args)
-    monkeypatch.setattr(workload_phase, "HARDENED_INVOKES", frozenset({args.token}))
-    assert workload_phase._reject_invoke(args) is None
+        _reject_invoke(args)
 
 
 def test_hardened_modules_make_no_provider_function_call():

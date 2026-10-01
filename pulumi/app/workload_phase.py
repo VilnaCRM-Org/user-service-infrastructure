@@ -114,9 +114,6 @@ HARDENED_TYPES = (
 # ``domainSigningPrivateKey`` (or selector) would put a private key in state.
 # The SDK transformation sees snake_case keys, the engine transform camelCase.
 EASY_DKIM_KEYS = frozenset({"next_signing_key_length", "nextSigningKeyLength"})
-# Provider functions (invokes) a hardened program may call: none (N2). No
-# hardened module calls one; a reviewed story widens this list explicitly.
-HARDENED_INVOKES: frozenset[str] = frozenset()
 
 
 def _easy_dkim_only(props) -> bool:
@@ -161,11 +158,13 @@ def _reject_secret_material(
     return None
 
 
-def _reject_invoke(args: pulumi.InvokeTransformArgs) -> None:
-    """Fail closed on any provider function outside the empty allowlist (N2)."""
-    if args.token not in HARDENED_INVOKES:
-        raise ValueError("Hardened workload graph must not call a provider function")
-    return None
+def _reject_invoke(_args: pulumi.InvokeTransformArgs) -> None:
+    """Fail closed on every provider function call (N2).
+
+    The invoke allowlist is empty: no hardened module calls a provider
+    function. A story that needs one adds a reviewed allowlist and its tests.
+    """
+    raise ValueError("Hardened workload graph must not call a provider function")
 
 
 def _guard_hardened_stack() -> None:

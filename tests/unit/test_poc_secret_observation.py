@@ -231,6 +231,41 @@ def test_seed_input_is_exactly_the_secret_arn_and_purpose(purpose):
             "identity differs",
         ),
         (lambda seed: seed.update(secret_arn=None), "identity differs"),
+        # F8: foreign account, region and partition, a trailing newline and a
+        # wildcard name never name the declared TEST secret.
+        (
+            lambda seed: seed.update(
+                secret_arn=seed["secret_arn"].replace("891377212104", "933245420672")
+            ),
+            "identity differs",
+        ),
+        (
+            lambda seed: seed.update(
+                secret_arn=seed["secret_arn"].replace("eu-central-1", "eu-west-1")
+            ),
+            "identity differs",
+        ),
+        (
+            lambda seed: seed.update(
+                secret_arn=seed["secret_arn"].replace("arn:aws:", "arn:aws-cn:")
+            ),
+            "identity differs",
+        ),
+        (
+            lambda seed: seed.update(secret_arn=seed["secret_arn"] + "\n"),
+            "identity differs",
+        ),
+        (
+            lambda seed: seed.update(
+                secret_arn=SECRET_PREFIX
+                + "/user-service-infrastructure/runtime/test/*-AbCdEf"
+            ),
+            "identity differs",
+        ),
+        (
+            lambda seed: seed.update(secret_arn=seed["secret_arn"][:-6] + "*"),
+            "identity differs",
+        ),
     ],
 )
 def test_seed_input_with_any_other_key_or_target_is_rejected(mutate, message):
@@ -251,3 +286,13 @@ def test_pre_hardening_contract_has_no_seed_input():
     contract = fixture("workload")
     with pytest.raises(ValueError, match="hardened workload contract"):
         validate_seed_input(contract, _seed(contract))
+
+
+@pytest.mark.parametrize("version", ["0123456789abcdef" * 4, "0123456789ABCDEF" * 4])
+def test_observed_version_refuses_the_hex_256_value_shape(version):
+    """F4: a VersionId is a 32-64 character token; a hex-256 value is refused."""
+    contract = fixture("workload-hardened")
+    current = observation(contract)
+    current["app_secret"]["version_id"] = version
+    with pytest.raises(ValueError, match="version invalid"):
+        validate_secret_observation(contract, current)

@@ -424,7 +424,19 @@ def test_pre_hardening_projection_keeps_its_generators_until_s4_10(tmp_path):
     assert {"data", "compute"} <= set(rows)
 
 
-@pytest.mark.parametrize("mutation", ["random-password", "secret-version"])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "random-password",
+        "secret-version",
+        # N1 (F1): outside the runtime-secrets component, the stack-wide guard
+        # still refuses material parented to the stack or to no resource.
+        "stack:random-password",
+        "root:random-password",
+        "stack:secret-version",
+        "root:secret-version",
+    ],
+)
 def test_readding_secret_material_to_the_hardened_graph_fails(tmp_path, mutation):
     receipt = graph(tmp_path, "hardened", mutation)
     assert receipt["error"] == "Hardened workload graph must not hold secret material"
@@ -433,6 +445,16 @@ def test_readding_secret_material_to_the_hardened_graph_fails(tmp_path, mutation
         for name, row in receipt["registrations"].items()
         if row["type"].startswith(SECRET_MATERIAL)
     ]
+
+
+@pytest.mark.parametrize("owner", ["", "stack:", "root:"])
+def test_unlisted_type_in_the_hardened_graph_fails(tmp_path, owner):
+    """F3: the hardened graph is a closed allowlist, not a denylist."""
+    receipt = graph(tmp_path, "hardened", f"{owner}ssm-parameter")
+    assert receipt["error"] == "Hardened workload graph holds an unreviewed type"
+    assert "aws:ssm/parameter:Parameter" not in {
+        row["type"] for row in receipt["registrations"].values()
+    }
 
 
 class _Resolved:
@@ -445,33 +467,33 @@ class _Resolved:
         return callback(self.value)
 
 
+def _declared_arn(purpose, suffix="-AbCdEf"):
+    name = _hardened_contract()["workload"]["secret_lifecycle"]["references"][purpose][
+        "name"
+    ]
+    return f"{ARN_PREFIX}{name}{suffix}"
+
+
 def _hardened_resource(arns=None):
     resource = object.__new__(module.RuntimeSecrets)
     resource._hardened = True
-    resource.references = _hardened_contract()["workload"]["secret_lifecycle"][
-        "references"
-    ]
+    resource.descriptor = module.RuntimeSecretsDescriptor(_hardened_contract())
+    resource.references = resource.descriptor.references
     resource.secret_arns = arns or {
-        purpose: _Resolved(f"{ARN_PREFIX}{purpose}-AbCdEf")
-        for purpose in resource.references
+        purpose: _Resolved(_declared_arn(purpose)) for purpose in resource.references
     }
     resource.version_ids = {}
     return resource
 
 
 def test_hardened_ecs_secrets_reference_the_secret_arn_without_a_version():
+    references = _hardened_contract()["workload"]["secret_lifecycle"]["references"]
     rows = _hardened_resource().ecs_secrets()
-    assert {row["name"] for row in rows} == {
-        "APP_SECRET",
-        "OAUTH_ENCRYPTION_KEY",
-        "OAUTH_PASSPHRASE",
-        "TWO_FACTOR_ENCRYPTION_KEY",
-        "OAUTH_PRIVATE_KEY_PEM",
-        "OAUTH_PUBLIC_KEY_PEM",
-    }
-    for row in rows:
-        assert row["valueFrom"].startswith(ARN_PREFIX)
-        assert row["valueFrom"].endswith("-AbCdEf")
+    assert rows == [
+        {"name": module.ENVIRONMENT_NAMES[p], "valueFrom": _declared_arn(p)}
+        for p in references
+    ]
+    assert len({row["valueFrom"] for row in rows}) == len(references)
     assert not any(":::" in row["valueFrom"] for row in rows)
 
 
@@ -485,9 +507,38 @@ def test_hardened_ecs_secrets_fail_closed_on_an_incomplete_inventory():
 def test_hardened_ecs_secret_with_a_version_suffix_fails():
     resource = _hardened_resource()
     resource.secret_arns["app_secret"] = _Resolved(
-        f"{ARN_PREFIX}app_secret-AbCdEf:::" + "1" * 32
+        _declared_arn("app_secret", "-AbCdEf:::" + "1" * 32)
     )
     with pytest.raises(ValueError, match="version"):
+        resource.ecs_secrets()
+
+
+def test_hardened_ecs_secret_accepts_a_declared_json_key_selection():
+    resource = _hardened_resource()
+    resource.secret_arns["app_secret"] = _Resolved(
+        _declared_arn("app_secret", "-AbCdEf:password::")
+    )
+    assert resource.ecs_secrets()[0]["valueFrom"].endswith("-AbCdEf:password::")
+
+
+FOREIGN_ARNS = {
+    "foreign_account": lambda arn: arn.replace("891377212104", "123456789012"),
+    "foreign_region": lambda arn: arn.replace("eu-central-1", "us-east-1"),
+    "other_declared_name": lambda arn: _declared_arn("oauth_passphrase"),
+    "partial_arn_without_suffix": lambda arn: arn.removesuffix("-AbCdEf"),
+    "trailing_newline": lambda arn: arn + "\n",
+    "unicode_digits": lambda arn: arn.replace("891377212104", "\u0668" * 12),
+    "short_suffix": lambda arn: arn.removesuffix("f"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(FOREIGN_ARNS))
+def test_hardened_ecs_secret_must_be_the_declared_secret(case):
+    resource = _hardened_resource()
+    resource.secret_arns["app_secret"] = _Resolved(
+        FOREIGN_ARNS[case](_declared_arn("app_secret"))
+    )
+    with pytest.raises(ValueError, match="version|declaration"):
         resource.ecs_secrets()
 
 
@@ -507,6 +558,8 @@ def test_unversioned_reference_accepts_the_arn_or_arn_key(reference):
     [
         f"{ARN_PREFIX}app_secret-AbCdEf:::" + "1" * 32,
         f"{ARN_PREFIX}app_secret-AbCdEf::AWSCURRENT:",
+        "arn:aws:secretsmanager:eu-central-1:\u0668\u0668\u0668\u0668\u0668\u0668\u0668\u0668\u0668\u0668\u0668\u0668:secret:app-AbCdEf",
+        f"{ARN_PREFIX}app_secret-AbCdEf\n",
         f"{ARN_PREFIX}app_secret-AbCdEf:password:AWSCURRENT:",
         f"{ARN_PREFIX}app_secret-AbCdEf:password::" + "1" * 32,
         f"{ARN_PREFIX}app_secret-AbCdEf:",
@@ -533,3 +586,92 @@ def test_pre_hardening_ecs_secrets_remain_version_pinned_until_s4_10():
     resource.version_ids = {}
     with pytest.raises(ValueError, match="incomplete"):
         resource.ecs_secrets()
+
+
+def test_hardened_guard_is_registered_stack_wide_with_the_engine(tmp_path):
+    """F1: the engine transform, which reaches packaged components, is present."""
+    assert graph(tmp_path, "hardened")["engine_transforms"] == 1
+    assert graph(tmp_path, "bridge")["engine_transforms"] == 0
+
+
+@pytest.mark.parametrize(
+    ("kind", "message"),
+    [
+        ("random:index/randomPassword:RandomPassword", "secret material"),
+        ("tls:index/privateKey:PrivateKey", "secret material"),
+        ("aws:secretsmanager/secretVersion:SecretVersion", "secret material"),
+        ("aws:ssm/parameter:Parameter", "unreviewed type"),
+        ("awsx:ec2:Vpc", "unreviewed type"),
+        ("pulumi:providers:random", "unreviewed type"),
+    ],
+)
+def test_engine_transform_refuses_packaged_component_children(kind, message):
+    """A packaged component's child reaches only the engine-level transform."""
+    from app.workload_phase import _reject_secret_material
+
+    import pulumi
+
+    args = pulumi.ResourceTransformArgs(
+        custom=True, type_=kind, name="child", props={}, opts=pulumi.ResourceOptions()
+    )
+    with pytest.raises(ValueError, match=message):
+        _reject_secret_material(args)
+
+
+def test_hardened_allowlist_is_the_rendered_graph_plus_reviewed_taggable_types(
+    tmp_path,
+):
+    """F3: every allowlisted untagged or component type is rendered today."""
+    from app.workload_phase import (
+        HARDENED_COMPONENT_TYPES,
+        HARDENED_TYPES,
+        HARDENED_UNTAGGED_TYPES,
+        TAGGABLE_TYPES,
+    )
+
+    rendered = {
+        row["type"] for row in graph(tmp_path, "hardened")["registrations"].values()
+    } - {"pulumi:pulumi:Stack"}
+    assert rendered <= HARDENED_TYPES
+    assert HARDENED_UNTAGGED_TYPES | HARDENED_COMPONENT_TYPES <= rendered
+    assert not HARDENED_UNTAGGED_TYPES & TAGGABLE_TYPES
+    assert not [kind for kind in HARDENED_TYPES if kind.startswith(SECRET_MATERIAL)]
+
+
+def test_secret_lifecycle_spec_records_the_awscurrent_section():
+    """F1: the S1.7 section names its markers and drops the stale wording."""
+    text = (ROOT / "specs/poc/secret-lifecycle.md").read_text()
+    section = text[text.index("### ECS references resolve `AWSCURRENT`") :]
+    for marker in (
+        "require_unversioned_reference",
+        "arn:<json-key>::",
+        "evidence only",
+        "ARN and the name",
+        "does not prove rotation provenance",
+        "S4.10",
+        "select no JSON",
+    ):
+        assert marker in section, marker
+    for stale in (
+        "its identity\nand first version are preserved",
+        "the current source pins secret versions",
+        "when a JSON\nkey is selected",
+    ):
+        assert stale not in text, stale
+
+
+def test_secret_lifecycle_spec_records_the_hardened_contract():
+    """F-4: the hardened section names its markers and the guard's real reach."""
+    text = (ROOT / "specs/poc/secret-lifecycle.md").read_text()
+    section = text[text.index("## Hardened (seeded) declarations") :]
+    for marker in (
+        "rotation-seed",
+        "validate_seed_input",
+        f"pulumi-aws {V8_PROVIDER_VERSION}",
+        "register_stack_transformation",
+        "register_resource_transform",
+        "runtime CMK",
+        "re.fullmatch",
+    ):
+        assert marker in section, marker
+    assert "a transformation fails the program" not in section

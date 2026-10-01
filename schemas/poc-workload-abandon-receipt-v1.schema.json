@@ -3,6 +3,7 @@
   "$id": "urn:vilnacrm:poc-workload-abandon-receipt:v1",
   "title": "Workload abandon receipt: TEST-only Kravalg-approved removal",
   "description": "Local shape only. Publication, issuer, run binding and checkpoint authenticity are established by the receipt library, never by this schema. Metadata only: no secret value, resource input or resource output appears. TEST only. It binds the approved manifest, the deleted URNs and the retained resources a rebuild imports; a retained secret records only its ARN, current version ID and rotation state.",
+  "$comment": "Draft 2020-12 pattern is applied with re.search, so '$' also matches before a trailing newline. Fixed-length fields pin minLength = maxLength; the S4.11 receipt library must re-check every variable-length field with re.fullmatch.",
   "$defs": {
     "checkpoint": {
       "type": "object",
@@ -24,8 +25,8 @@
         },
         "etag": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 512,
+          "minLength": 34,
+          "maxLength": 34,
           "pattern": "^\"[0-9a-f]{32}\"$"
         },
         "sha256": {
@@ -118,15 +119,18 @@
         {
           "type": "string",
           "minLength": 1,
-          "maxLength": 512,
-          "pattern": "^[A-Za-z0-9-]{32,64}$"
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9-]{32,64}$",
+          "not": {
+            "pattern": "^[0-9A-Fa-f]{64}$"
+          }
         }
       ]
     },
     "sha256": {
       "type": "string",
-      "minLength": 1,
-      "maxLength": 512,
+      "minLength": 64,
+      "maxLength": 64,
       "pattern": "^[0-9a-f]{64}$"
     },
     "urn": {
@@ -219,7 +223,14 @@
       ],
       "properties": {
         "urn": {
-          "$ref": "#/$defs/urn"
+          "allOf": [
+            {
+              "$ref": "#/$defs/urn"
+            },
+            {
+              "pattern": "^urn:pulumi:test::"
+            }
+          ]
         },
         "import_id": {
           "type": "string",
@@ -237,7 +248,14 @@
           ],
           "properties": {
             "arn": {
-              "$ref": "#/$defs/secret_arn"
+              "allOf": [
+                {
+                  "$ref": "#/$defs/secret_arn"
+                },
+                {
+                  "pattern": "^arn:aws:secretsmanager:eu-central-1:891377212104:secret:"
+                }
+              ]
             },
             "version_id": {
               "$ref": "#/$defs/secret_version"
@@ -245,6 +263,26 @@
             "rotation_enabled": {
               "type": "boolean"
             }
+          }
+        }
+      },
+      "$comment": "A retained secret's import_id must equal its secret.arn. JSON Schema cannot compare sibling values, so this schema pins import_id to the TEST secret ARN shape and the S4.11 receipt library enforces the equality.",
+      "if": {
+        "required": [
+          "secret"
+        ]
+      },
+      "then": {
+        "properties": {
+          "import_id": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/secret_arn"
+              },
+              {
+                "pattern": "^arn:aws:secretsmanager:eu-central-1:891377212104:secret:"
+              }
+            ]
           }
         }
       }
@@ -272,7 +310,18 @@
       "const": "test"
     },
     "workload_operation": {
-      "$ref": "#/$defs/workload_operation"
+      "allOf": [
+        {
+          "$ref": "#/$defs/workload_operation"
+        },
+        {
+          "properties": {
+            "mode": {
+              "const": "recovery-abandon"
+            }
+          }
+        }
+      ]
     },
     "checkpoint": {
       "$ref": "#/$defs/checkpoint"
@@ -312,7 +361,14 @@
       "maxItems": 512,
       "uniqueItems": true,
       "items": {
-        "$ref": "#/$defs/urn"
+        "allOf": [
+          {
+            "$ref": "#/$defs/urn"
+          },
+          {
+            "pattern": "^urn:pulumi:test::"
+          }
+        ]
       }
     },
     "retain": {

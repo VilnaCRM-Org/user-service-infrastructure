@@ -36,7 +36,7 @@ ENVIRONMENT_NAMES = {
 # A secret ARN, optionally selecting a JSON key (`arn:key::`). Any version ID or
 # staging label segment is refused so ECS always resolves AWSCURRENT.
 _SECRET_REFERENCE = re.compile(
-    r"arn:aws:secretsmanager:[a-z0-9-]+:\d{12}:secret:[A-Za-z0-9/_+=.@-]+-[A-Za-z0-9]{6}"
+    r"arn:aws:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+-[A-Za-z0-9]{6}"
     r"(?::[A-Za-z0-9_.-]+::)?"
 )
 
@@ -304,15 +304,40 @@ class RuntimeSecrets(pulumi.ComponentResource):
         ]
 
     def _current_references(self) -> list[dict[str, pulumi.Input[str]]]:
-        """Reference each declared secret by its bare ARN, never a version ID."""
+        """Reference each declared secret by its bare ARN, never a version ID.
+
+        Each reference must fully match the declared name in this account and
+        region. A mocked-program test over the rendered containerDefinitions
+        (F6) comes when compute joins the hardened branch.
+        """
+        from poc_secret_observation import secret_arn_regex
+
         if set(self.secret_arns) != set(self.references):
             raise ValueError("Runtime secret inventory is incomplete")
+        contract = self.descriptor._contract
+
+        def declared(purpose: str):
+            pattern = re.compile(
+                secret_arn_regex(
+                    contract["region"],
+                    contract["account_id"],
+                    self.references[purpose]["name"],
+                    json_key=True,
+                )
+            )
+
+            def check(reference: Any) -> str:
+                require_unversioned_reference(reference)
+                if not pattern.fullmatch(reference):
+                    raise ValueError("Secret reference differs from its declaration")
+                return reference
+
+            return check
+
         return [
             {
                 "name": ENVIRONMENT_NAMES[purpose],
-                "valueFrom": self.secret_arns[purpose].apply(
-                    require_unversioned_reference
-                ),
+                "valueFrom": self.secret_arns[purpose].apply(declared(purpose)),
             }
             for purpose in self.references
         ]

@@ -93,6 +93,9 @@ def load(path: Path) -> dict[str, Any]:
 
 
 def _shape(contract: dict[str, Any]) -> None:
+    # Schema ``pattern`` runs as ``re.search``: ``$`` also matches before a final
+    # newline. Fixed-length fields pin their length; semantic checks and the
+    # S4.11 receipt library re-check variable-length fields with ``fullmatch``.
     schema = json.loads(SCHEMA_PATH.read_text())
     validator = Draft202012Validator(schema)
     if next(validator.iter_errors(contract), None) is not None:
@@ -182,10 +185,16 @@ def _workload_semantics(workload: dict[str, Any], registries: dict[str, Any]) ->
 def _strict_integers(contract: dict[str, Any]) -> None:
     """Reject JSON numbers such as ``1.0`` where the contract means an integer."""
     scaling = contract["scaling"]
+    references = contract["workload"]["secret_lifecycle"]["references"]
     values = [
         contract["workload_step"],
         contract["workload_operation"]["sequence"],
         *(entry["seq"] for entry in [*scaling["starts"], *scaling["stops"]]),
+        *(
+            secret["rotation"]["schedule_days"]
+            for secret in references.values()
+            if type(secret["rotation"]) is dict
+        ),
     ]
     if any(type(value) is not int for value in values):
         raise ValueError("hardened contract integers must be exact")
@@ -204,13 +213,22 @@ def _scaling_semantics(scaling: dict[str, Any]) -> None:
 
 
 def _central_semantics(workload: dict[str, Any]) -> None:
-    """Bind rotation references to reviewed central functions and distinct roles."""
+    """Bind secrets to reviewed central functions, distinct roles and the D-4 key.
+
+    D-4: one runtime CMK encrypts every declared secret; the JWT and 2FA CMKs
+    are separate keys. S1.9 extends this binding to the other runtime data.
+    """
     central = workload["central"]
     roles = [value for key, value in central.items() if key.endswith("_role_arn")]
     if len(set(roles)) != len(roles):
         raise ValueError("central role ARNs must be distinct")
+    keys = [key["arn"] for key in central["cmk"].values()]
+    if len(set(keys)) != len(keys):
+        raise ValueError("central CMK ARNs must be distinct")
     functions = central["rotation_function_arns"]
     for secret in workload["secret_lifecycle"]["references"].values():
+        if secret["kms_key_arn"] != central["cmk"]["runtime"]["arn"]:
+            raise ValueError("declared secret must use the runtime CMK")
         rotation = secret["rotation"]
         if type(rotation) is dict and rotation["function_ref"] not in functions:
             raise ValueError("rotation function missing from central metadata")

@@ -67,6 +67,29 @@ SECRET_MATERIAL_TYPES = (
     "tls:",
     "aws:secretsmanager/secretVersion:SecretVersion",
 )
+# Closed allowlist of the hardened graph (F3), derived from what it renders
+# today: the taggable workload types, the registry, mail and route types it
+# keeps untagged or tags itself, and the component tokens. Any other type,
+# including a packaged component, fails; widening it is a reviewed change.
+HARDENED_UNTAGGED_TYPES = frozenset(
+    {
+        "aws:ec2/routeTableAssociation:RouteTableAssociation",
+        "aws:ecr/repository:Repository",
+        "aws:route53/record:Record",
+        "aws:sesv2/emailIdentity:EmailIdentity",
+    }
+)
+HARDENED_COMPONENT_TYPES = frozenset(
+    {
+        "user-service-infrastructure:core:EnvironmentSettings",
+        "user-service-infrastructure:messaging:Plane",
+        "user-service-infrastructure:network:Plane",
+        "user-service-infrastructure:registry:Plane",
+        "user-service-infrastructure:secrets:Runtime",
+        "user-service-infrastructure:stack:UserService",
+    }
+)
+HARDENED_TYPES = TAGGABLE_TYPES | HARDENED_UNTAGGED_TYPES | HARDENED_COMPONENT_TYPES
 
 
 def _merge_tags(existing, baseline: dict[str, str]) -> dict[str, str]:
@@ -80,12 +103,31 @@ def _merge_tags(existing, baseline: dict[str, str]) -> dict[str, str]:
 
 
 def _reject_secret_material(
-    args: pulumi.ResourceTransformationArgs,
-) -> pulumi.ResourceTransformationResult | None:
-    """Fail closed before a generator or secret version joins the hardened graph."""
+    args: pulumi.ResourceTransformationArgs | pulumi.ResourceTransformArgs,
+) -> None:
+    """Fail closed before secret material or an unreviewed type joins the graph.
+
+    One check serves the SDK transformation and the engine transform alike;
+    both argument types carry ``type_`` and ``None`` keeps the resource as is.
+    """
     if args.type_.startswith(SECRET_MATERIAL_TYPES):
         raise ValueError("Hardened workload graph must not hold secret material")
+    if args.type_ not in HARDENED_TYPES:
+        raise ValueError("Hardened workload graph holds an unreviewed type")
     return None
+
+
+def _guard_hardened_stack() -> None:
+    """Guard the whole stack before its first hardened resource (FR-09, F1).
+
+    The SDK stack transformation reaches every resource this program builds,
+    whatever its parent, including the registry owner and root resources. The
+    engine resource transform also reaches the children of a packaged
+    component, which no in-process transformation sees. The component-level
+    transformation in ``_compose_hardened`` stays as a second layer.
+    """
+    pulumi.runtime.register_stack_transformation(_reject_secret_material)
+    pulumi.runtime.register_resource_transform(_reject_secret_material)
 
 
 class WorkloadPhaseStack(RegistryPhaseStack):
@@ -107,6 +149,8 @@ class WorkloadPhaseStack(RegistryPhaseStack):
         if type(secrets) is not RuntimeSecretsDescriptor:
             raise ValueError("Workload composition requires a secret declaration")
         secrets.validate_target(settings)
+        if secrets.hardened:
+            _guard_hardened_stack()
         super().__init__(registries=registries)
         self.settings = settings
         if secrets.hardened:

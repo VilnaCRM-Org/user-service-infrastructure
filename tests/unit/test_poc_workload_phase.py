@@ -182,16 +182,50 @@ def _add_secret_material(stack, mutation):
 
     import pulumi
 
-    options = pulumi.ResourceOptions(parent=stack.runtime_secrets)
-    if mutation == "random-password":
+    # The owner varies: a runtime-secrets child, a direct stack child or a
+    # root resource with no parent at all (F1: the guard is stack-wide).
+    owner, _, kind = mutation.rpartition(":")
+    parents = {"": stack.runtime_secrets, "stack": stack, "root": None}
+    options = pulumi.ResourceOptions(parent=parents[owner])
+    if kind == "random-password":
         random.RandomPassword("fixture-material", length=16, opts=options)
-    if mutation == "secret-version":
+    if kind == "secret-version":
         aws.secretsmanager.SecretVersion(
             "fixture-version",
             secret_id="synthetic",
             secret_string="synthetic",
             opts=options,
         )
+    if kind == "ssm-parameter":
+        aws.ssm.Parameter(
+            "fixture-parameter", type="String", value="synthetic", opts=options
+        )
+
+
+class EngineTransforms:
+    """Stand in for the engine callback server, which mocks do not run."""
+
+    def __init__(self):
+        self.registered = []
+
+    def register_stack_transform(self, transform):
+        self.registered.append(transform)
+
+    def apply(self, request):
+        """Apply each registered engine transform as the engine would."""
+        from pulumi.runtime import rpc
+
+        import pulumi
+
+        for transform in self.registered:
+            args = pulumi.ResourceTransformArgs(
+                custom=request.custom,
+                type_=request.type,
+                name=request.name,
+                props=rpc.deserialize_properties(request.object),
+                opts=pulumi.ResourceOptions(),
+            )
+            assert transform(args) is None
 
 
 def _probe(root, mode, mutation, coverage_path):
@@ -227,8 +261,11 @@ def _probe(root, mode, mutation, coverage_path):
 
     registrations, outputs = {}, {}
 
+    engine = EngineTransforms()
+
     class Monitor(mocks.MockMonitor):
         def RegisterResource(self, request):
+            engine.apply(request)
             result = super().RegisterResource(request)
             registrations[request.name] = {
                 "urn": result.urn,
@@ -270,6 +307,8 @@ def _probe(root, mode, mutation, coverage_path):
         stack="test",
         monitor=Monitor(recorder),
     )
+    settings.SETTINGS.feature_support["transforms"] = True
+    settings.SETTINGS.callbacks = engine
     config = {
         "environment": "test",
         "serviceName": "user-service-infrastructure",
@@ -367,6 +406,7 @@ def _probe(root, mode, mutation, coverage_path):
                 "outputs": outputs,
                 "error": error,
                 "aws_config": aws_config,
+                "engine_transforms": len(engine.registered),
             },
             default=str,
         )

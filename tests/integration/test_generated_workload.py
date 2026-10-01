@@ -446,6 +446,25 @@ def test_native_step_two_previews_autoscaling_through_the_provider(native_stack)
     assert queries["backlog_per_task"]["returnData"] is True
 
 
+def test_native_step_two_refuses_a_dead_letter_queue_in_the_backlog(native_stack):
+    """S2.2 FR-12 N: a dead-letter queue configured as a work queue fails the
+    step-2 program before the autoscaling plane registers anything."""
+    stack, work = native_stack
+    _step_two_contract(work)
+    _hardened(stack, work)
+    stack.set_config("sendEmailQueueName", auto.ConfigValue(value="failed-send-email"))
+    events = []
+    with pytest.raises(AutomationRuntimeError) as failure:
+        stack.preview(on_event=events.append)
+    assert "three distinct work queues" in str(failure.value)
+    assert not [
+        row
+        for row in resources(events)
+        if row.type.startswith("aws:appautoscaling/")
+        or row.type == "user-service-infrastructure:autoscaling:Plane"
+    ]
+
+
 def test_native_hardened_data_plane_uses_the_managed_password(native_stack):
     """S1.2/S1.3: managed password on engine 5.0.0, no password input (F-10)."""
     stack, work = native_stack

@@ -447,14 +447,41 @@ def test_readding_secret_material_to_the_hardened_graph_fails(tmp_path, mutation
     ]
 
 
-@pytest.mark.parametrize("owner", ["", "stack:", "root:"])
-def test_unlisted_type_in_the_hardened_graph_fails(tmp_path, owner):
+@pytest.mark.parametrize(
+    ("addition", "kind"),
+    [
+        ("ssm-parameter", "aws:ssm/parameter:Parameter"),
+        ("stack:ssm-parameter", "aws:ssm/parameter:Parameter"),
+        ("root:ssm-parameter", "aws:ssm/parameter:Parameter"),
+        # N1: a taggable data-plane type is not allowlisted before its story;
+        # a DocumentDB master password must never reach a hardened graph.
+        ("stack:docdb-cluster", "aws:docdb/cluster:Cluster"),
+        ("root:docdb-cluster", "aws:docdb/cluster:Cluster"),
+    ],
+)
+def test_unlisted_type_in_the_hardened_graph_fails(tmp_path, addition, kind):
     """F3: the hardened graph is a closed allowlist, not a denylist."""
-    receipt = graph(tmp_path, "hardened", f"{owner}ssm-parameter")
+    receipt = graph(tmp_path, "hardened", addition)
     assert receipt["error"] == "Hardened workload graph holds an unreviewed type"
-    assert "aws:ssm/parameter:Parameter" not in {
-        row["type"] for row in receipt["registrations"].values()
-    }
+    assert kind not in {row["type"] for row in receipt["registrations"].values()}
+
+
+@pytest.mark.parametrize("owner", ["", "stack:", "root:"])
+def test_byodkim_identity_in_the_hardened_graph_fails(tmp_path, owner):
+    """N1: an allowlisted SES identity may not carry a BYODKIM private key."""
+    receipt = graph(tmp_path, "hardened", f"{owner}byodkim-identity")
+    assert receipt["error"] == "Hardened workload graph holds an unreviewed property"
+    assert "fixture-identity" not in receipt["registrations"]
+
+
+def test_provider_function_in_the_hardened_program_fails(tmp_path):
+    """N2: the deny-all invoke guard refuses a provider read in a hardened run."""
+    receipt = graph(tmp_path, "hardened", "root:random-password-invoke")
+    assert (
+        receipt["error"] == "Hardened workload graph must not call a provider function"
+    )
+    # The same invoke passes without the hardened guard, so the guard refuses it.
+    assert graph(tmp_path, "bridge", "root:random-password-invoke")["error"] is None
 
 
 class _Resolved:
@@ -589,9 +616,20 @@ def test_pre_hardening_ecs_secrets_remain_version_pinned_until_s4_10():
 
 
 def test_hardened_guard_is_registered_stack_wide_with_the_engine(tmp_path):
-    """F1: the engine transform, which reaches packaged components, is present."""
-    assert graph(tmp_path, "hardened")["engine_transforms"] == 1
-    assert graph(tmp_path, "bridge")["engine_transforms"] == 0
+    """F1/N5: the engine transform reaches every hardened registration."""
+    hardened, bridge = graph(tmp_path, "hardened"), graph(tmp_path, "bridge")
+    assert (hardened["engine_transforms"], hardened["invoke_transforms"]) == (1, 1)
+    assert (bridge["engine_transforms"], bridge["invoke_transforms"]) == (0, 0)
+    assert bridge["engine_applied"] == []
+    # Only the root stack registers before the guard; the engine transform
+    # then runs exactly once on every other hardened registration.
+    registered = [
+        name
+        for name, row in hardened["registrations"].items()
+        if row["type"] != "pulumi:pulumi:Stack"
+    ]
+    assert sorted(hardened["engine_applied"]) == sorted(registered)
+    assert len(registered) == len(hardened["registrations"]) - 1
 
 
 @pytest.mark.parametrize(
@@ -618,12 +656,11 @@ def test_engine_transform_refuses_packaged_component_children(kind, message):
         _reject_secret_material(args)
 
 
-def test_hardened_allowlist_is_the_rendered_graph_plus_reviewed_taggable_types(
-    tmp_path,
-):
-    """F3: every allowlisted untagged or component type is rendered today."""
+def test_hardened_allowlist_is_exactly_the_rendered_graph(tmp_path):
+    """F3/N1: the allowlist is the rendered set; TAGGABLE_TYPES only tags."""
     from app.workload_phase import (
         HARDENED_COMPONENT_TYPES,
+        HARDENED_TAGGED_TYPES,
         HARDENED_TYPES,
         HARDENED_UNTAGGED_TYPES,
         TAGGABLE_TYPES,
@@ -632,9 +669,20 @@ def test_hardened_allowlist_is_the_rendered_graph_plus_reviewed_taggable_types(
     rendered = {
         row["type"] for row in graph(tmp_path, "hardened")["registrations"].values()
     } - {"pulumi:pulumi:Stack"}
-    assert rendered <= HARDENED_TYPES
-    assert HARDENED_UNTAGGED_TYPES | HARDENED_COMPONENT_TYPES <= rendered
+    assert rendered == HARDENED_TYPES
+    assert (
+        len(HARDENED_TAGGED_TYPES),
+        len(HARDENED_UNTAGGED_TYPES),
+        len(HARDENED_COMPONENT_TYPES),
+    ) == (9, 4, 6)
+    assert HARDENED_TAGGED_TYPES < TAGGABLE_TYPES
     assert not HARDENED_UNTAGGED_TYPES & TAGGABLE_TYPES
+    for kind in (
+        "aws:docdb/cluster:Cluster",
+        "aws:elasticache/replicationGroup:ReplicationGroup",
+        "aws:ecs/taskDefinition:TaskDefinition",
+    ):
+        assert kind in TAGGABLE_TYPES and kind not in HARDENED_TYPES
     assert not [kind for kind in HARDENED_TYPES if kind.startswith(SECRET_MATERIAL)]
 
 
@@ -660,10 +708,114 @@ def test_secret_lifecycle_spec_records_the_awscurrent_section():
         assert stale not in text, stale
 
 
+EMAIL_IDENTITY = "aws:sesv2/emailIdentity:EmailIdentity"
+
+
+def _transform_args(engine, kind, props):
+    """Build the SDK (snake_case) or engine (camelCase) argument bag."""
+    import pulumi
+
+    if engine:
+        return pulumi.ResourceTransformArgs(
+            custom=True, type_=kind, name="probe", props=props, opts=None
+        )
+    return pulumi.ResourceTransformationArgs(
+        resource=None, type_=kind, name="probe", props=props, opts=None
+    )
+
+
+@pytest.mark.parametrize(
+    ("engine", "attributes", "accepted"),
+    [
+        (False, None, True),
+        (False, {"next_signing_key_length": "RSA_2048_BIT"}, True),
+        (True, {"nextSigningKeyLength": "RSA_2048_BIT"}, True),
+        (False, {"domain_signing_private_key": "synthetic"}, False),
+        (True, {"domainSigningPrivateKey": "synthetic"}, False),
+        (
+            False,
+            {
+                "next_signing_key_length": "RSA_2048_BIT",
+                "domain_signing_selector": "fixture",
+            },
+            False,
+        ),
+        (True, {"nextSigningKeyLength": "x", "domainSigningSelector": "x"}, False),
+        # An opaque value, such as an input type or an Output, fails closed.
+        (False, "opaque", False),
+        (True, ["nextSigningKeyLength"], False),
+    ],
+)
+def test_ses_identity_holds_only_the_easy_dkim_key_length(engine, attributes, accepted):
+    """N1: both the SDK and the engine path refuse a BYODKIM signing key."""
+    from app.workload_phase import _reject_secret_material
+
+    key = "dkimSigningAttributes" if engine else "dkim_signing_attributes"
+    props = {"emailIdentity": "fixture.example", key: attributes}
+    args = _transform_args(engine, EMAIL_IDENTITY, props)
+    if accepted:
+        assert _reject_secret_material(args) is None
+    else:
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _reject_secret_material(args)
+
+
+@pytest.mark.parametrize("engine", [False, True])
+def test_unrendered_data_and_compute_types_are_refused_on_both_paths(engine):
+    """N1: no master password, auth token or task environment before S1.3/S4.10."""
+    from app.workload_phase import _reject_secret_material
+
+    for kind, props in (
+        ("aws:docdb/cluster:Cluster", {"masterPassword": "synthetic"}),
+        ("aws:elasticache/replicationGroup:ReplicationGroup", {"authToken": "x"}),
+        ("aws:ecs/taskDefinition:TaskDefinition", {"containerDefinitions": "[]"}),
+    ):
+        with pytest.raises(ValueError, match="unreviewed type"):
+            _reject_secret_material(_transform_args(engine, kind, props))
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "aws:secretsmanager/getRandomPassword:getRandomPassword",
+        "aws:secretsmanager/getSecretVersion:getSecretVersion",
+        "aws:index/getCallerIdentity:getCallerIdentity",
+        "random:index/getRandom:getRandom",
+    ],
+)
+def test_invoke_guard_denies_every_provider_function(token):
+    """N2: the allowlist is empty, so every invoke token fails closed."""
+    from app.workload_phase import _reject_invoke
+
+    import pulumi
+
+    args = pulumi.InvokeTransformArgs(token=token, args={}, opts=pulumi.InvokeOptions())
+    with pytest.raises(ValueError, match="must not call a provider function"):
+        _reject_invoke(args)
+
+
+def test_hardened_modules_make_no_provider_function_call():
+    """N2: grep proof that the hardened program reads no provider data."""
+    import re
+
+    modules = [
+        *sorted((ROOT / "pulumi/app").glob("*.py")),
+        ROOT / "scripts/poc_workload_phase_entrypoint.py",
+    ]
+    calls = re.compile(
+        r"\b(?:aws|random|tls)\.(?:[a-z0-9_]+\.)*get_[a-z_]+\(|\binvoke\("
+    )
+    assert calls.search("aws.secretsmanager.get_random_password(password_length=8)")
+    assert calls.search("pulumi.runtime.invoke(token, {})")
+    assert not [str(path) for path in modules if calls.search(path.read_text())]
+
+
 def test_secret_lifecycle_spec_records_the_hardened_contract():
     """F-4: the hardened section names its markers and the guard's real reach."""
     text = (ROOT / "specs/poc/secret-lifecycle.md").read_text()
-    section = text[text.index("## Hardened (seeded) declarations") :]
+    start = text.index("## Hardened (seeded) declarations")
+    # Bounded: the S1.7 section below has its own marker test.
+    section = text[start : text.index("### ECS references resolve `AWSCURRENT`")]
     for marker in (
         "rotation-seed",
         "validate_seed_input",
@@ -672,6 +824,13 @@ def test_secret_lifecycle_spec_records_the_hardened_contract():
         "register_resource_transform",
         "runtime CMK",
         "re.fullmatch",
+        "register_invoke_transform",
+        "dkimSigningAttributes",
+        "manageMasterUserPassword",
+        "pulumi.export",
+        "register_outputs",
+        "default-provider config",
+        "both `deleted` and `retain`",
     ):
         assert marker in section, marker
     assert "a transformation fails the program" not in section

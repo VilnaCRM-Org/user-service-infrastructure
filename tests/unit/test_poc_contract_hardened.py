@@ -377,3 +377,99 @@ def test_hardened_key_arns_refuse_a_trailing_newline():
         secret["kms_key_arn"] = runtime["arn"]
     with pytest.raises(ValueError, match="poc-test-v1 schema"):
         _validate_document(contract)
+
+
+CENTRAL_ROLES = (
+    "publisher_role_arn",
+    "execution_role_arn",
+    "task_role_arn",
+    "app_rotation_role_arn",
+    "redeploy_role_arn",
+    "bootstrap_job_role_arn",
+    "restore_operator_role_arn",
+    "restore_reader_role_arn",
+    "apply_role_arn",
+    "recovery_role_arn",
+    "exercise_role_arn",
+)
+
+
+def _append_newline(contract, path):
+    target = contract
+    parts = [int(part) if part.isdigit() else part for part in path.split(".")]
+    for part in parts[:-1]:
+        target = target[part]
+    target[parts[-1]] += "\n"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        *(f"workload.central.{role}" for role in CENTRAL_ROLES),
+        "workload.central.rotation_function_arns.app_rotation",
+        "workload.central.redeploy_function_arn",
+        *(f"workload.central.cmk.{key}.alias" for key in ("runtime", "jwt")),
+        "workload.central.cmk.two_factor.alias",
+        "workload.central.inventory_sha256",
+        "workload.central.seed_enrollment_revision",
+        *(
+            f"workload.secret_lifecycle.references.{purpose}.name"
+            for purpose in (
+                "app_secret",
+                "oauth_encryption_key",
+                "oauth_passphrase",
+                "two_factor_encryption_key",
+                "oauth_private_key",
+                "oauth_public_key",
+            )
+        ),
+        "step2:workload.central.lambda_network.subnet_ids.0",
+        "step2:workload.central.lambda_network.bootstrap_job_security_group_id",
+        "step2:workload.central.documentdb_managed_secret_arn",
+        "scaled:scaling.starts.0.at",
+        "scaled:scaling.consumed.0",
+    ],
+)
+def test_hardened_string_fields_refuse_a_trailing_newline(path):
+    """N3: ``$`` matches before a final newline; hardened fields fully match."""
+    kind, _, path = path.rpartition(":")
+    contract = step_two() if kind else hardened()
+    if kind == "scaled":
+        contract["scaling"] = {
+            "starts": [{"seq": 1, "at": "2026-10-02T08:00:00"}],
+            "stops": [],
+            "consumed": ["start-1"],
+            "scheduled_scaling_suspended": True,
+        }
+    _validate_document(copy.deepcopy(contract))
+    _append_newline(contract, path)
+    with pytest.raises(ValueError, match="fully match"):
+        _validate_document(contract)
+
+
+def test_hardened_function_reference_and_key_refuse_a_trailing_newline():
+    """N3: a consistent ``function_ref`` and map key still fully match."""
+    contract = hardened()
+    central = contract["workload"]["central"]
+    central["rotation_function_arns"]["app_rotation\n"] = central[
+        "rotation_function_arns"
+    ].pop("app_rotation")
+    for secret in references(contract).values():
+        if type(secret["rotation"]) is dict:
+            secret["rotation"]["function_ref"] = "app_rotation\n"
+    with pytest.raises(ValueError, match="fully match"):
+        _validate_document(contract)
+
+
+def test_reviewer_probe_of_trailing_newlines_is_refused():
+    """N3: the reviewer's three probes each fail, not only in combination."""
+    names = hardened()
+    for secret in references(names).values():
+        secret["name"] += "\n"
+    function = hardened()
+    function["workload"]["central"]["rotation_function_arns"]["app_rotation"] += "\n"
+    role = hardened()
+    role["workload"]["central"]["app_rotation_role_arn"] += "\n"
+    for contract in (names, function, role):
+        with pytest.raises(ValueError, match="fully match"):
+            _validate_document(contract)

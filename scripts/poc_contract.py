@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, ValidationError, validators
 
 SCHEMA_PATH = Path(__file__).parents[1] / "schemas" / "poc-test-v1.schema.json"
 MAX_BYTES = 131072
@@ -94,12 +94,33 @@ def load(path: Path) -> dict[str, Any]:
 
 def _shape(contract: dict[str, Any]) -> None:
     # Schema ``pattern`` runs as ``re.search``: ``$`` also matches before a final
-    # newline. Fixed-length fields pin their length; semantic checks and the
-    # S4.11 receipt library re-check variable-length fields with ``fullmatch``.
+    # newline. ``_hardened_semantics`` re-validates a ``workload_step`` contract
+    # with ``re.fullmatch`` patterns; the pre-hardening shape keeps ``re.search``
+    # (AD-25), and the S4.11 receipt library must re-check receipt fields.
     schema = json.loads(SCHEMA_PATH.read_text())
     validator = Draft202012Validator(schema)
     if next(validator.iter_errors(contract), None) is not None:
         raise ValueError("contract violates poc-test-v1 schema")
+
+
+def _fullmatch_pattern(_validator, pattern, instance, _schema):
+    """Apply a schema ``pattern`` to the whole string, as ECMA-262 ``$`` does."""
+    if type(instance) is str and re.fullmatch(pattern, instance) is None:
+        yield ValidationError("string does not fully match its schema pattern")
+
+
+# Every poc-test-v1 pattern is anchored with ``^`` and ``$``, so a full match
+# only adds the refusal of a trailing newline that ``re.search`` accepts.
+_FullmatchValidator = validators.extend(
+    Draft202012Validator, {"pattern": _fullmatch_pattern}
+)
+
+
+def _fullmatch_shape(contract: dict[str, Any]) -> None:
+    """Refuse any hardened string that only matches before a final newline (N3)."""
+    validator = _FullmatchValidator(json.loads(SCHEMA_PATH.read_text()))
+    if next(validator.iter_errors(contract), None) is not None:
+        raise ValueError("hardened contract strings must fully match the schema")
 
 
 def _mail_semantics(mail: dict[str, Any]) -> None:
@@ -238,6 +259,7 @@ def _hardened_semantics(contract: dict[str, Any]) -> None:
     """Check the seeded shape; it exists only with ``workload_step`` (AD-25)."""
     if "workload_step" not in contract:
         return
+    _fullmatch_shape(contract)
     _strict_integers(contract)
     _scaling_semantics(contract["scaling"])
     _central_semantics(contract["workload"])

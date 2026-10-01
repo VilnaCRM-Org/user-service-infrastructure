@@ -574,12 +574,45 @@
       },
       "then": {
         "properties": {
+          "secret_metadata": {
+            "additionalProperties": {
+              "properties": {
+                "arn": {
+                  "pattern": "^arn:aws:secretsmanager:eu-central-1:933245420672:secret:"
+                },
+                "kms_key_arn": {
+                  "pattern": "^arn:aws:kms:eu-central-1:933245420672:key/"
+                }
+              }
+            }
+          },
           "projection_inputs": {
             "properties": {
+              "images": {
+                "properties": {
+                  "web": {
+                    "properties": {
+                      "uri": {
+                        "pattern": "^933245420672\\.dkr\\."
+                      }
+                    }
+                  },
+                  "worker": {
+                    "properties": {
+                      "uri": {
+                        "pattern": "^933245420672\\.dkr\\."
+                      }
+                    }
+                  }
+                }
+              },
               "certificate": {
                 "properties": {
                   "parameter_arn": {
-                    "pattern": ":parameter/vilnacrm/prod/"
+                    "pattern": "^arn:aws:ssm:eu-central-1:933245420672:parameter/vilnacrm/prod/"
+                  },
+                  "certificate_arn": {
+                    "pattern": "^arn:aws:acm:eu-central-1:933245420672:certificate/"
                   }
                 }
               }

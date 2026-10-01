@@ -79,6 +79,35 @@ elif hardened:
         aws.ssm.Parameter(
             "fixture-parameter", type="String", value="synthetic", opts=options
         )
+    # N1: a credential-bearing data-plane type is refused before its story.
+    if kind == "docdb-cluster":
+        import pulumi_aws as aws
+
+        aws.docdb.Cluster(
+            "fixture-cluster",
+            master_username="synthetic",
+            master_password="synthetic-not-a-secret",
+            opts=options,
+        )
+    # N1: an allowlisted SES identity still refuses a BYODKIM private key.
+    if kind == "byodkim-identity":
+        import pulumi_aws as aws
+
+        aws.sesv2.EmailIdentity(
+            "fixture-identity",
+            email_identity="fixture.example",
+            dkim_signing_attributes={
+                # Base64 of "synthetic": a well-formed, non-secret key value.
+                "domain_signing_private_key": "c3ludGhldGlj",
+                "domain_signing_selector": "fixture",
+            },
+            opts=options,
+        )
+    # N2: the engine invoke guard refuses a provider function call.
+    if kind == "random-password-invoke":
+        import pulumi_aws as aws
+
+        aws.secretsmanager.get_random_password(password_length=16)
 elif mode == "legacy-workload":
     # The installed entrypoint stays metadata-only. Exercise the legacy managed
     # topology through this explicit integration-only program instead.

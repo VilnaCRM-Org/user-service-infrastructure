@@ -403,9 +403,8 @@ def test_native_hardened_workload_rejects_a_non_iam_redis_engine(native_stack):
     with pytest.raises(AutomationRuntimeError) as failure:
         stack.preview(on_event=events.append)
     assert "V-9" in str(failure.value)
-    assert not [
-        row for row in resources(events) if row.type.startswith("aws:elasticache")
-    ]
+    # F4: the refusal runs before the first workload registration.
+    assert not [row for row in resources(events) if row.type.startswith("aws:")]
 
 
 @pytest.mark.parametrize(
@@ -415,6 +414,10 @@ def test_native_hardened_workload_rejects_a_non_iam_redis_engine(native_stack):
         ("root:redis-auth-token", "unreviewed property", None),
         ("stack:redis-tls-preferred", "unreviewed property", None),
         ("root:redis-user-mismatch", "unreviewed property", None),
+        # F1: the open built-in ``default`` user or a foreign user group.
+        ("root:redis-open-default-group", "unreviewed property", None),
+        ("stack:redis-open-default-group", "unreviewed property", None),
+        ("root:redis-foreign-user-group", "unreviewed property", None),
         ("runtime-secrets:random-password", "must not hold secret material", None),
         # N1 (F1): outside the component, the stack-wide guard still applies.
         ("stack:random-password", "must not hold secret material", None),

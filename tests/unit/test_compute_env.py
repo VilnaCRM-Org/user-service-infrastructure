@@ -36,6 +36,10 @@ QUEUE_DSNS = (
 )
 ACCESS_KEY = "AKIA" + "SYNTHETIC0000000"
 QUEUE = "https://sqs.eu-central-1.amazonaws.com/891377212104/send-email"
+SECRET_ARN = (
+    "arn:aws:secretsmanager:eu-central-1:891377212104:secret:"
+    "/user-service-infrastructure/runtime/test/synthetic-app_secret-AbCdEf"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -142,6 +146,70 @@ def test_a_lockout_url_that_differs_from_the_redis_url_raises(environment):
     """FR-08 B: the plain lockout URL must equal the plain Redis URL."""
     with pytest.raises(ValueError, match="REDIS_LOCKOUT_URL must equal"):
         require_plain_environment(environment, [])
+
+
+REDIS = "rediss://master.synthetic.euc1.cache.amazonaws.com:6379"
+REDIS_URL_ROW = {"name": "REDIS_URL", "value": REDIS}
+REDIS_LOCKOUT_ROW = {"name": "REDIS_LOCKOUT_URL", "value": REDIS}
+REDIS_ROWS = [REDIS_URL_ROW, REDIS_LOCKOUT_ROW]
+PLAIN_VALUES = "must both be plain values"
+IAM_URL = "must be a rediss:// URL"
+
+
+def _both(url):
+    return [{"name": row["name"], "value": url} for row in REDIS_ROWS]
+
+
+def test_the_hardened_redis_urls_are_equal_plain_rediss_urls():
+    """FR-08 B (F5): the hardened shape holds both URLs as equal plain rows."""
+    assert require_plain_environment(REDIS_ROWS, [], unversioned=True) is None
+    containers = [{"environment": REDIS_ROWS, "secrets": []}]
+    assert ComputePlane._serialize_container(containers, unversioned=True) == (
+        json.dumps(containers)
+    )
+    # The pre-hardening shape keeps only the equality rule (AD-25).
+    assert require_plain_environment([], []) is None
+    assert require_plain_environment([REDIS_URL_ROW], [], unversioned=False) is None
+
+
+@pytest.mark.parametrize(
+    ("environment", "secrets", "message"),
+    [
+        # F5: the lockout URL is missing, or only the lockout URL is plain.
+        ([REDIS_URL_ROW], [], PLAIN_VALUES),
+        ([REDIS_LOCKOUT_ROW], [], PLAIN_VALUES),
+        ([], [], PLAIN_VALUES),
+        # F5: either URL given as a secret ARN instead of a plain row.
+        (
+            [REDIS_URL_ROW],
+            [{"name": "REDIS_LOCKOUT_URL", "valueFrom": SECRET_ARN}],
+            PLAIN_VALUES,
+        ),
+        (
+            [REDIS_LOCKOUT_ROW],
+            [{"name": "REDIS_URL", "valueFrom": SECRET_ARN}],
+            PLAIN_VALUES,
+        ),
+        # F5: the URL is not a bare ``rediss://`` endpoint.
+        (_both(REDIS.replace("rediss://", "redis://")), [], IAM_URL),
+        (_both(REDIS.replace("rediss://", "REDISS://")), [], IAM_URL),
+        (_both(REDIS + "/0"), [], IAM_URL),
+        (_both(REDIS + "/"), [], IAM_URL),
+        (_both(REDIS + "?ssl_cert_reqs=none"), [], IAM_URL),
+        (_both(REDIS + "#fragment"), [], IAM_URL),
+        (_both("rediss://"), [], IAM_URL),
+        # FR-08 B: the two plain URLs differ.
+        ([REDIS_URL_ROW, {**REDIS_LOCKOUT_ROW, "value": REDIS + "1"}], [], "equal"),
+    ],
+)
+def test_a_hardened_redis_url_shape_fault_raises(environment, secrets, message):
+    """F5: each hardened Redis URL fault raises in the guard's shared check."""
+    with pytest.raises(ValueError, match=message):
+        require_plain_environment(environment, secrets, unversioned=True)
+    with pytest.raises(ValueError, match=message):
+        ComputePlane._serialize_container(
+            [{"environment": environment, "secrets": secrets}], unversioned=True
+        )
 
 
 def test_queue_and_mailer_dsns_are_credential_free_with_region(hardened):
@@ -283,12 +351,6 @@ def test_overlapping_or_credential_environment_raises(environment, secrets):
             )
 
 
-SECRET_ARN = (
-    "arn:aws:secretsmanager:eu-central-1:891377212104:secret:"
-    "/user-service-infrastructure/runtime/test/synthetic-app_secret-AbCdEf"
-)
-
-
 AWSLOGS = {"logDriver": "awslogs", "options": {"awslogs-group": "g"}}
 VERSIONED = SECRET_ARN + ":password:AWSPREVIOUS:"
 SPLUNK = {
@@ -305,7 +367,7 @@ def _container(**changes):
         "image": "891377212104.dkr.ecr.eu-central-1.amazonaws.com/fixture:sha-1",
         "essential": True,
         "command": ["/bin/sh", "-ec", "exec /synthetic/run"],
-        "environment": [{"name": "A", "value": "x"}],
+        "environment": [{"name": "A", "value": "x"}, *REDIS_ROWS],
         "secrets": [{"name": "APP_SECRET", "valueFrom": SECRET_ARN}],
         "portMappings": [],
         "readonlyRootFilesystem": True,
@@ -323,7 +385,7 @@ def _container(**changes):
 @pytest.mark.parametrize("unversioned", [False, True])
 def test_plain_container_serializes_unchanged(unversioned):
     containers = [
-        {"environment": [{"name": "A", "value": "x"}], "secrets": []},
+        {"environment": [{"name": "A", "value": "x"}, *REDIS_ROWS], "secrets": []},
         _container(),
     ]
     assert ComputePlane._serialize_container(

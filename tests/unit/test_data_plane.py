@@ -412,6 +412,25 @@ def test_a_mixed_case_replication_group_id_is_lower_cased_in_the_env_value():
     assert redis.iam_user_id == "user-service-dev-app"
 
 
+def test_the_wired_env_value_lower_cases_a_mixed_case_replication_group_id():
+    """F7 (FR-04 B): the compute wiring renders the lower-case group ID."""
+    from app.compute import ComputePlane
+
+    resources, captured = _hardened_redis(stack_tag="User-Service-Dev")
+    assert resources[REPLICATION_GROUP]["inputs"]["replicationGroupId"] == (
+        "User-Service-Dev-redis"
+    )
+    compute = object.__new__(ComputePlane)
+    compute._hardened = True
+    rows = {
+        row["name"]: row["value"]
+        for row in compute._data_environment(_settings(), captured["plane"])
+    }
+    assert rows["REDIS_REPLICATION_GROUP_ID"] == "user-service-dev-redis"
+    assert rows["REDIS_IAM_USER_ID"] == "user-service-dev-app"
+    assert rows["AWS_REGION"] == "eu-central-1"
+
+
 def test_redis_identity_is_deterministic_and_lower_case():
     identity = redis_iam_identity("user-service-infrastructure-test")
     assert identity[:2] == (

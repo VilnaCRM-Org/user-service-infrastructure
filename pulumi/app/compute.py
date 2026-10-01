@@ -144,8 +144,42 @@ def require_credential_free(value: Any) -> str:
     return value
 
 
+# The hardened containers reach Redis through these two equal plain URLs.
+REDIS_URL_NAMES = frozenset({"REDIS_URL", "REDIS_LOCKOUT_URL"})
+REDIS_IAM_SCHEME = "rediss://"
+
+
+def _require_iam_redis_urls(values: dict[str, str]) -> None:
+    """Hold the hardened Redis URLs to the plain IAM shape (FR-04, FR-08 B).
+
+    Both URLs are plain rows; since plain and secret names are disjoint,
+    neither can be a ``secrets`` row. The URL is ``rediss://`` with a host and
+    no path, query or fragment (``redis_iam_url``). Equality is checked by
+    ``require_plain_environment`` for every shape.
+    """
+    if not REDIS_URL_NAMES <= set(values):
+        raise ValueError(
+            "Hardened REDIS_URL and REDIS_LOCKOUT_URL must both be plain values (FR-08)"
+        )
+    url = values["REDIS_URL"]
+    parts = urlsplit(url)
+    if (
+        not url.startswith(REDIS_IAM_SCHEME)
+        or not parts.netloc
+        or parts.path
+        or parts.query
+        or parts.fragment
+    ):
+        raise ValueError(
+            "Hardened REDIS_URL must be a rediss:// URL with no path or query (FR-04)"
+        )
+
+
 def require_plain_environment(
-    environment: list[dict[str, Any]], secrets: list[dict[str, Any]]
+    environment: list[dict[str, Any]],
+    secrets: list[dict[str, Any]],
+    *,
+    unversioned: bool = False,
 ) -> None:
     """Keep plain environment names apart from secret names (FR-03, FR-08).
 
@@ -153,6 +187,8 @@ def require_plain_environment(
     ``secretOptions`` reference is refused by ``require_plain_containers``);
     every plain value must be credential-free and no name may be both plain and secret.
     A plain ``REDIS_LOCKOUT_URL`` must equal ``REDIS_URL`` (FR-08 B, S1.4).
+    With ``unversioned`` (the hardened shape) both Redis URLs must be plain
+    rows and the URL a bare ``rediss://`` endpoint (S1.4 gate F5).
     """
     names = [row["name"] for row in environment]
     if len(set(names)) != len(names) or set(names) & {row["name"] for row in secrets}:
@@ -160,6 +196,8 @@ def require_plain_environment(
     for row in environment:
         require_credential_free(row["value"])
     values = {row["name"]: row["value"] for row in environment}
+    if unversioned:
+        _require_iam_redis_urls(values)
     if "REDIS_LOCKOUT_URL" in values and (
         values["REDIS_LOCKOUT_URL"] != values.get("REDIS_URL")
     ):
@@ -262,7 +300,8 @@ def require_plain_containers(containers: Any, *, unversioned: bool) -> None:
     secret ARN (S1.7); the pre-hardening shape stays version-pinned (AD-25).
     ``logConfiguration`` is the closed awslogs shape with the three emitted
     option keys and no ``secretOptions``; any other ``valueFrom`` in the tree
-    gets the same bare-ARN check when ``unversioned``.
+    gets the same bare-ARN check when ``unversioned``, as do the two plain
+    Redis URLs (``require_plain_environment``).
     The guard and ``ComputePlane`` apply this one check, so they agree.
     """
     if type(containers) is not list:
@@ -274,7 +313,7 @@ def require_plain_containers(containers: Any, *, unversioned: bool) -> None:
             container.get("environment", []), ENVIRONMENT_ROW_KEYS
         )
         secrets = _closed_rows(container.get("secrets", []), SECRET_ROW_KEYS)
-        require_plain_environment(environment, secrets)
+        require_plain_environment(environment, secrets, unversioned=unversioned)
         _require_credential_free_tree({**container, "secrets": None})
         if "logConfiguration" in container:
             _require_awslogs_configuration(container["logConfiguration"])

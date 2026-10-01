@@ -317,11 +317,28 @@ Redis security group admits only the service security group on the Redis port.
 The pre-hardening branch keeps its generated token and Redis URL secret until
 S4.10 removes it (AD-25).
 
+The stack-wide guard holds each Redis type to that shape (S1.4 gate fixes):
+an input present in both casings is refused, so a decoy key in the other
+casing cannot hide the checked one (F2). The `UserGroup` must have engine `redis` and
+`user_ids` with exactly two lower-case user IDs, never the built-in `default`
+user in any casing: AWS creates that user open (`on ~* +@all`, no password)
+(F1). The replication group's one `user_group_ids` entry must be the one
+user-group ID this graph declares (`redis_iam_identity`), so a foreign literal
+group fails (F1). The IAM app user has a lower-case user name and ID (F8) and
+an access string of exactly `on ~* +@all -@dangerous` (F3). The guard reads
+every literal Redis input, and the Secret name, through `_inspectable`: an
+unknown, secret or opaque value fails, and only a user or user-group ID entry,
+which is another resource's output, is deferred while unknown (F6). The
+DocumentDB and Redis engine checks both run before any resource registers
+(F4).
+
 The containers receive plain environment values only: `REDIS_URL` and
 `REDIS_LOCKOUT_URL` are the same `rediss://<primary-endpoint>:<port>` URL with
 no userinfo (the FR-08 B row: the lockout URL equals the Redis URL, checked on
 the plain environment), plus `REDIS_IAM_USER_ID`, the lower-case
 `REDIS_REPLICATION_GROUP_ID` and `AWS_REGION` for the token signer (S5.13). The
+hardened container check requires both URLs as plain rows, so neither can be a
+secret, equal to each other and `rediss://` with no path or query (F5). The
 task role's `elasticache:Connect` grant on the replication-group and user ARNs
 is BI's (S5.1).
 
@@ -353,3 +370,18 @@ Live checks (recorded here, not run by this story): S4.6 step 4 (V-5: the users
 and the group are accepted by the step-1 apply), step 7 (V-2: the Redis IAM
 client in the step-2 health observation) and step 10 (the 13-hour Redis IAM
 soak, V-9 and NFR-05: no Redis authentication failure).
+
+Residual risks and advisories (S1.4 gate F10):
+
+- `redis_iam_identity` caps each ID at 40 characters with a hash suffix
+  (`build_resource_name(..., max_length=40)`); the TEST default-user and
+  user-group IDs are truncated that way. The 40-character cap is this repo's
+  choice. For an ElastiCache user ID and user-group ID the AWS maximum length
+  is unverified here; S4.6 step 4 confirms that the step-1 apply accepts the
+  truncated IDs.
+- Advisory for S4.6 step 4: check that AWS does not normalize the access
+  strings on read (for example `off -@all` or `on ~* +@all -@dangerous`
+  returned in another form), or each refresh would report drift against the
+  exact strings the guard requires.
+- Advisory for S5.13: S5.13 must test against the exact access string
+  `on ~* +@all -@dangerous`, the one the guard admits for the IAM app user.

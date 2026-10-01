@@ -217,12 +217,17 @@ def _mutation_config(mutation):
     return {}
 
 
-def _fixture_builders(options):
-    """Map each N-case kind to the forbidden registration it attempts."""
+def _fixture_builders(options, user_group_id):
+    """Map each N-case kind to the forbidden registration it attempts.
+
+    ``user_group_id`` is this graph's Redis user group, so each Redis fixture
+    differs from the reviewed shape in exactly one input.
+    """
     import json
 
     import pulumi_aws as aws
     import pulumi_random as random
+    from app.data import REDIS_APP_ACCESS_STRING
 
     import pulumi
 
@@ -344,20 +349,34 @@ def _fixture_builders(options):
         ),
         # FR-04 N (D-1): an AUTH token, TLS disabled or ``preferred``, an IAM
         # user whose name differs from its ID, or a declared Redis secret.
-        "redis-auth-token": lambda: _redis_group(aws, options, auth_token="x" * 16),
+        "redis-auth-token": lambda: _redis_group(
+            aws, options, user_group_id, auth_token="x" * 16
+        ),
         "redis-tls-disabled": lambda: _redis_group(
-            aws, options, transit_encryption_enabled=False
+            aws, options, user_group_id, transit_encryption_enabled=False
         ),
         "redis-tls-preferred": lambda: _redis_group(
-            aws, options, transit_encryption_mode="preferred"
+            aws, options, user_group_id, transit_encryption_mode="preferred"
+        ),
+        # F1: a replication group bound to a user group this graph lacks.
+        "redis-foreign-user-group": lambda: _redis_group(
+            aws, options, user_group_id, user_group_ids=["fixture-users"]
         ),
         "redis-user-mismatch": lambda: aws.elasticache.User(
             "fixture-user",
             user_id="fixture-app",
             user_name="fixture-other",
             engine="redis",
-            access_string="on ~* +@all",
+            access_string=REDIS_APP_ACCESS_STRING,
             authentication_mode={"type": "iam"},
+            opts=options,
+        ),
+        # F1: the AWS built-in ``default`` user is open (on ~* +@all, no password).
+        "redis-open-default-group": lambda: aws.elasticache.UserGroup(
+            "fixture-user-group",
+            user_group_id="fixture-users",
+            engine="redis",
+            user_ids=["default", "fixture-app"],
             opts=options,
         ),
         "redis-secret": lambda: aws.secretsmanager.Secret(
@@ -372,13 +391,13 @@ def _fixture_builders(options):
     }
 
 
-def _redis_group(aws, options, **changes):
+def _redis_group(aws, options, user_group_id, **changes):
     """Register an otherwise reviewed IAM replication group with one change."""
     arguments = {
         "description": "fixture",
         "transit_encryption_enabled": True,
         "transit_encryption_mode": "required",
-        "user_group_ids": ["fixture-users"],
+        "user_group_ids": [user_group_id],
         **changes,
     }
     return aws.elasticache.ReplicationGroup("fixture-redis", opts=options, **arguments)
@@ -393,7 +412,10 @@ def _add_secret_material(stack, mutation):
     owner, _, kind = mutation.rpartition(":")
     parents = {"": stack.runtime_secrets, "stack": stack, "root": None}
     options = pulumi.ResourceOptions(parent=parents[owner])
-    builder = _fixture_builders(options).get(kind)
+    from app.data import redis_iam_identity
+
+    user_group_id = redis_iam_identity(stack.settings.stack_tag)[3]
+    builder = _fixture_builders(options, user_group_id).get(kind)
     if builder is not None:
         builder()
 

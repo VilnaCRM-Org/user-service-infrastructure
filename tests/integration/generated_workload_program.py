@@ -126,19 +126,31 @@ elif hardened:
             },
             opts=options,
         )
-    # FR-04 N (D-1): an AUTH token, TLS ``preferred`` or a name that differs
-    # from the IAM user's ID fails the Redis property checks.
+    # FR-04 N (D-1): an AUTH token, TLS ``preferred``, a name that differs
+    # from the IAM user's ID, a foreign user group or the open built-in
+    # ``default`` user fails the Redis property checks. Each fixture differs
+    # from the reviewed shape in exactly one input.
     if kind.startswith("redis-"):
         import pulumi_aws as aws
+        from app.data import REDIS_APP_ACCESS_STRING, redis_iam_identity
 
+        user_group_id = redis_iam_identity(workload.settings.stack_tag)[3]
         if kind == "redis-user-mismatch":
             aws.elasticache.User(
                 "fixture-user",
                 user_id="fixture-app",
                 user_name="fixture-other",
                 engine="redis",
-                access_string="on ~* +@all",
+                access_string=REDIS_APP_ACCESS_STRING,
                 authentication_mode={"type": "iam"},
+                opts=options,
+            )
+        elif kind == "redis-open-default-group":
+            aws.elasticache.UserGroup(
+                "fixture-user-group",
+                user_group_id="fixture-users",
+                engine="redis",
+                user_ids=["default", "fixture-app"],
                 opts=options,
             )
         else:
@@ -149,7 +161,11 @@ elif hardened:
                 transit_encryption_mode=(
                     "preferred" if kind == "redis-tls-preferred" else "required"
                 ),
-                user_group_ids=["fixture-users"],
+                user_group_ids=[
+                    "fixture-users"
+                    if kind == "redis-foreign-user-group"
+                    else user_group_id
+                ],
                 auth_token="x" * 16 if kind == "redis-auth-token" else None,
                 opts=options,
             )

@@ -406,6 +406,16 @@ def test_unknown_or_malformed_cmk_metadata_fails(member, value):
         _validate_document(contract)
 
 
+@pytest.mark.parametrize("member", ["runtime", "jwt", "two_factor", "jwt_previous"])
+@pytest.mark.parametrize("alias", ["alias/aws/x", "alias/aws/kms", "alias/aws/"])
+def test_cmk_alias_in_the_aws_reserved_namespace_is_refused(member, alias):
+    """S19-N1: ``alias/aws/`` is AWS-reserved and never a customer-managed alias."""
+    contract = windowed()
+    contract["workload"]["central"]["cmk"][member]["alias"] = alias
+    with pytest.raises(ValueError, match="poc-test-v1 schema|fully match"):
+        _validate_document(contract)
+
+
 @pytest.mark.parametrize(("first", "second"), CMK_PAIRS)
 def test_hardened_cmk_arns_are_pairwise_distinct(first, second):
     contract = windowed()

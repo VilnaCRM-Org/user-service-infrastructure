@@ -342,6 +342,16 @@ This file is the execution ledger. It is not a planning input.
   6. S22-N1: queue-name distinctness also validated in `environment.py`
      (S2.2 follow-up).
 
+- **S1.9 gate follow-ups (S19-M1, S19-N1, S2.2 nit; no new user
+  decision).** S19-M1: the plan and `specs/poc/secret-lifecycle.md` now
+  describe `cmk.jwt_previous` / `JWT_KMS_PREVIOUS_KEY_ID` as the verify-only
+  JWT key (the new key while pre-published, then the old key), per
+  user-service S5.11 and its 7-step key change (D-17 notes, AD-15, S1.8,
+  S1.9, S5.4, S5.11; the D-17 decision text is unchanged). S19-N1: the
+  contract schema refuses the AWS-reserved `alias/aws/` alias prefix, with a
+  test. S2.2 nit: S1.5 and S1.6 name the "S2.1/S2.2 autoscaling targets and
+  policies".
+
 ## Artifacts (sha256, revision 14)
 
 `run-summary.md` is not hashed here, because it contains the hashes. `decisions.md` is a planning input and is hashed. Commit `68584e1` added its D-14 row after revision 5; revision 6 changed only that row's label (a user decision, not a planning default); revisions 7, 8 and 9 do not change it; revision 10 adds the D-15 row (a user decision of 2026-09-30); revision 11 changes only D-15's note text (R11-n3); revisions 12, 13 and 14 do not change it. `research.md` is unchanged since revision 4; `brief.md` changed last in revision 10 (front matter and AS-4, D-15).
@@ -351,9 +361,9 @@ Check with `sha256sum -c` over the block below, from `specs/workload-wa-hardenin
 beca16ba9ab95d76cd28ed47ac8e806549b94805ddca9a2d138a790ee0f0ca59  research.md
 5d7d1e37b9417de7cbe7b4fa0bcafe28ed723da997c22be7ef5902b384e302e4  brief.md
 18228d0075defe4cd689cc070cc648c94e49bd68a52ebae92e80b8939c750a0a  prd.md
-bf835cca30d34d24192ab6a95952ff5dd4f056a46561eef9d2f5b53f1769aac9  architecture.md
-64b9deff013e2bf30a15d232b4b2acf104114f6075c70ac175c65b2a48035f1b  epics-stories.md
-de34e52f30780e89e01e2c459049f6373ac2ab0abcca9ffd86d53a262fec2cf0  decisions.md
+e9a208e029ac9caf71ce5dc4ef4418446912a02bdf889422a785344b413056da  architecture.md
+a69075147cf970bb77fce597f52ce4095dc6d1e35b7fbe198bd0aaefb9132bb7  epics-stories.md
+dd779f20718166417dbf465eab0f646998f5349268f00c532ff978c39bd6aa5d  decisions.md
 45553cbd61f1ae16c238cba9f3ee4f555ede5e06d5e9aaa9199670f0ad81046a  readiness.md
 ```
 

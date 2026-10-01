@@ -47,7 +47,7 @@ the contract invalid, so admission is refused before any read (NFR-07).
 Every declared secret is encrypted by the runtime CMK: its `kms_key_arn` must
 equal `central.cmk.runtime.arn`, and the runtime, JWT and 2FA CMK ARNs must be
 pairwise distinct (D-4). The JWT or 2FA key, the `aws/secretsmanager` key or
-any other key in the account is refused. S1.9 adds the optional previous JWT
+any other key in the account is refused. S1.9 adds the optional verify-only JWT
 key and the DocumentDB log-group binding (see "CMK binding" below). `rotation.schedule_days` must be the
 exact integer `90`.
 
@@ -403,12 +403,18 @@ Residual risks and advisories (S1.4 gate F10):
 
 The hardened contract's `central.cmk` holds the D-4 keys as `{arn, alias}`
 pairs: `runtime`, `jwt` and `two_factor` are required, and `jwt_previous` is
-optional. `jwt_previous` is present only during a JWT key change (D-17): the
-app verifies with the public halves of both JWT keys and signs only with the
-current one; S1.8 passes it as `JWT_KMS_PREVIOUS_KEY_ID`, empty when absent.
+optional. `jwt_previous` is the optional verify-only JWT key (D-17), present
+only during a JWT key change: it holds the new key while it is pre-published
+and then the old key. The app verifies with the public halves of the current
+and the verify-only JWT key (`GetPublicKey`) and signs only with the current
+one; S1.8 passes the verify-only key as `JWT_KMS_PREVIOUS_KEY_ID`, empty when
+absent. BI S5.4 grants the task role `kms:GetPublicKey` only (never
+`kms:Sign`) on whichever key is in that slot, and adds it to the task role's
+`-Guard` and `-Boundary` allowed-key lists, by reviewed amendments. The key
+change has 7 steps (user-service S5.11).
 Any other member of `cmk` fails the schema. No two keys may share an ARN or
 an alias, so a key or alias that names another D-4 key fails, and a secret on
-the previous JWT key is refused like any key other than the runtime CMK.
+the verify-only JWT key is refused like any key other than the runtime CMK.
 The values in the committed fixtures are synthetic; the real ARNs and aliases
 come from BI S5.4 through a reviewed contract PR.
 

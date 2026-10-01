@@ -281,6 +281,17 @@ def test_s13_gate_property_checks_fail_closed(engine):
     service, task = "aws:ecs/service:Service", "aws:ecs/taskDefinition:TaskDefinition"
     plain = json.dumps([{"name": "f", "secrets": []}])
     versioned = "arn:aws:secretsmanager:eu-central-1:891377212104:secret:s-AbCdEf"
+    awslogs = json.dumps(
+        [
+            {
+                "name": "f",
+                "logConfiguration": {
+                    "logDriver": "awslogs",
+                    "options": {"awslogs-group": "/g", "awslogs-region": "r"},
+                },
+            }
+        ]
+    )
     splunk = json.dumps(
         [
             {
@@ -301,6 +312,7 @@ def test_s13_gate_property_checks_fail_closed(engine):
         (service, {}),
         (secret, {"name": "fixture"}),
         (task, {"containerDefinitions": plain, "volumes": [{"name": "a"}]}),
+        (task, {"containerDefinitions": awslogs}),
     ):
         assert _reject_secret_material(args(kind, props)) is None
     for kind, props in (

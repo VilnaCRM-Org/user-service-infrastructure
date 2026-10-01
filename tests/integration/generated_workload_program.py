@@ -18,7 +18,9 @@ if os.environ.get("COVERAGE_PROCESS_START"):
     coverage.process_startup()
 
 from app.compute import ComputePlane  # noqa: E402
+from app.data import DataPlane  # noqa: E402
 from app.environment import resolve_stack_settings  # noqa: E402
+from app.network import NetworkPlane  # noqa: E402
 from app.registry_phase import RegistryPhaseStack  # noqa: E402
 from app.runtime_secrets import RuntimeSecrets, RuntimeSecretsDescriptor  # noqa: E402
 from app.stack import UserServiceStack  # noqa: E402
@@ -45,6 +47,23 @@ metadata = SimpleNamespace(
 )
 if mode == "registry":
     RegistryPhaseStack(registries=registries)
+elif mode.startswith("hardened-data"):
+    # S1.2 seam, built outside WorkloadPhaseStack and so outside its stack-wide
+    # closed type guard: S1.3 composes the data plane into the hardened graph
+    # and widens that allowlist then. S1.2 does not widen it.
+    settings = resolve_stack_settings(metadata, generated_secrets=True)
+    # hardened-data-password: the stack holds a secret documentDbPassword, set
+    # by the test through stack config, never through this program.
+    runtime_secrets = RuntimeSecrets(
+        "runtime-secrets", descriptor=RuntimeSecretsDescriptor(contract)
+    )
+    network = NetworkPlane("network", settings=settings, private_gateway=True)
+    DataPlane(
+        "data",
+        settings=settings,
+        network=network,
+        runtime_secrets=runtime_secrets,
+    )
 elif hardened:
     # A workload_step contract renders the hardened composition (AD-25).
     workload = WorkloadPhaseStack(

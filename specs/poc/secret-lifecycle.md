@@ -158,3 +158,26 @@ inventory must include that use site.
 This validator does not prove rotation provenance. AD-25 requires
 `LastRotatedDate` later than the receipt, with rotation enabled by the reviewed
 function; S4.10's result checker must prove that.
+
+### DocumentDB primary password is DocumentDB-managed (S1.2, FR-01, A-05)
+
+On the hardened path the DocumentDB cluster is declared with
+`manage_master_user_password=True` and no `master_password`, so DocumentDB owns
+and rotates the primary password in its own managed secret. Pulumi never holds
+or generates it. A `documentDbPassword` (or `documentDbMasterPassword`) config
+key makes `DataPlane` raise before it registers anything, instead of being
+ignored. The hardened `WorkloadPhaseStack` does not compose the data plane yet,
+so that refusal applies to a workload stack only once S1.3 composes it. Until
+then the seam is exercised by a `DataPlane` built outside the stack guard. S1.3
+owns the composition-level N test: a native preview of the hardened workload
+with a secret `documentDbPassword` must fail without echoing its value. The
+pre-hardening shape keeps its generated password until S4.10 removes that
+branch (AD-25).
+
+Exception A-05 (D-4): pulumi-aws 7.23.0 exposes `manage_master_user_password`
+and `master_user_secrets` but no `master_user_secret_kms_key_id`. The managed
+secret therefore stays on the AWS-managed key `aws/secretsmanager`, not the
+runtime CMK that encrypts the USI-declared secrets, and no
+`master_user_secret_kms_key_id` is ever passed. The managed-password grants of
+the apply role (S5.2, V-21) must be applied before step 1. The live check is
+S4.6 step 4: `MasterUserSecret` active, rotation enabled, metadata only.

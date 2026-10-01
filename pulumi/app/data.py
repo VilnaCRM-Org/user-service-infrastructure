@@ -12,6 +12,7 @@ import pulumi
 from app.environment import (
     StackSettings,
     build_resource_name,
+    reject_documentdb_password_config,
     require_application_secrets,
 )
 from app.network import NetworkPlane
@@ -60,6 +61,32 @@ def _documentdb_url(
     )
 
 
+def _master_credentials(
+    password: pulumi.Input[str] | None,
+) -> dict[str, pulumi.Input[str] | bool]:
+    """Select the primary-password arguments for a DocumentDB cluster.
+
+    ``None`` is the hardened shape: DocumentDB owns and rotates the primary
+    password in a managed secret (S1.2, FR-01), so no password is passed. The
+    managed secret stays on the AWS-managed key (exception A-05): pulumi-aws
+    7.23.0 has no ``master_user_secret_kms_key_id``, and none is ever passed.
+    """
+    if password is None:
+        # Boolean flag that hands the password to DocumentDB;
+        # B105 matches the key name only.
+        return {"manage_master_user_password": True}  # nosec B105
+    return {"master_password": password}
+
+
+@dataclass(frozen=True)
+class HardenedDocumentDbOutputs:
+    """Hardened DocumentDB outputs; the DSN and Redis join in S1.3+ (AD-25)."""
+
+    endpoint: pulumi.Input[str]
+    port: pulumi.Input[int]
+    instances: tuple[pulumi.Resource, ...]
+
+
 @dataclass(frozen=True)
 class DataOutputs:
     """Data-plane outputs consumed by the compute layer."""
@@ -78,7 +105,10 @@ class DataOutputs:
 class DataPlane(pulumi.ComponentResource):
     """Provision preview placeholders or managed database/cache resources."""
 
+    # Set on the pre-hardening and preview paths only; the hardened path sets
+    # ``documentdb`` until S1.3 wires the plain-env DSN and Redis (C-composition).
     outputs: DataOutputs
+    documentdb: HardenedDocumentDbOutputs
     _runtime_secrets: RuntimeSecrets | None = None
 
     def __init__(
@@ -94,8 +124,25 @@ class DataPlane(pulumi.ComponentResource):
         if settings.is_managed and runtime_secrets is None:
             require_application_secrets(settings)
         self._runtime_secrets = runtime_secrets
+        hardened = (
+            settings.is_managed
+            and runtime_secrets is not None
+            and runtime_secrets.descriptor.hardened
+        )
+        if hardened:
+            # Refuse before the component registers, so no resource is left behind.
+            reject_documentdb_password_config()
         super().__init__("user-service-infrastructure:data:Plane", name, None, opts)
 
+        if hardened:
+            self.documentdb = self._build_hardened_documentdb(settings, network)
+            self.register_outputs(
+                {
+                    "documentDbEndpoint": self.documentdb.endpoint,
+                    "documentDbPort": self.documentdb.port,
+                }
+            )
+            return
         self.outputs = (
             self._build_managed_outputs(settings, network)
             if settings.is_managed
@@ -110,6 +157,24 @@ class DataPlane(pulumi.ComponentResource):
                 "redisPort": self.outputs.redis_port,
                 "redisUrlSecretArn": self.outputs.redis_url_secret_arn,
             }
+        )
+
+    def _build_hardened_documentdb(
+        self,
+        settings: StackSettings,
+        network: NetworkPlane,
+    ) -> HardenedDocumentDbOutputs:
+        """Compose DocumentDB with the managed password; Redis and DSN are S1.3+.
+
+        Scoped seam for S1.2: the hardened branch of ``WorkloadPhaseStack`` does
+        not compose this plane yet (S1.3, C-composition). The pre-hardening path
+        is unchanged until S4.10.
+        """
+        cluster, instances = self._build_documentdb(settings, network, None)
+        return HardenedDocumentDbOutputs(
+            endpoint=cluster.endpoint,
+            port=pulumi.Output.from_input(settings.documentdb.port),
+            instances=tuple(instances),
         )
 
     def _build_preview_outputs(self, settings: StackSettings) -> DataOutputs:
@@ -133,22 +198,13 @@ class DataPlane(pulumi.ComponentResource):
             ),
         )
 
-    def _build_managed_outputs(
+    def _build_documentdb(
         self,
         settings: StackSettings,
         network: NetworkPlane,
-    ) -> DataOutputs:
-        """Provision DocumentDB, Redis, and the derived connection secrets."""
-        password = (
-            self._runtime_secrets.values["document_db_password"]
-            if self._runtime_secrets is not None
-            else require_application_secrets(settings).mongodb_password
-        )
-        token = (
-            self._runtime_secrets.values["redis_auth_token"]
-            if self._runtime_secrets is not None
-            else require_application_secrets(settings).redis_auth_token
-        )
+        password: pulumi.Input[str] | None,
+    ) -> tuple[aws.docdb.Cluster, list[pulumi.Resource]]:
+        """Provision the DocumentDB cluster; ``None`` selects the managed password."""
         documentdb_subnet_group = aws.docdb.SubnetGroup(
             "user-service-documentdb-subnets",
             subnet_ids=network.outputs.data_subnet_ids,
@@ -194,7 +250,7 @@ class DataPlane(pulumi.ComponentResource):
             engine="docdb",
             engine_version=settings.documentdb.engine_version,
             master_username=settings.documentdb.username,
-            master_password=password,
+            **_master_credentials(password),
             db_subnet_group_name=documentdb_subnet_group.name,
             db_cluster_parameter_group_name=parameter_group_name,
             vpc_security_group_ids=[network.outputs.documentdb_security_group_id],
@@ -237,6 +293,28 @@ class DataPlane(pulumi.ComponentResource):
                 opts=pulumi.ResourceOptions(parent=self, protect=True),
             )
             documentdb_instances.append(instance)
+
+        return documentdb_cluster, documentdb_instances
+
+    def _build_managed_outputs(
+        self,
+        settings: StackSettings,
+        network: NetworkPlane,
+    ) -> DataOutputs:
+        """Provision DocumentDB, Redis, and the derived connection secrets."""
+        password = (
+            self._runtime_secrets.values["document_db_password"]
+            if self._runtime_secrets is not None
+            else require_application_secrets(settings).mongodb_password
+        )
+        token = (
+            self._runtime_secrets.values["redis_auth_token"]
+            if self._runtime_secrets is not None
+            else require_application_secrets(settings).redis_auth_token
+        )
+        documentdb_cluster, documentdb_instances = self._build_documentdb(
+            settings, network, password
+        )
 
         documentdb_url_secret_arn = self._persist_url(
             "document_db_url",

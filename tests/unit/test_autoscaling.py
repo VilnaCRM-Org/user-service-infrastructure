@@ -415,3 +415,33 @@ def test_a_policy_update_during_a_hold_renders_every_target_unchanged(render):
         assert _canonical(update[name]["inputs"]) == _canonical(row["inputs"])
         if row["type"] != TARGET:
             assert _canonical(stop[name]["inputs"]) == _canonical(row["inputs"])
+
+
+def test_step_two_changes_no_step_one_resource(render):
+    """AD-18 / S4.9 N1: step 2 only adds; every step-1 URN is byte-equal.
+
+    Each step-1 row keeps its inputs and its options (parent, provider,
+    protect, dependencies, ignore_changes, timeouts, secret outputs). The
+    SDK sends dependencies in resolution order, so they compare as a set.
+    """
+
+    def options(row):
+        return _canonical({**row, "dependencies": sorted(row["dependencies"])})
+
+    step_one, step_two = render("none"), render("step2")
+    added = set(step_two) - set(step_one)
+    assert set(step_one) <= set(step_two)
+    assert added == {"autoscaling"} | set(_of(step_two, *AUTOSCALING))
+    assert not _of(step_one, *AUTOSCALING)
+    for name, row in step_one.items():
+        assert options(step_two[name]) == options(row), name
+
+
+def test_the_cpu_policy_carries_no_resource_label(render):
+    """S21-N1: only ``ALBRequestCountPerTarget`` takes a resource label."""
+    rows = render("step2")
+    configuration = "targetTrackingScalingPolicyConfiguration"
+    cpu = rows["web-cpu-tracking"]["inputs"][configuration]
+    requests = rows["web-request-tracking"]["inputs"][configuration]
+    assert "resourceLabel" not in cpu["predefinedMetricSpecification"]
+    assert requests["predefinedMetricSpecification"]["resourceLabel"] == (REQUEST_LABEL)

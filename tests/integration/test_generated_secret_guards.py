@@ -24,6 +24,17 @@ def test_registry_contract_cannot_authorize_secret_component():
         RuntimeSecretsDescriptor(contract)
 
 
+def test_only_the_hardened_descriptor_names_a_runtime_cmk():
+    """D-4 (S1.9): ``central.cmk`` exists only on the hardened shape (AD-25)."""
+    fixtures = PROJECT_ROOT / "tests/fixtures/poc-contract"
+    hardened = json.loads((fixtures / "workload-hardened.synthetic.json").read_text())
+    legacy = json.loads((fixtures / "workload.synthetic.json").read_text())
+    runtime = hardened["workload"]["central"]["cmk"]["runtime"]["arn"]
+    assert RuntimeSecretsDescriptor(hardened).runtime_cmk_arn == runtime
+    with pytest.raises(ValueError, match="only on the hardened shape"):
+        _ = RuntimeSecretsDescriptor(legacy).runtime_cmk_arn
+
+
 def test_partial_or_duplicate_endpoint_secret_inventory_cannot_be_completed():
     # Exercise closure validation without issuing provider registrations: a caller
     # cannot publish outputs or overwrite a purpose before endpoint composition.

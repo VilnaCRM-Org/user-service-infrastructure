@@ -92,6 +92,17 @@ class RuntimeSecretsDescriptor:
         return self._contract["workload_step"]
 
     @property
+    def runtime_cmk_arn(self) -> str:
+        """Return the D-4 runtime CMK from reviewed central metadata (S1.9).
+
+        Only the hardened shape carries ``central.cmk``; the pre-hardening
+        projection has none and raises (AD-25).
+        """
+        if not self.hardened:
+            raise ValueError("The runtime CMK exists only on the hardened shape")
+        return self._contract["workload"]["central"]["cmk"]["runtime"]["arn"]
+
+    @property
     def scaling(self) -> dict[str, Any]:
         """Return a detached copy of the hardened ``scaling`` block (AD-10)."""
         return copy.deepcopy(self._contract["scaling"])

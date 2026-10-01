@@ -47,7 +47,8 @@ the contract invalid, so admission is refused before any read (NFR-07).
 Every declared secret is encrypted by the runtime CMK: its `kms_key_arn` must
 equal `central.cmk.runtime.arn`, and the runtime, JWT and 2FA CMK ARNs must be
 pairwise distinct (D-4). The JWT or 2FA key, the `aws/secretsmanager` key or
-any other key in the account is refused. `rotation.schedule_days` must be the
+any other key in the account is refused. S1.9 adds the optional previous JWT
+key and the DocumentDB log-group binding (see "CMK binding" below). `rotation.schedule_days` must be the
 exact integer `90`.
 
 For such a projection the program declares only `Secret` resources: no Random
@@ -397,6 +398,32 @@ Residual risks and advisories (S1.4 gate F10):
   exact strings the guard requires.
 - Advisory for S5.13: S5.13 must test against the exact access string
   `on ~* +@all -@dangerous`, the one the guard admits for the IAM app user.
+
+### CMK binding (S1.9, FR-10, D-4, D-17)
+
+The hardened contract's `central.cmk` holds the D-4 keys as `{arn, alias}`
+pairs: `runtime`, `jwt` and `two_factor` are required, and `jwt_previous` is
+optional. `jwt_previous` is present only during a JWT key change (D-17): the
+app verifies with the public halves of both JWT keys and signs only with the
+current one; S1.8 passes it as `JWT_KMS_PREVIOUS_KEY_ID`, empty when absent.
+Any other member of `cmk` fails the schema. No two keys may share an ARN or
+an alias, so a key or alias that names another D-4 key fails, and a secret on
+the previous JWT key is refused like any key other than the runtime CMK.
+The values in the committed fixtures are synthetic; the real ARNs and aliases
+come from BI S5.4 through a reviewed contract PR.
+
+On the hardened path the DocumentDB audit and profiler log groups carry
+`kms_key_id` equal to `central.cmk.runtime.arn`, read through
+`RuntimeSecretsDescriptor.runtime_cmk_arn`. The pre-hardening log groups keep
+no key input until S4.10 removes that branch (AD-25). The stack-wide guard binds
+`HARDENED_PROPERTY_CHECKS` to the runtime CMK: a log group under
+`/aws/docdb/` without exactly that `kmsKeyId` fails, any other log group may
+carry no key or exactly that key, and a log group whose name or key the guard
+cannot read fails closed. The ECS web and worker groups get the runtime CMK in
+S1.8; the check over every workload log group is S4.10 N3. The DocumentDB
+`Cluster` check also refuses `masterUserSecretKmsKeyId` in either casing, so
+the managed secret stays on the AWS-managed key (A-05). The live checks are
+S4.6 step 7: `DescribeSecret` `KmsKeyId` and `DescribeLogGroups` `kmsKeyId`.
 
 ## Legacy managed path fails closed (S1.10, FR-29, AD-22)
 

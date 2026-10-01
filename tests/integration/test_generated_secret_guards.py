@@ -519,3 +519,51 @@ def test_s13_gate_serializer_refuses_unreviewed_shapes():
     _require_unversioned_value_from([{"valueFrom": arn}, {"a": 1}])
     with pytest.raises(ValueError, match="must not pin a version"):
         _require_unversioned_value_from({"a": [{"valueFrom": arn + "::AWSCURRENT:"}]})
+
+
+@pytest.mark.parametrize("engine", [False, True])
+def test_s19_documentdb_log_groups_and_managed_secret_key_at_the_guard(engine):
+    """FR-10 N (S1.9, m10): the runtime CMK on DocumentDB logs; no secret key."""
+    from app.workload_phase import _reject_secret_material
+
+    import pulumi
+
+    runtime = (
+        "arn:aws:kms:eu-central-1:891377212104:key/00000000-0000-4000-8000-000000000010"
+    )
+    key = "kmsKeyId" if engine else "kms_key_id"
+
+    def args(kind, props):
+        if not engine:
+            return _sdk_args(kind, props)
+        return pulumi.ResourceTransformArgs(
+            custom=True, type_=kind, name="probe", props=props, opts=None
+        )
+
+    group = "aws:cloudwatch/logGroup:LogGroup"
+    for export in ("audit", "profiler"):
+        name = f"/aws/docdb/synthetic-docdb/{export}"
+        assert (
+            _reject_secret_material(
+                args(group, {"name": name, key: runtime}), runtime_cmk=runtime
+            )
+            is None
+        )
+        for props in ({"name": name}, {"name": name, key: runtime[:-1] + "1"}):
+            with pytest.raises(ValueError, match="unreviewed property"):
+                _reject_secret_material(args(group, props), runtime_cmk=runtime)
+    cluster = {
+        "engine": "docdb",
+        ("engineVersion" if engine else "engine_version"): "5.0.0",
+        ("manageMasterUserPassword" if engine else "manage_master_user_password"): (
+            True
+        ),
+    }
+    assert _reject_secret_material(args("aws:docdb/cluster:Cluster", cluster)) is None
+    secret_key = (
+        "masterUserSecretKmsKeyId" if engine else "master_user_secret_kms_key_id"
+    )
+    with pytest.raises(ValueError, match="unreviewed property"):
+        _reject_secret_material(
+            args("aws:docdb/cluster:Cluster", {**cluster, secret_key: runtime})
+        )

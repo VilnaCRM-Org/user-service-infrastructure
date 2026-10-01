@@ -59,6 +59,17 @@ SECRET = "aws:secretsmanager/secret:Secret"
 SERVICE = "aws:ecs/service:Service"
 ACCESS_KEY = "AKIA" + "SYNTHETIC0000000"
 USERINFO = "https://user:synthetic@host.example"
+LOG_GROUP = "aws:cloudwatch/logGroup:LogGroup"
+# Synthetic D-4 keys of the hardened fixture's ``central.cmk`` (S1.9).
+RUNTIME_CMK = (
+    "arn:aws:kms:eu-central-1:891377212104:key/00000000-0000-4000-8000-000000000010"
+)
+JWT_CMK = (
+    "arn:aws:kms:eu-central-1:891377212104:key/00000000-0000-4000-8000-000000000011"
+)
+DOCDB_AUDIT = "/aws/docdb/synthetic-docdb/audit"
+DOCDB_PROFILER = "/aws/docdb/synthetic-docdb/profiler"
+ECS_WEB = "/aws/ecs/synthetic/web"
 
 
 def _secret(value):
@@ -115,6 +126,120 @@ def test_the_cluster_property_check_refuses_a_password_or_engine(engine_path, ch
     """S1.2 F-07 and V-17: managed password only, on engine 5.0.0 only."""
     with pytest.raises(ValueError, match="unreviewed property"):
         _reject_secret_material(_cluster(engine_path, **change))
+
+
+@pytest.mark.parametrize("engine_path", [False, True])
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"master_user_secret_kms_key_id": RUNTIME_CMK},
+        {"masterUserSecretKmsKeyId": RUNTIME_CMK},
+        {"master_user_secret_kms_key_id": JWT_CMK},
+    ],
+)
+def test_the_cluster_property_check_refuses_a_managed_secret_key(engine_path, change):
+    """FR-10 N (A-05, S1.9): the DocumentDB-managed secret keeps the AWS key."""
+    with pytest.raises(ValueError, match="unreviewed property"):
+        _reject_secret_material(_cluster(engine_path, **change))
+
+
+def _log_group(engine_path, name, key=None, **extra):
+    """Build SDK or engine log-group inputs, with ``kms_key_id`` if ``key``."""
+    props = {
+        "name": name,
+        ("retentionInDays" if engine_path else "retention_in_days"): 30,
+    }
+    if key is not None:
+        props["kmsKeyId" if engine_path else "kms_key_id"] = key
+    return _transform_args(engine_path, LOG_GROUP, {**props, **extra})
+
+
+@pytest.mark.parametrize("engine_path", [False, True])
+@pytest.mark.parametrize(
+    ("name", "key"),
+    [
+        (DOCDB_AUDIT, RUNTIME_CMK),
+        (DOCDB_PROFILER, RUNTIME_CMK),
+        # The ECS groups get the runtime CMK in S1.8; S4.10 N3 checks them all.
+        (ECS_WEB, None),
+        (ECS_WEB, RUNTIME_CMK),
+    ],
+)
+def test_a_log_group_on_the_runtime_cmk_passes_the_guard(engine_path, name, key):
+    """FR-10 P (D-4): DocumentDB audit and profiler groups use the runtime CMK."""
+    args = _log_group(engine_path, name, key)
+    assert _reject_secret_material(args, runtime_cmk=RUNTIME_CMK) is None
+
+
+@pytest.mark.parametrize("engine_path", [False, True])
+@pytest.mark.parametrize(
+    ("name", "key"),
+    [
+        # FR-10 N (m10): a DocumentDB audit or profiler group without a key.
+        (DOCDB_AUDIT, None),
+        (DOCDB_PROFILER, None),
+        # A key other than the runtime CMK, on any workload group (D-4).
+        (DOCDB_AUDIT, JWT_CMK),
+        (DOCDB_PROFILER, "alias/aws/logs"),
+        (ECS_WEB, JWT_CMK),
+        # A name the guard cannot read could be a DocumentDB group.
+        (None, RUNTIME_CMK),
+        (42, RUNTIME_CMK),
+    ],
+)
+def test_a_log_group_off_the_runtime_cmk_fails_the_guard(engine_path, name, key):
+    args = _log_group(engine_path, name, key)
+    with pytest.raises(ValueError, match="unreviewed property"):
+        _reject_secret_material(args, runtime_cmk=RUNTIME_CMK)
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        # An unbound guard accepts no DocumentDB group.
+        _log_group(False, DOCDB_AUDIT, RUNTIME_CMK),
+        _log_group(True, DOCDB_PROFILER, RUNTIME_CMK),
+    ],
+)
+def test_an_unbound_guard_refuses_every_documentdb_log_group(args):
+    with pytest.raises(ValueError, match="unreviewed property"):
+        _reject_secret_material(args)
+
+
+@pytest.mark.parametrize("engine_path", [False, True])
+def test_an_opaque_log_group_name_or_key_fails_closed(engine_path):
+    """A secret map, an SDK ``Output`` or both key casings fail closed."""
+    for args in (
+        _log_group(engine_path, _secret(DOCDB_AUDIT), RUNTIME_CMK),
+        _log_group(engine_path, DOCDB_AUDIT, _secret(RUNTIME_CMK)),
+        _log_group(engine_path, _unresolved(), RUNTIME_CMK),
+        _log_group(engine_path, DOCDB_AUDIT, _unresolved()),
+        _log_group(
+            engine_path,
+            DOCDB_AUDIT,
+            RUNTIME_CMK,
+            **{"kms_key_id": RUNTIME_CMK, "kmsKeyId": RUNTIME_CMK},
+        ),
+    ):
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _reject_secret_material(args, runtime_cmk=RUNTIME_CMK)
+
+
+def test_the_hardened_graph_puts_documentdb_logs_on_the_runtime_cmk(hardened):
+    """FR-10 P (S1.9): the rendered audit and profiler groups carry the key."""
+    groups = {
+        row["inputs"]["name"].rsplit("/", 1)[1]: row["inputs"]
+        for row in hardened["registrations"].values()
+        if row["type"] == LOG_GROUP and row["inputs"]["name"].startswith("/aws/docdb/")
+    }
+    assert set(groups) == {"audit", "profiler"}
+    assert {inputs["kmsKeyId"] for inputs in groups.values()} == {RUNTIME_CMK}
+    cluster = next(
+        row["inputs"]
+        for row in hardened["registrations"].values()
+        if row["type"] == CLUSTER
+    )
+    assert "masterUserSecretKmsKeyId" not in cluster
 
 
 @pytest.mark.parametrize("engine", [False, True])
@@ -446,6 +571,7 @@ def test_property_checks_cover_every_secret_bearing_rendered_type():
     """F-02: the typed-input audit (pulumi-aws 7.23.0) names these types."""
     assert set(HARDENED_PROPERTY_CHECKS) == {
         CLUSTER,
+        LOG_GROUP,
         TASK,
         REPLICATION_GROUP,
         USER,
@@ -1139,6 +1265,10 @@ def test_a_redis_engine_without_iam_fails_the_hardened_composition(tmp_path):
         ("root:redis-foreign-app-user", "unreviewed property"),
         (":redis-secret", "unreviewed property"),
         ("root:redis-secret", "unreviewed property"),
+        # FR-10 N (S1.9, m10): a DocumentDB log group off the runtime CMK.
+        ("root:docdb-audit-logs-no-key", "unreviewed property"),
+        ("stack:docdb-profiler-logs-no-key", "unreviewed property"),
+        (":docdb-audit-logs-jwt-key", "unreviewed property"),
         ("stack:docdb-cluster", "unreviewed property"),
         ("root:docdb-cluster", "unreviewed property"),
         ("root:docdb-cluster-4", "unreviewed property"),
@@ -1448,5 +1578,24 @@ def test_the_lifecycle_doc_records_the_s14_gate_fixes_and_advisories():
         "maximum length is unverified",
         "does not normalize the access strings on read",
         "S5.13 must test against the exact access string",
+    ):
+        assert marker in section, marker
+
+
+def test_the_lifecycle_doc_records_the_s19_cmk_binding():
+    """FR-10, D-4 and D-17 (NFR-10): the CMK binding and its scope are stated."""
+    text = " ".join((ROOT / "specs/poc/secret-lifecycle.md").read_text().split())
+    section = text[text.index("### CMK binding (S1.9") :]
+    section = section[: section.index("## Legacy managed path")]
+    for marker in (
+        "`jwt_previous` is optional",
+        "`JWT_KMS_PREVIOUS_KEY_ID`",
+        "No two keys may share an ARN or an alias",
+        "The values in the committed fixtures are synthetic",
+        "`RuntimeSecretsDescriptor.runtime_cmk_arn`",
+        "a log group under `/aws/docdb/` without exactly that `kmsKeyId` fails",
+        "S4.10 N3",
+        "`masterUserSecretKmsKeyId` in either casing",
+        "S4.6 step 7",
     ):
         assert marker in section, marker

@@ -76,6 +76,23 @@ def _prod(value):
     }
 
 
+FOREIGN_ACCOUNT = "111111111111"
+
+
+def _prod_with(mutate):
+    """Build a PROD receipt, then apply one account-escaping mutation (N4)."""
+
+    def build(value):
+        _prod(value)
+        mutate(value)
+
+    return build
+
+
+def _swap(row, key, old, new):
+    row[key] = row[key].replace(old, new)
+
+
 def validator(name):
     return Draft202012Validator(
         json.loads((SCHEMAS / f"{name}-v1.schema.json").read_text())
@@ -343,6 +360,45 @@ def _failed(value, **changes):
         ),
         lambda v: v["projection_inputs"].update(
             certificate=_foreign(CERTIFICATE, "parameter_arn")
+        ),
+        # N4: a PROD receipt names only PROD account 933245420672 resources.
+        *(
+            _prod_with(
+                lambda v, purpose=purpose, account=account: _swap(
+                    v["secret_metadata"][purpose], "arn", PROD_ACCOUNT, account
+                )
+            )
+            for purpose in ("app_secret", "documentdb_primary")
+            for account in (FOREIGN_ACCOUNT, TEST_ACCOUNT)
+        ),
+        *(
+            _prod_with(
+                lambda v, account=account: _swap(
+                    v["secret_metadata"]["app_secret"],
+                    "kms_key_arn",
+                    PROD_ACCOUNT,
+                    account,
+                )
+            )
+            for account in (FOREIGN_ACCOUNT, TEST_ACCOUNT)
+        ),
+        *(
+            _prod_with(
+                lambda v, kind=kind, account=account: _swap(
+                    v["projection_inputs"]["images"][kind], "uri", PROD_ACCOUNT, account
+                )
+            )
+            for kind in ("web", "worker")
+            for account in (FOREIGN_ACCOUNT, TEST_ACCOUNT)
+        ),
+        *(
+            _prod_with(
+                lambda v, key=key, account=account: _swap(
+                    v["projection_inputs"]["certificate"], key, PROD_ACCOUNT, account
+                )
+            )
+            for key in ("certificate_arn", "parameter_arn")
+            for account in (FOREIGN_ACCOUNT, TEST_ACCOUNT)
         ),
         # F7: fixed-length fields refuse a trailing newline that ``$`` allows.
         lambda v: v.update(contract_digest="1" * 64 + "\n"),

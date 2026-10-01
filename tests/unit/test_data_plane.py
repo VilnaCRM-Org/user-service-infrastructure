@@ -1,4 +1,5 @@
-"""Hardened DocumentDB: managed password (S1.2) and MONGODB-AWS URL (S1.3)."""
+"""Hardened data plane: DocumentDB managed password (S1.2), MONGODB-AWS URL
+(S1.3) and Redis IAM authentication (S1.4, FR-04, D-1)."""
 
 import ast
 import re
@@ -7,10 +8,19 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from app.data import DataPlane, _managed_secret_arn, documentdb_iam_url
+from app.data import (
+    REDIS_APP_ACCESS_STRING,
+    DataPlane,
+    _managed_secret_arn,
+    documentdb_iam_url,
+    redis_iam_identity,
+    redis_iam_url,
+    require_iam_redis_engine,
+)
 from app.environment import (
     DOCUMENTDB_PASSWORD_CONFIG_KEYS,
     reject_documentdb_password_config,
+    reject_redis_auth_token_config,
 )
 from test_environment_component import (
     OptionRecordingMonitor,
@@ -28,6 +38,11 @@ MANAGED_ARN = (
     "rds!cluster-00000000-0000-4000-8000-000000000003-AbCdEf"
 )
 ENDPOINT = "synthetic.cluster-abc.eu-central-1.docdb.amazonaws.com"
+REDIS_ENDPOINT = "master.synthetic.abc.euc1.cache.amazonaws.com"
+REPLICATION_GROUP = "user-service-redis"
+APP_USER = "user-service-redis-app-user"
+DEFAULT_USER = "user-service-redis-default-user"
+USER_GROUP = "user-service-redis-user-group"
 
 
 class DocumentDbMocks(RecordingMocks):
@@ -39,13 +54,17 @@ class DocumentDbMocks(RecordingMocks):
             outputs["endpoint"] = ENDPOINT
             if args.inputs.get("manageMasterUserPassword") is True:
                 outputs["masterUserSecrets"] = [{"secretArn": MANAGED_ARN}]
+        if args.typ == "aws:elasticache/replicationGroup:ReplicationGroup":
+            outputs["primaryEndpointAddress"] = REDIS_ENDPOINT
         return resource_id, outputs
 
 
-def _settings(engine_version="5.0.0"):
+def _settings(
+    engine_version="5.0.0", redis_version="7.1", stack_tag="user-service-dev"
+):
     return SimpleNamespace(
         is_managed=True,
-        stack_tag="user-service-dev",
+        stack_tag=stack_tag,
         region="eu-central-1",
         documentdb=SimpleNamespace(
             username="synthetic",
@@ -59,7 +78,7 @@ def _settings(engine_version="5.0.0"):
         ),
         redis=SimpleNamespace(
             port=6379,
-            engine_version="7.1",
+            engine_version=redis_version,
             node_type="cache.t3.micro",
             replicas_per_node_group=0,
             snapshot_retention_limit=1,
@@ -89,7 +108,7 @@ def _secrets(hardened, database="user_service"):
     )
 
 
-def _register(secrets, config=None, material=False, engine_version="5.0.0"):
+def _register(secrets, config=None, material=False, engine_version="5.0.0", **redis):
     recorder = DocumentDbMocks()
     monitor = OptionRecordingMonitor(recorder)
     captured = {}
@@ -102,7 +121,7 @@ def _register(secrets, config=None, material=False, engine_version="5.0.0"):
             }
         plane = DataPlane(
             "data",
-            settings=_settings(engine_version),
+            settings=_settings(engine_version, **redis),
             network=_network(),
             runtime_secrets=secrets,
         )
@@ -112,6 +131,9 @@ def _register(secrets, config=None, material=False, engine_version="5.0.0"):
                 getattr(plane.documentdb, field).apply(
                     lambda value, field=field: captured.__setitem__(field, value)
                 )
+            plane.redis.url.apply(
+                lambda value: captured.__setitem__("redis_url", value)
+            )
 
     with mocked_pulumi_context(config or {}):
         _run_pulumi_program(program, test_mocks=recorder, monitor=monitor)
@@ -162,7 +184,7 @@ def test_hardened_data_plane_holds_no_generated_secret_material():
 
 
 def test_hardened_outputs_expose_the_iam_url_and_no_url_secret():
-    """S1.3: MONGODB_URL is plain; ``document_db_url`` and Redis are absent."""
+    """S1.3: MONGODB_URL is plain; no URL or Redis secret exists (D-1)."""
     resources, captured = _register(_secrets(hardened=True))
     plane = captured["plane"]
     assert not hasattr(plane, "outputs")
@@ -177,7 +199,7 @@ def test_hardened_outputs_expose_the_iam_url_and_no_url_secret():
     assert not [
         row
         for row in resources.values()
-        if row["type"].startswith(("aws:secretsmanager/", "aws:elasticache/"))
+        if row["type"].startswith("aws:secretsmanager/")
     ]
 
 
@@ -322,3 +344,185 @@ def test_lifecycle_doc_records_the_composed_refusal_and_the_iam_url():
     ):
         assert marker in section, marker
     assert "only once S1.3 composes it" not in section
+
+
+def _hardened_redis(**redis):
+    resources, captured = _register(_secrets(hardened=True), **redis)
+    return resources, captured
+
+
+def test_hardened_redis_requires_tls_and_holds_no_auth_token():
+    """FR-04 P: TLS required, one user group, no ``auth_token`` (D-1, AD-02)."""
+    resources, _ = _hardened_redis()
+    group = resources[REPLICATION_GROUP]["inputs"]
+    assert group["transitEncryptionEnabled"] is True
+    assert group["transitEncryptionMode"] == "required"
+    assert group["atRestEncryptionEnabled"] is True
+    assert (group["engine"], group["engineVersion"]) == ("redis", "7.1")
+    assert group["userGroupIds"] == ["user-service-dev-redis-users"]
+    assert not [key for key in group if key.lower().startswith("authtoken")]
+    assert group["securityGroupIds"] == ["sg-redis"]
+
+
+def test_hardened_redis_users_are_the_iam_app_user_and_a_disabled_default():
+    """FR-04 P (V-5, V-9): ``user_name == user_id``; ``default`` is ``off``."""
+    resources, _ = _hardened_redis()
+    app = resources[APP_USER]["inputs"]
+    assert app["authenticationMode"] == {"type": "iam"}
+    assert app["userName"] == app["userId"] == "user-service-dev-app"
+    assert app["accessString"] == REDIS_APP_ACCESS_STRING
+    default = resources[DEFAULT_USER]["inputs"]
+    assert default["userName"] == "default"
+    assert default["userId"] not in ("default", app["userId"])
+    assert default["accessString"] == "off -@all"
+    assert default["authenticationMode"] == {"type": "no-password-required"}
+    for user in (app, default):
+        assert user["engine"] == "redis"
+        assert not [key for key in user if "password" in key.lower()]
+    group = resources[USER_GROUP]["inputs"]
+    assert group["userGroupId"] == "user-service-dev-redis-users"
+    assert group["userIds"] == [default["userId"], app["userId"]]
+
+
+def test_hardened_redis_outputs_are_plain_iam_values():
+    """FR-04 P: a ``rediss://`` URL with no userinfo and the signer inputs."""
+    resources, captured = _hardened_redis()
+    redis = captured["plane"].redis
+    assert captured["redis_url"] == f"rediss://{REDIS_ENDPOINT}:6379"
+    assert urlsplit(captured["redis_url"]).username is None
+    assert (redis.iam_user_id, redis.replication_group_id, redis.port) == (
+        "user-service-dev-app",
+        "user-service-dev-redis",
+        6379,
+    )
+    assert not [row for row in resources.values() if "secret" in row["type"].lower()]
+
+
+def test_a_mixed_case_replication_group_id_is_lower_cased_in_the_env_value():
+    """FR-04 B: the token signer needs the lower-case replication-group ID."""
+    resources, captured = _hardened_redis(stack_tag="User-Service-Dev")
+    redis = captured["plane"].redis
+    assert resources[REPLICATION_GROUP]["inputs"]["replicationGroupId"] == (
+        "User-Service-Dev-redis"
+    )
+    assert redis.replication_group_id == "user-service-dev-redis"
+    app = resources[APP_USER]["inputs"]
+    # ElastiCache stores user IDs in lower case; the IAM name must equal it.
+    assert app["userName"] == app["userId"] == redis.iam_user_id
+    assert redis.iam_user_id == "user-service-dev-app"
+
+
+def test_the_wired_env_value_lower_cases_a_mixed_case_replication_group_id():
+    """F7 (FR-04 B): the compute wiring renders the lower-case group ID."""
+    from app.compute import ComputePlane
+
+    resources, captured = _hardened_redis(stack_tag="User-Service-Dev")
+    assert resources[REPLICATION_GROUP]["inputs"]["replicationGroupId"] == (
+        "User-Service-Dev-redis"
+    )
+    compute = object.__new__(ComputePlane)
+    compute._hardened = True
+    rows = {
+        row["name"]: row["value"]
+        for row in compute._data_environment(_settings(), captured["plane"])
+    }
+    assert rows["REDIS_REPLICATION_GROUP_ID"] == "user-service-dev-redis"
+    assert rows["REDIS_IAM_USER_ID"] == "user-service-dev-app"
+    assert rows["AWS_REGION"] == "eu-central-1"
+
+
+def test_redis_identity_is_deterministic_and_lower_case():
+    identity = redis_iam_identity("user-service-infrastructure-test")
+    assert identity[:2] == (
+        "user-service-infrastructure-test-redis",
+        "user-service-infrastructure-test-app",
+    )
+    assert all(len(value) <= 40 and value == value.lower() for value in identity)
+    assert len(set(identity)) == 4
+
+
+@pytest.mark.parametrize("version", ["6.2", "6.0", "5.0.6", "7", "seven", None, 7.1])
+def test_a_redis_engine_without_iam_raises_before_registration(version):
+    """N (V-9): IAM authentication needs Redis OSS 7.0 or later."""
+    with pytest.raises(ValueError, match="V-9"):
+        require_iam_redis_engine(version)
+    with pytest.raises(ValueError, match="V-9"):
+        _hardened_redis(redis_version=version)
+
+
+@pytest.mark.parametrize("version", ["7.0", "7.1", "7.0.5", "8.0"])
+def test_iam_capable_redis_engines_pass(version):
+    assert require_iam_redis_engine(version) is None
+
+
+@pytest.mark.parametrize("endpoint", ["user@host", "user:synthetic@host", "@host"])
+def test_userinfo_in_the_redis_url_raises(endpoint):
+    """FR-04 N: ``REDIS_URL`` never carries userinfo."""
+    with pytest.raises(ValueError, match="userinfo"):
+        redis_iam_url(endpoint, 6379)
+
+
+def test_a_redis_auth_token_config_raises_before_any_resource():
+    """FR-04 N: a configured AUTH token is refused, never silently ignored."""
+    recorder = RecordingMocks()
+    monitor = OptionRecordingMonitor(recorder)
+
+    def program():
+        DataPlane(
+            "data",
+            settings=_settings(),
+            network=_network(),
+            runtime_secrets=_secrets(hardened=True),
+        )
+
+    with mocked_pulumi_context({"redisAuthToken": "synthetic-token"}):
+        with pytest.raises(ValueError, match="redisAuthToken must not") as failure:
+            _run_pulumi_program(program, test_mocks=recorder, monitor=monitor)
+    assert "synthetic-token" not in str(failure.value)
+    assert not [row for row in recorder.resources if row["type"].startswith("aws:")]
+    with mocked_pulumi_context({}):
+        reject_redis_auth_token_config()
+
+
+def test_pre_hardening_redis_keeps_its_auth_token_until_s4_10():
+    """AD-25: the pre-hardening branch is unchanged."""
+    secrets = _secrets(hardened=False, database="app")
+    secrets.persist_url = lambda purpose, value: pulumi.Output.from_input(ARN)
+    resources, _ = _register(secrets, material=True, engine_version="4.0.0")
+    group = resources[REPLICATION_GROUP]["inputs"]
+    assert group["authTokenUpdateStrategy"] == "ROTATE"
+    assert "authToken" in group and "userGroupIds" not in group
+    assert not [row for row in resources.values() if row["type"].endswith(":User")]
+
+
+def test_lifecycle_doc_records_redis_iam_and_its_evidence():
+    """S1.4: the doc names the shape, the V-5/V-9 findings and the live steps."""
+    text = " ".join(
+        (Path(__file__).parents[2] / "specs/poc/secret-lifecycle.md")
+        .read_text()
+        .split()
+    )
+    section = text[text.index("### Redis authenticates with IAM") :]
+    for marker in (
+        'transit_encryption_mode="required"',
+        "no `auth_token`",
+        "`user_name == user_id`",
+        "access string `off -@all`",
+        "`REDIS_LOCKOUT_URL` are the same",
+        "lower-case `REDIS_REPLICATION_GROUP_ID`",
+        "`AWS_REGION`",
+        "redisAuthToken",
+        "V-5 (docs and provider source)",
+        "pulumi-aws 7.23.0",
+        "`password | no-password-required | iam`",
+        "V-9 (docs, ElastiCache",
+        "Redis OSS 7.0",
+        "12 hours",
+        "15 minutes",
+        "S4.6 step 4",
+        "step 7",
+        "step 10",
+        "AD-25",
+    ):
+        assert marker in section, marker
+    assert "ElastiCache stays outside it until S1.4" not in text

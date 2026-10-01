@@ -48,7 +48,8 @@ if mode == "registry":
 elif hardened:
     # A workload_step contract renders the hardened composition (AD-25). Since
     # S1.3 it composes the data and compute planes under the stack-wide guard;
-    # a documentDbPassword or engine version arrives only through stack config.
+    # a documentDbPassword or engine version arrives only through stack config,
+    # as do S1.4's redisAuthToken and Redis engine version.
     workload = WorkloadPhaseStack(
         settings=resolve_stack_settings(metadata, generated_secrets=True),
         registries=registries,
@@ -125,6 +126,60 @@ elif hardened:
             },
             opts=options,
         )
+    # FR-04 N (D-1): an AUTH token, TLS ``preferred``, a name that differs
+    # from the IAM user's ID, a foreign user group or the open built-in
+    # ``default`` user fails the Redis property checks. Each fixture differs
+    # from the reviewed shape in exactly one input.
+    if kind.startswith("redis-"):
+        import pulumi_aws as aws
+        from app.data import REDIS_APP_ACCESS_STRING, redis_iam_identity
+
+        identity = redis_iam_identity(workload.settings.stack_tag)
+        app_user_id, user_group_id = identity[1], identity[3]
+        if kind == "redis-user-mismatch":
+            aws.elasticache.User(
+                "fixture-user",
+                user_id=app_user_id,
+                user_name="fixture-other",
+                engine="redis",
+                access_string=REDIS_APP_ACCESS_STRING,
+                authentication_mode={"type": "iam"},
+                opts=options,
+            )
+        elif kind == "redis-open-default-group":
+            aws.elasticache.UserGroup(
+                "fixture-user-group",
+                user_group_id=user_group_id,
+                engine="redis",
+                user_ids=["default", app_user_id],
+                opts=options,
+            )
+        elif kind == "redis-foreign-member-group":
+            aws.elasticache.UserGroup(
+                "fixture-user-group",
+                user_group_id=user_group_id,
+                engine="redis",
+                user_ids=["legacy-open-default", app_user_id],
+                opts=options,
+            )
+        else:
+            aws.elasticache.ReplicationGroup(
+                "fixture-redis",
+                description="fixture",
+                engine="redis",
+                engine_version="7.1",
+                transit_encryption_enabled=True,
+                transit_encryption_mode=(
+                    "preferred" if kind == "redis-tls-preferred" else "required"
+                ),
+                user_group_ids=[
+                    "fixture-users"
+                    if kind == "redis-foreign-user-group"
+                    else user_group_id
+                ],
+                auth_token="x" * 16 if kind == "redis-auth-token" else None,
+                opts=options,
+            )
     # F-01 (a): a secret-marked definition reaches the engine as a secret map.
     if kind == "secret-task":
         import pulumi_aws as aws

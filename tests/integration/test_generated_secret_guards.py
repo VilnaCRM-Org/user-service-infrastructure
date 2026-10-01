@@ -11,6 +11,11 @@ from app.workload_phase import _merge_tags
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+# F5: a hardened container holds both Redis URLs as equal plain rows.
+REDIS_ROWS = [
+    {"name": name, "value": "rediss://a:6379"}
+    for name in ("REDIS_URL", "REDIS_LOCKOUT_URL")
+]
 
 
 def test_registry_contract_cannot_authorize_secret_component():
@@ -132,6 +137,111 @@ def test_hardened_documentdb_url_and_engine_guards():
         _managed_secret_arn([])
 
 
+def test_hardened_redis_url_engine_and_lockout_guards():
+    """FR-04, V-9 and FR-08 B helpers the native preview reaches as unknowns."""
+    from app.compute import ComputePlane
+    from app.data import redis_iam_url, require_iam_redis_engine
+
+    assert redis_iam_url("master.synthetic", 6379) == "rediss://master.synthetic:6379"
+    with pytest.raises(ValueError, match="userinfo"):
+        redis_iam_url(":synthetic@master.synthetic", 6379)
+    assert require_iam_redis_engine("7.1") is None
+    with pytest.raises(ValueError, match="V-9"):
+        require_iam_redis_engine("6.2")
+    url = {"name": "REDIS_URL", "value": "rediss://a:6379"}
+    same = [url, {"name": "REDIS_LOCKOUT_URL", "value": "rediss://a:6379"}]
+    plain = [{"environment": same, "secrets": []}]
+    serialized = ComputePlane._serialize_container(plain, unversioned=True)
+    assert serialized == json.dumps(plain)
+    # F5: the hardened shape needs both plain URLs, as bare rediss:// URLs.
+    lockout = [{"name": "REDIS_LOCKOUT_URL", "valueFrom": SECRET_ARN}]
+    for environment, secrets, message in (
+        ([url], [], "must both be plain values"),
+        ([url], lockout, "must both be plain values"),
+        (
+            [{**row, "value": "redis://a:6379"} for row in same],
+            [],
+            "must be a rediss:// URL",
+        ),
+        (
+            [{**row, "value": "rediss://a:6379/0"} for row in same],
+            [],
+            "must be a rediss:// URL",
+        ),
+        # N1: a host is required and a port must be a valid number.
+        (
+            [{**row, "value": "rediss://:6379"} for row in same],
+            [],
+            "must be a rediss:// URL",
+        ),
+        (
+            [{**row, "value": "rediss://a:abc"} for row in same],
+            [],
+            "must be a rediss:// URL",
+        ),
+    ):
+        with pytest.raises(ValueError, match=message):
+            ComputePlane._serialize_container(
+                [{"environment": environment, "secrets": secrets}],
+                unversioned=True,
+            )
+    # The pre-hardening shape keeps only the equality rule (AD-25).
+    assert ComputePlane._serialize_container(
+        [{"environment": [url], "secrets": []}], unversioned=False
+    )
+    with pytest.raises(ValueError, match="REDIS_LOCKOUT_URL must equal"):
+        ComputePlane._serialize_container(
+            [
+                {
+                    "environment": [
+                        url,
+                        {"name": "REDIS_LOCKOUT_URL", "value": "rediss://b:6379"},
+                    ],
+                    "secrets": [],
+                }
+            ],
+            unversioned=True,
+        )
+
+
+def test_redis_group_engine_and_user_group_members_are_bound_to_the_identity():
+    """N4 and F11 at the guard: engine, version and declared members only."""
+    from app.workload_phase import _reject_secret_material
+
+    identity = ("g", "synthetic-app", "synthetic-default", "synthetic-users")
+
+    def args(kind, props):
+        return _sdk_args(f"aws:elasticache/{kind}", props)
+
+    group = {
+        "engine": "redis",
+        "engine_version": "7.1",
+        "transit_encryption_enabled": True,
+        "transit_encryption_mode": "required",
+        "user_group_ids": ["synthetic-users"],
+    }
+    members = {
+        "engine": "redis",
+        "user_group_id": "synthetic-users",
+        "user_ids": ["synthetic-default", "synthetic-app"],
+    }
+    for kind, props in (
+        ("replicationGroup:ReplicationGroup", group),
+        ("userGroup:UserGroup", members),
+    ):
+        assert (
+            _reject_secret_material(args(kind, props), redis_identity=identity) is None
+        )
+    for kind, props in (
+        ("replicationGroup:ReplicationGroup", {**group, "engine_version": "6.2"}),
+        ("replicationGroup:ReplicationGroup", {**group, "engine": "valkey"}),
+        ("userGroup:UserGroup", {**members, "user_ids": ["legacy", "synthetic-app"]}),
+        ("userGroup:UserGroup", {**members, "user_group_id": "foreign"}),
+    ):
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _reject_secret_material(args(kind, props), redis_identity=identity)
+
+
 @pytest.mark.parametrize(
     ("value", "message"),
     [
@@ -156,7 +266,12 @@ def test_plain_environment_and_hardened_scale_guards(monkeypatch):
     with pytest.raises(ValueError, match="overlap"):
         compute.require_plain_environment(rows, [{"name": "APP_SECRET"}])
     # The native preview leaves the container JSON unknown, so serialize here.
-    plain = [{"environment": rows, "secrets": [{"name": "OTHER", "valueFrom": "x"}]}]
+    plain = [
+        {
+            "environment": rows + REDIS_ROWS,
+            "secrets": [{"name": "OTHER", "valueFrom": "x"}],
+        }
+    ]
     for unversioned in (False, True):
         serialize = compute.ComputePlane._serialize_container
         if unversioned:
@@ -197,6 +312,8 @@ def test_plain_environment_and_hardened_scale_guards(monkeypatch):
 def _task(engine, environment, secrets=None):
     import pulumi
 
+    if type(environment) is list:
+        environment = environment + REDIS_ROWS
     container = {"environment": environment, "secrets": secrets or []}
     key = "containerDefinitions" if engine else "container_definitions"
     value = container if environment is None else json.dumps([container])
@@ -279,12 +396,13 @@ def test_s13_gate_property_checks_fail_closed(engine):
 
     listener, secret = "aws:lb/listener:Listener", "aws:secretsmanager/secret:Secret"
     service, task = "aws:ecs/service:Service", "aws:ecs/taskDefinition:TaskDefinition"
-    plain = json.dumps([{"name": "f", "secrets": []}])
+    plain = json.dumps([{"name": "f", "environment": REDIS_ROWS, "secrets": []}])
     versioned = "arn:aws:secretsmanager:eu-central-1:891377212104:secret:s-AbCdEf"
     awslogs = json.dumps(
         [
             {
                 "name": "f",
+                "environment": REDIS_ROWS,
                 "logConfiguration": {
                     "logDriver": "awslogs",
                     "options": {"awslogs-group": "/g", "awslogs-region": "r"},
@@ -296,6 +414,7 @@ def test_s13_gate_property_checks_fail_closed(engine):
         [
             {
                 "name": "f",
+                "environment": REDIS_ROWS,
                 "logConfiguration": {
                     "logDriver": "splunk",
                     "options": {"splunk-url": "https://collector.example"},
@@ -354,10 +473,26 @@ def test_s13_gate_serializer_refuses_unreviewed_shapes():
     for containers, message in (
         ({"name": "f"}, "must be a list"),
         ([{"name": "f", "Name": "g"}], "unreviewed key"),
-        ([{"logConfiguration": {"options": {}, "Options": {}}}], "repeats a key"),
-        ([{"command": ["AKIA" + "SYNTHETIC0000000"]}], "access key"),
         (
-            [{"logConfiguration": {"logDriver": "splunk", "options": {}}}],
+            [
+                {
+                    "environment": REDIS_ROWS,
+                    "logConfiguration": {"options": {}, "Options": {}},
+                }
+            ],
+            "repeats a key",
+        ),
+        (
+            [{"environment": REDIS_ROWS, "command": ["AKIA" + "SYNTHETIC0000000"]}],
+            "access key",
+        ),
+        (
+            [
+                {
+                    "environment": REDIS_ROWS,
+                    "logConfiguration": {"logDriver": "splunk", "options": {}},
+                }
+            ],
             "closed awslogs",
         ),
     ):

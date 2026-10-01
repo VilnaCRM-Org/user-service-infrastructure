@@ -70,8 +70,10 @@ component tokens. S1.3 adds the data and compute planes: twelve tagged types
 group, ECS cluster, service and task definition, load balancer, listener,
 target group and the ALB log bucket), seven untagged types (the ECR lifecycle
 policy and the six ALB log bucket settings) and three component tokens (data
-plane, compute plane and ALB access logs). ElastiCache stays outside it until
-S1.4. `TAGGABLE_TYPES` only selects what the planes tag; it admits no type.
+plane, compute plane and ALB access logs). S1.4 adds four tagged ElastiCache
+types (the replication group, its subnet group, the user and the user group),
+so every taggable type is now rendered. `TAGGABLE_TYPES` only selects what the
+planes tag; it admits no type.
 Widening the allowlist is a reviewed change.
 
 The guard is type-level plus the listed property checks
@@ -133,11 +135,22 @@ Docker `driverOpts` fails. A `Listener` default action must not carry
 input, and an opaque action (an `Output`, a secret map, an `Unknown` or an
 unreviewed input type) fails closed. A Secrets Manager `Secret` must not carry
 an inline `policy` at any step: a resource policy joins only as the step-2
-`SecretPolicy` (FR-34 B, AD-08). An ECS `Service` must not carry
+`SecretPolicy` (FR-34 B, AD-08). It also passes the S1.4 Redis rule below, and
+one composed check applies both. An ECS `Service` must not carry
 `serviceConnectConfiguration`, whose log configuration has `secretOptions`.
 An elastic DocumentDB cluster (`aws:docdb/elasticCluster:ElasticCluster`)
-fails at every step (V-17). Redis joins in S1.4 with its own check:
-ElastiCache carries no `authToken`.
+fails at every step (V-17). Redis joins in S1.4 with its own
+checks, below.
+
+S1.4 added three Redis property checks (D-1). A `ReplicationGroup` must have no
+`authToken`, `transitEncryptionEnabled` literally true,
+`transitEncryptionMode` exactly `required` and exactly one `userGroupIds`
+entry. A `User` must have no password input and be either the IAM user
+(`authenticationMode` `{type: iam}`, `userName` equal to `userId`, not
+`default`) or the `default` user (`{type: no-password-required}`, access
+string exactly `off -@all`). A `Secret` must have a plain `name` that does not
+contain `redis`, so no Redis secret can be declared. Every other ElastiCache
+type, such as a serverless cache, fails as unreviewed.
 
 Typed-input audit (S1.3, F-02): the args classes of every allowlisted type in
 pulumi-aws 7.23.0, nested input types included, were searched for `secret`,
@@ -282,3 +295,105 @@ runtime CMK that encrypts the USI-declared secrets, and no
 `master_user_secret_kms_key_id` is ever passed. The managed-password grants of
 the apply role (S5.2, V-21) must be applied before step 1. The live check is
 S4.6 step 4: `MasterUserSecret` active, rotation enabled, metadata only.
+
+### Redis authenticates with IAM (S1.4, FR-04, D-1)
+
+On the hardened path the ECS task role authenticates to Redis with IAM, so no
+Redis password, `auth_token`, Redis secret, rotation function or rotation
+security group exists. The data plane declares, for the one replication group
+(Redis OSS, `transit_encryption_enabled=True`,
+`transit_encryption_mode="required"`, no `auth_token`):
+
+- the IAM app user `<stack>-app`: `authentication_mode={type: "iam"}`,
+  `user_name == user_id`, access string `on ~* +@all -@dangerous`;
+- a stack-scoped `default` user: `user_name="default"`, its own `user_id`,
+  `authentication_mode={type: "no-password-required"}`, access string
+  `off -@all`;
+- one `UserGroup` holding both, bound through `user_group_ids` (AD-02).
+
+User and group IDs are lower case. A `redisAuthToken` config key is refused
+before any resource registers, and a Redis engine below 7.0 raises (V-9). The
+Redis security group admits only the service security group on the Redis port.
+The pre-hardening branch keeps its generated token and Redis URL secret until
+S4.10 removes it (AD-25).
+
+The stack-wide guard holds each Redis type to that shape (S1.4 gate fixes):
+an input present in both casings is refused, so a decoy key in the other
+casing cannot hide the checked one (F2). The `UserGroup` must have engine `redis`,
+its own `user_group_id` equal to the one user-group ID this graph declares
+(`redis_iam_identity`), and `user_ids` of two distinct entries, each either
+deferred or one of the two user IDs `redis_iam_identity` declares (the app
+user and the stack-scoped default user), so a foreign or duplicated member
+fails (F11); the built-in `default` user, whose ID AWS creates open (`on ~*
++@all`, no password), is never accepted in any casing (F1). The replication
+group's one `user_group_ids` entry must be that same user-group ID, so a
+foreign literal group fails (F1); it must also have engine `redis` and an
+`engine_version` that meets the IAM minimum of 7.0, mirroring
+`require_iam_redis_engine` (N4). The guard takes the full `redis_iam_identity`
+result; an unbound call refuses every readable user or group ID. The IAM app
+user has a lower-case user name and ID (F8), its `user_id` equals the app-user ID
+`redis_iam_identity` declares, the disabled `default` user's `user_id` equals the
+default-user ID it declares (F11), and the app user has an access string of
+exactly `on ~* +@all -@dangerous` (F3). The guard reads
+every literal Redis input, and the Secret name, through `_inspectable`: an
+unknown, secret or opaque value fails, and only a user or user-group ID entry,
+which is another resource's output, is deferred while unknown (F6). The
+DocumentDB and Redis engine checks both run before any resource registers
+(F4).
+
+The containers receive plain environment values only: `REDIS_URL` and
+`REDIS_LOCKOUT_URL` are the same `rediss://<primary-endpoint>:<port>` URL with
+no userinfo (the FR-08 B row: the lockout URL equals the Redis URL, checked on
+the plain environment), plus `REDIS_IAM_USER_ID`, the lower-case
+`REDIS_REPLICATION_GROUP_ID` and `AWS_REGION` for the token signer (S5.13). The
+hardened container check requires both URLs as plain rows, so neither can be a
+secret, equal to each other and `rediss://` with a non-empty host, a valid port
+if present and no path or query (F5, N1). That per-container Redis rule holds for
+every container of the hardened task definition, so a future hardened task
+definition or sidecar without Redis must re-scope the per-container Redis rule
+under review before it is added (N2). The task role's `elasticache:Connect` grant on the replication-group and user ARNs
+is BI's (S5.1).
+
+V-5 (docs and provider source). pulumi-aws 7.23.0 `elasticache.User` takes
+`authentication_mode` with `type` `password`, `no-password-required` or `iam`
+(`UserAuthenticationModeArgs`), and its own example creates an IAM user;
+`elasticache.UserGroup` takes `engine`, `user_group_id` and `user_ids`;
+`ReplicationGroup` takes `transit_encryption_enabled`,
+`transit_encryption_mode` (`preferred` or `required`) and `user_group_ids` (at
+most one ID). The ElastiCache API `AuthenticationMode.Type` accepts
+`password | no-password-required | iam`, and `CreateUser` stores the user ID in
+lower case. The ElastiCache RBAC guide says ElastiCache adds a `default` user to
+every Redis OSS user group and that to replace it you create a user whose user
+name is `default`, disabled or with a strong password. A disabled `default`
+user with no password is therefore expected to be accepted; S4.6 step 4
+confirms it live. If a password were required, that is a user decision: a
+Pulumi-generated password is not allowed.
+
+V-9 (docs, ElastiCache "Authenticating with IAM", `auth-iam.html`). IAM
+authentication needs Valkey 7.2 or Redis OSS 7.0 and later, in-transit
+encryption (TLS), and identical user ID and user name. A token is valid for 15
+minutes. An IAM-authenticated connection is disconnected after 12 hours unless
+it sends `AUTH` or `HELLO` with a new token, which is not supported inside
+`MULTI`/`EXEC` or Lua. Replication groups support only the `aws:SourceIp` and
+`aws:ResourceTag/*` condition keys, and cache names are lower-cased at creation,
+so the signer must use the lower-case replication-group ID.
+
+Live checks (recorded here, not run by this story): S4.6 step 4 (V-5: the users
+and the group are accepted by the step-1 apply), step 7 (V-2: the Redis IAM
+client in the step-2 health observation) and step 10 (the 13-hour Redis IAM
+soak, V-9 and NFR-05: no Redis authentication failure).
+
+Residual risks and advisories (S1.4 gate F10):
+
+- `redis_iam_identity` caps each ID at 40 characters with a hash suffix
+  (`build_resource_name(..., max_length=40)`); the TEST default-user and
+  user-group IDs are truncated that way. The 40-character cap is this repo's
+  choice. For an ElastiCache user ID and user-group ID the AWS maximum length
+  is unverified here; S4.6 step 4 confirms that the step-1 apply accepts the
+  truncated IDs.
+- Advisory for S4.6 step 4: check that AWS does not normalize the access
+  strings on read (for example `off -@all` or `on ~* +@all -@dangerous`
+  returned in another form), or each refresh would report drift against the
+  exact strings the guard requires.
+- Advisory for S5.13: S5.13 must test against the exact access string
+  `on ~* +@all -@dangerous`, the one the guard admits for the IAM app user.

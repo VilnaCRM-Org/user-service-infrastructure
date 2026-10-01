@@ -667,19 +667,22 @@ def test_hardened_allowlist_is_exactly_the_rendered_graph(tmp_path):
     } - {"pulumi:pulumi:Stack"}
     assert rendered == HARDENED_TYPES
     # S1.3 added the data and compute planes: 12 tagged, 7 untagged and 3
-    # component types over S1.1's (9, 4, 6).
+    # component types over S1.1's (9, 4, 6). S1.4 adds the four ElastiCache
+    # types: the replication group, its subnet group, the users and the group.
     assert (
         len(HARDENED_TAGGED_TYPES),
         len(HARDENED_UNTAGGED_TYPES),
         len(HARDENED_COMPONENT_TYPES),
-    ) == (21, 11, 9)
-    assert HARDENED_TAGGED_TYPES < TAGGABLE_TYPES
-    assert not HARDENED_UNTAGGED_TYPES & TAGGABLE_TYPES
-    # Redis joins with S1.4 (D-1), so ElastiCache stays outside the allowlist.
-    assert TAGGABLE_TYPES - HARDENED_TAGGED_TYPES == {
+    ) == (25, 11, 9)
+    assert {kind for kind in HARDENED_TYPES if kind.startswith("aws:elasticache/")} == {
         "aws:elasticache/replicationGroup:ReplicationGroup",
         "aws:elasticache/subnetGroup:SubnetGroup",
+        "aws:elasticache/user:User",
+        "aws:elasticache/userGroup:UserGroup",
     }
+    # Every taggable type is now rendered; tagging still admits no type.
+    assert HARDENED_TAGGED_TYPES == TAGGABLE_TYPES
+    assert not HARDENED_UNTAGGED_TYPES & TAGGABLE_TYPES
     assert not [kind for kind in HARDENED_TYPES if kind.startswith(SECRET_MATERIAL)]
 
 
@@ -770,15 +773,22 @@ def test_ses_identity_holds_only_the_easy_dkim_key_length(engine, attributes, ac
 
 @pytest.mark.parametrize("engine", [False, True])
 def test_unrendered_redis_types_are_refused_on_both_paths(engine):
-    """N1: no ElastiCache type, so no ``authToken``, before S1.4 (D-1)."""
+    """N1: S1.4 admits only the IAM types; other ElastiCache types fail (D-1)."""
     from app.workload_phase import _reject_secret_material
 
-    for kind, props in (
-        ("aws:elasticache/replicationGroup:ReplicationGroup", {"authToken": "x"}),
-        ("aws:elasticache/subnetGroup:SubnetGroup", {}),
+    for kind in (
+        "aws:elasticache/cluster:Cluster",
+        "aws:elasticache/serverlessCache:ServerlessCache",
+        "aws:elasticache/globalReplicationGroup:GlobalReplicationGroup",
     ):
         with pytest.raises(ValueError, match="unreviewed type"):
-            _reject_secret_material(_transform_args(engine, kind, props))
+            _reject_secret_material(_transform_args(engine, kind, {}))
+    key = "authToken" if engine else "auth_token"
+    group = _transform_args(
+        engine, "aws:elasticache/replicationGroup:ReplicationGroup", {key: "x"}
+    )
+    with pytest.raises(ValueError, match="unreviewed property"):
+        _reject_secret_material(group)
 
 
 @pytest.mark.parametrize(

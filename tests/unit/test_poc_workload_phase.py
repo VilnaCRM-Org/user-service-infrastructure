@@ -111,6 +111,14 @@ def _generated_outputs(args, values):
     return values
 
 
+def _redis_outputs(args, values):
+    """Report the primary endpoint ElastiCache derives from the group ID."""
+    if args.typ == "aws:elasticache/replicationGroup:ReplicationGroup":
+        group = args.inputs["replicationGroupId"].lower()
+        values["primaryEndpointAddress"] = f"master.{group}.euc1.cache.amazonaws.com"
+    return values
+
+
 def _workload_queue_outputs(args, resource_id, values):
     """Keep synthetic SQS identities in the contract's TEST account."""
     if args.typ != "aws:sqs/queue:Queue":
@@ -202,18 +210,28 @@ def _mutation_config(mutation):
         return {"documentDbEngineVersion": mutation.removeprefix("engine-")}
     if mutation == "password-config":
         return {"documentDbPassword": "synthetic-documentdb-password"}
+    if mutation.startswith("redis-engine-"):
+        return {"redisEngineVersion": mutation.removeprefix("redis-engine-")}
+    if mutation == "redis-token-config":
+        return {"redisAuthToken": "synthetic-redis-token"}
     return {}
 
 
-def _fixture_builders(options):
-    """Map each N-case kind to the forbidden registration it attempts."""
+def _fixture_builders(options, identity):
+    """Map each N-case kind to the forbidden registration it attempts.
+
+    ``identity`` is this graph's ``redis_iam_identity``, so each Redis fixture
+    differs from the reviewed shape in exactly one input.
+    """
     import json
 
     import pulumi_aws as aws
     import pulumi_random as random
+    from app.data import REDIS_APP_ACCESS_STRING
 
     import pulumi
 
+    user_group_id, app_user_id = identity[3], identity[1]
     task_definitions = json.dumps(
         [
             {
@@ -330,11 +348,87 @@ def _fixture_builders(options):
             },
             opts=options,
         ),
+        # FR-04 N (D-1): an AUTH token, TLS disabled or ``preferred``, an IAM
+        # user whose name differs from its ID, or a declared Redis secret.
+        "redis-auth-token": lambda: _redis_group(
+            aws, options, user_group_id, auth_token="x" * 16
+        ),
+        "redis-tls-disabled": lambda: _redis_group(
+            aws, options, user_group_id, transit_encryption_enabled=False
+        ),
+        "redis-tls-preferred": lambda: _redis_group(
+            aws, options, user_group_id, transit_encryption_mode="preferred"
+        ),
+        # F1: a replication group bound to a user group this graph lacks.
+        "redis-foreign-user-group": lambda: _redis_group(
+            aws, options, user_group_id, user_group_ids=["fixture-users"]
+        ),
+        "redis-user-mismatch": lambda: aws.elasticache.User(
+            "fixture-user",
+            user_id=app_user_id,
+            user_name="fixture-other",
+            engine="redis",
+            access_string=REDIS_APP_ACCESS_STRING,
+            authentication_mode={"type": "iam"},
+            opts=options,
+        ),
+        # F1: the AWS built-in ``default`` user is open (on ~* +@all, no password).
+        "redis-open-default-group": lambda: aws.elasticache.UserGroup(
+            "fixture-user-group",
+            user_group_id=user_group_id,
+            engine="redis",
+            user_ids=["default", app_user_id],
+            opts=options,
+        ),
+        # F11: a member this graph does not declare, a foreign group ID and a
+        # foreign app-user ID; each differs from the reviewed shape by one input.
+        "redis-foreign-member-group": lambda: aws.elasticache.UserGroup(
+            "fixture-user-group",
+            user_group_id=user_group_id,
+            engine="redis",
+            user_ids=["legacy-open-default", app_user_id],
+            opts=options,
+        ),
+        "redis-foreign-group-id": lambda: aws.elasticache.UserGroup(
+            "fixture-user-group",
+            user_group_id="fixture-users",
+            engine="redis",
+            user_ids=[identity[2], app_user_id],
+            opts=options,
+        ),
+        "redis-foreign-app-user": lambda: aws.elasticache.User(
+            "fixture-user",
+            user_id="fixture-app",
+            user_name="fixture-app",
+            engine="redis",
+            access_string=REDIS_APP_ACCESS_STRING,
+            authentication_mode={"type": "iam"},
+            opts=options,
+        ),
+        "redis-secret": lambda: aws.secretsmanager.Secret(
+            "fixture-secret",
+            name="/user-service-infrastructure/runtime/test/redis_url",
+            opts=options,
+        ),
         # N2: a hardened program calls no provider function.
         "random-password-invoke": lambda: aws.secretsmanager.get_random_password(
             password_length=16
         ),
     }
+
+
+def _redis_group(aws, options, user_group_id, **changes):
+    """Register an otherwise reviewed IAM replication group with one change."""
+    arguments = {
+        "description": "fixture",
+        "transit_encryption_enabled": True,
+        "transit_encryption_mode": "required",
+        "engine": "redis",
+        "engine_version": "7.1",
+        "user_group_ids": [user_group_id],
+        **changes,
+    }
+    return aws.elasticache.ReplicationGroup("fixture-redis", opts=options, **arguments)
 
 
 def _add_secret_material(stack, mutation):
@@ -346,7 +440,10 @@ def _add_secret_material(stack, mutation):
     owner, _, kind = mutation.rpartition(":")
     parents = {"": stack.runtime_secrets, "stack": stack, "root": None}
     options = pulumi.ResourceOptions(parent=parents[owner])
-    builder = _fixture_builders(options).get(kind)
+    from app.data import redis_iam_identity
+
+    identity = redis_iam_identity(stack.settings.stack_tag)
+    builder = _fixture_builders(options, identity).get(kind)
     if builder is not None:
         builder()
 
@@ -499,7 +596,7 @@ def _probe(root, mode, mutation, coverage_path):
     class GeneratedMocks(SimpleMocks):
         def new_resource(self, args):
             resource_id, values = super().new_resource(args)
-            values = _generated_outputs(args, values)
+            values = _redis_outputs(args, _generated_outputs(args, values))
             resource_id = XP8_IDS.get(args.name, resource_id)
             return _workload_queue_outputs(args, resource_id, values)
 

@@ -32,8 +32,15 @@ import pulumi
 from app.compute import INITIAL_SERVICE_SCALE, ComputePlane, require_plain_containers
 from app.data import (
     DOCUMENTDB_IAM_ENGINE_VERSION,
+    REDIS_APP_ACCESS_STRING,
+    REDIS_DEFAULT_ACCESS_STRING,
+    REDIS_DEFAULT_USER_NAME,
+    REDIS_ENGINE,
+    REDIS_TRANSIT_ENCRYPTION_MODE,
     DataPlane,
+    redis_iam_identity,
     require_iam_documentdb_engine,
+    require_iam_redis_engine,
 )
 from app.environment import (
     DEFAULT_COST_CENTER,
@@ -42,6 +49,7 @@ from app.environment import (
     _default_tags_from_parts,
     _normalize_tag_value,
     reject_documentdb_password_config,
+    reject_redis_auth_token_config,
     resolve_config_value,
     validate_health_check_runtime,
     validate_runtime_roles,
@@ -75,6 +83,8 @@ TAGGABLE_TYPES = frozenset(
         "aws:ecs/taskDefinition:TaskDefinition",
         "aws:elasticache/replicationGroup:ReplicationGroup",
         "aws:elasticache/subnetGroup:SubnetGroup",
+        "aws:elasticache/user:User",
+        "aws:elasticache/userGroup:UserGroup",
         "aws:lb/listener:Listener",
         "aws:lb/loadBalancer:LoadBalancer",
         "aws:lb/targetGroup:TargetGroup",
@@ -105,9 +115,11 @@ STEP_TWO_TYPES = frozenset(
 ELASTIC_DOCUMENTDB_TYPE = "aws:docdb/elasticCluster:ElasticCluster"
 # Closed allowlist of the hardened graph (F3, N1): exactly the types it renders
 # today. Any other type, including a packaged component, fails; widening it is
-# a reviewed change. S1.3 added the data and compute planes with the property
-# checks in ``HARDENED_PROPERTY_CHECKS``. Redis (and its ``authToken`` check)
-# joins with S1.4 (D-1).
+# a reviewed change. S1.3 added the data and compute planes and S1.4 the Redis
+# IAM types (D-1). ``HARDENED_PROPERTY_CHECKS`` reviews the inputs of the types
+# that could carry secret material or open access; the ElastiCache subnet
+# group has no such input and no check, while the Redis user group's check
+# refuses the open built-in ``default`` user (S1.4 gate F1).
 HARDENED_TAGGED_TYPES = frozenset(
     {
         "aws:cloudwatch/logGroup:LogGroup",
@@ -125,6 +137,10 @@ HARDENED_TAGGED_TYPES = frozenset(
         "aws:ecs/cluster:Cluster",
         "aws:ecs/service:Service",
         "aws:ecs/taskDefinition:TaskDefinition",
+        "aws:elasticache/replicationGroup:ReplicationGroup",
+        "aws:elasticache/subnetGroup:SubnetGroup",
+        "aws:elasticache/user:User",
+        "aws:elasticache/userGroup:UserGroup",
         "aws:lb/listener:Listener",
         "aws:lb/loadBalancer:LoadBalancer",
         "aws:lb/targetGroup:TargetGroup",
@@ -380,23 +396,217 @@ def _no_service_connect(props, sdk_path: bool) -> bool:
     )
 
 
+def _read(props, snake: str, camel: str, sdk_path: bool) -> Any:
+    """Read one input in the casing of its path, as the check inspects it.
+
+    ``_either`` refuses both casings at once (F2) and ``_inspectable`` turns an
+    unknown value into ``DEFERRED``. A literal comparison never matches
+    ``DEFERRED``, a secret map or an opaque ``Output``, so those fail closed.
+    """
+    return _inspectable(_either(props, snake, camel, sdk_path), sdk_path)
+
+
+def _reviewed_user_id(value: Any) -> bool:
+    """Accept a deferred user ID, or a lower-case ID other than ``default``.
+
+    ElastiCache stores user IDs in lower case. The built-in ``default`` user
+    is open (``on ~* +@all``, no password), so it is refused in every casing.
+    """
+    return value is DEFERRED or (
+        type(value) is str
+        and value == value.lower()
+        and value != REDIS_DEFAULT_USER_NAME
+    )
+
+
+def _bound_user_group(value: Any, user_group_id: str | None) -> bool:
+    """Accept a deferred entry or exactly this graph's user-group ID (F1)."""
+    return value is DEFERRED or (type(value) is str and value == user_group_id)
+
+
+def _iam_engine_version(value: Any) -> bool:
+    """Whether ``value`` meets the IAM minimum, as ``require_iam_redis_engine``."""
+    try:
+        require_iam_redis_engine(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _user_group_id_of(identity: tuple[str, str, str, str] | None) -> str | None:
+    """The user-group ID of a bound ``redis_iam_identity``; ``None`` if unbound."""
+    return None if identity is None else identity[3]
+
+
+def _iam_redis_group(props, sdk_path: bool, identity=None) -> bool:
+    """Accept only a TLS-required replication group with one user group (S1.4).
+
+    No ``authToken`` input may be present, ``transitEncryptionEnabled`` must be
+    literally true and ``transitEncryptionMode`` exactly ``required`` (D-1,
+    V-9). ``userGroupIds`` is a list of one entry that names this graph's user
+    group, ``identity[3]`` (F1); an unknown entry is deferred, and an unbound
+    check accepts no inspectable entry. The engine is ``redis`` and its version
+    meets the IAM minimum, as ``require_iam_redis_engine`` requires (N4).
+    """
+    groups = _read(props, "user_group_ids", "userGroupIds", sdk_path)
+    return (
+        _inspectable(props.get("engine"), sdk_path) == REDIS_ENGINE
+        and _iam_engine_version(
+            _read(props, "engine_version", "engineVersion", sdk_path)
+        )
+        and _read(props, "auth_token", "authToken", sdk_path) is None
+        and _read(
+            props, "transit_encryption_enabled", "transitEncryptionEnabled", sdk_path
+        )
+        is True
+        and _read(props, "transit_encryption_mode", "transitEncryptionMode", sdk_path)
+        == REDIS_TRANSIT_ENCRYPTION_MODE
+        and type(groups) is list
+        and len(groups) == 1
+        and _bound_user_group(
+            _inspectable(groups[0], sdk_path), _user_group_id_of(identity)
+        )
+    )
+
+
+# The Redis user group holds the disabled ``default`` user and the IAM app user.
+REDIS_USER_GROUP_SIZE = 2
+
+
+def _declared_members(entries: list, identity) -> bool:
+    """Two distinct entries, each deferred or one of the two declared users (F11)."""
+    declared = set() if identity is None else {identity[1], identity[2]}
+    readable = [entry for entry in entries if entry is not DEFERRED]
+    return all(type(entry) is str and entry in declared for entry in readable) and len(
+        set(readable)
+    ) == len(readable)
+
+
+def _redis_user_group(props, sdk_path: bool, identity=None) -> bool:
+    """Accept the Redis OSS user group of exactly the two declared users (F11).
+
+    Its own ``userGroupId`` is this graph's group ID (``identity[3]``).
+    ``userIds`` is a literal list of two distinct entries; each is another
+    resource's output, so an unknown entry is deferred, and an inspectable
+    one is the app-user ID or the default-user ID of ``identity``. That also
+    refuses the open built-in ``default`` user (F1) and every foreign member.
+    A secret or any other value, or an opaque list, fails closed, and an
+    unbound check accepts no readable ID.
+    """
+    user_ids = _read(props, "user_ids", "userIds", sdk_path)
+    return (
+        _inspectable(props.get("engine"), sdk_path) == REDIS_ENGINE
+        and _read(props, "user_group_id", "userGroupId", sdk_path)
+        == _user_group_id_of(identity)
+        and type(user_ids) is list
+        and len(user_ids) == REDIS_USER_GROUP_SIZE
+        and _declared_members(
+            [_inspectable(entry, sdk_path) for entry in user_ids], identity
+        )
+    )
+
+
+def _iam_app_user(props, sdk_path: bool, identity=None) -> bool:
+    """The IAM app user (V-9, S1.4 gate F3, F8 and F11).
+
+    Its name equals its ID, both are lower case and neither is ``default``,
+    the ID is the app-user ID of ``identity`` and its access string is exactly
+    the reviewed ``REDIS_APP_ACCESS_STRING``.
+    """
+    name = _read(props, "user_name", "userName", sdk_path)
+    return (
+        type(name) is str
+        and identity is not None
+        and name == identity[1]
+        and name == _read(props, "user_id", "userId", sdk_path)
+        and _reviewed_user_id(name)
+        and _read(props, "access_string", "accessString", sdk_path)
+        == REDIS_APP_ACCESS_STRING
+    )
+
+
+def _disabled_default_user(props, sdk_path: bool, identity=None) -> bool:
+    """The ``default`` user has exactly the reviewed ``off`` access string (V-5).
+
+    Its ID is the default-user ID of ``identity`` (F11).
+    """
+    return (
+        identity is not None
+        and _read(props, "user_id", "userId", sdk_path) == identity[2]
+        and _read(props, "user_name", "userName", sdk_path) == REDIS_DEFAULT_USER_NAME
+        and _read(props, "access_string", "accessString", sdk_path)
+        == REDIS_DEFAULT_ACCESS_STRING
+    )
+
+
+# Each accepted ElastiCache authentication type and the user shape it allows.
+REDIS_USER_SHAPES = {
+    "iam": _iam_app_user,
+    "no-password-required": _disabled_default_user,
+}
+
+
+def _redis_user(props, sdk_path: bool, identity=None) -> bool:
+    """Accept the IAM app user or the disabled ``default`` user only (AD-02).
+
+    No password input may be present, and the authentication mode must be a
+    plain map holding only ``type``. Any other type, such as ``password``,
+    fails closed.
+    """
+    mode = _read(props, "authentication_mode", "authenticationMode", sdk_path)
+    plain = type(mode) is dict and set(mode) == {"type"} and type(mode["type"]) is str
+    shape = REDIS_USER_SHAPES.get(mode["type"]) if plain else None
+    return (
+        props.get("passwords") is None
+        and _read(props, "no_password_required", "noPasswordRequired", sdk_path) is None
+        and shape is not None
+        and shape(props, sdk_path, identity)
+    )
+
+
+def _not_a_redis_secret(props, sdk_path: bool) -> bool:
+    """Refuse a declared Redis secret: Redis authenticates with IAM (D-1).
+
+    The name is a literal; one the guard cannot read fails closed (F6).
+    """
+    name = _inspectable(props.get("name"), sdk_path)
+    return type(name) is str and "redis" not in name.lower()
+
+
+def _reviewed_secret(props, sdk_path: bool) -> bool:
+    """Apply both secret rules: no inline policy and no Redis secret (S1.3, S1.4)."""
+    return _no_inline_secret_policy(props, sdk_path) and _not_a_redis_secret(
+        props, sdk_path
+    )
+
+
 # Reviewed property checks for allowlisted types whose typed inputs could
 # carry secret material or bypass a step-1 refusal. The typed-input audit of
 # pulumi-aws 7.23.0 (secret, password, token, private_key, client_secret)
 # found these types and no other: the DocumentDB password inputs, the task
 # definition's container definitions and FSx credentials parameter, the
 # listener OIDC ``clientSecret``, the secret's inline ``policy``, the Service
-# Connect ``secretOptions`` and the SES BYODKIM private key. Each check gets
+# Connect ``secretOptions``, the SES BYODKIM private key, the Redis
+# replication group's ``authToken`` and the Redis user's ``passwords``. The
+# Redis user group has no secret input, but it is checked because it could
+# bind the open built-in ``default`` user (S1.4 gate F1). Each check gets
 # the props and whether they come from the SDK path (snake_case, raw inputs)
 # rather than the engine path (camelCase, deserialized).
 HARDENED_PROPERTY_CHECKS = {
     "aws:docdb/cluster:Cluster": _managed_iam_documentdb,
     "aws:ecs/service:Service": _no_service_connect,
     "aws:ecs/taskDefinition:TaskDefinition": _reviewed_task_definition,
+    "aws:elasticache/replicationGroup:ReplicationGroup": _iam_redis_group,
+    "aws:elasticache/user:User": _redis_user,
+    "aws:elasticache/userGroup:UserGroup": _redis_user_group,
     "aws:lb/listener:Listener": _no_oidc_action,
-    "aws:secretsmanager/secret:Secret": _no_inline_secret_policy,
+    "aws:secretsmanager/secret:Secret": _reviewed_secret,
     "aws:sesv2/emailIdentity:EmailIdentity": _easy_dkim_only,
 }
+
+
+# The Redis checks that compare IDs against this graph's ``redis_iam_identity``.
+REDIS_IDENTITY_CHECKS = frozenset({_iam_redis_group, _redis_user, _redis_user_group})
 
 
 def _merge_tags(existing, baseline: dict[str, str]) -> dict[str, str]:
@@ -412,6 +622,7 @@ def _merge_tags(existing, baseline: dict[str, str]) -> dict[str, str]:
 def _reject_secret_material(
     args: pulumi.ResourceTransformationArgs | pulumi.ResourceTransformArgs,
     step: int = 1,
+    redis_identity: tuple[str, str, str, str] | None = None,
 ) -> None:
     """Fail closed before secret material or an unreviewed type joins the graph.
 
@@ -419,6 +630,9 @@ def _reject_secret_material(
     both argument types carry ``type_`` and ``None`` keeps the resource as is.
     ``step`` is the contract's ``workload_step``; step 1 refuses every step-2
     type (FR-34), and the default is that stricter step.
+    ``redis_identity`` is this graph's ``redis_iam_identity``; the Redis user
+    group, its users and the replication group may name no other ID (S1.4 gate
+    F1 and F11), and without it no readable ID passes.
     """
     if args.type_.startswith(SECRET_MATERIAL_TYPES):
         raise ValueError("Hardened workload graph must not hold secret material")
@@ -430,7 +644,8 @@ def _reject_secret_material(
         raise ValueError("Hardened workload graph holds an unreviewed type")
     check = HARDENED_PROPERTY_CHECKS.get(args.type_)
     sdk_path = isinstance(args, pulumi.ResourceTransformationArgs)
-    if check is not None and not check(args.props, sdk_path):
+    bound = (redis_identity,) if check in REDIS_IDENTITY_CHECKS else ()
+    if check is not None and not check(args.props, sdk_path, *bound):
         raise ValueError("Hardened workload graph holds an unreviewed property")
     return None
 
@@ -444,12 +659,22 @@ def _reject_invoke(_args: pulumi.InvokeTransformArgs) -> None:
     raise ValueError("Hardened workload graph must not call a provider function")
 
 
-def _step_guard(step: int):
-    """Bind the guard to the contract's step; both registrations share it."""
-    return functools.partial(_reject_secret_material, step=step)
+def _step_guard(step: int, redis_identity: tuple[str, str, str, str]):
+    """Bind the guard to the contract's step and this graph's Redis identity.
+
+    Both registrations share it.
+    """
+    return functools.partial(
+        _reject_secret_material, step=step, redis_identity=redis_identity
+    )
 
 
-def _guard_hardened_stack(step: int) -> None:
+def _redis_identity(settings: StackSettings) -> tuple[str, str, str, str]:
+    """Return the Redis IDs this hardened graph declares (F1, F11)."""
+    return redis_iam_identity(settings.stack_tag)
+
+
+def _guard_hardened_stack(step: int, redis_identity: tuple[str, str, str, str]) -> None:
     """Guard the whole stack before its first hardened resource (FR-09, F1).
 
     The SDK stack transformation reaches every resource this program builds,
@@ -460,7 +685,7 @@ def _guard_hardened_stack(step: int) -> None:
     transformation in ``_compose_hardened`` stays as a second layer. These
     are the last transforms the program registers.
     """
-    guard = _step_guard(step)
+    guard = _step_guard(step, redis_identity)
     pulumi.runtime.register_stack_transformation(guard)
     pulumi.runtime.register_resource_transform(guard)
     pulumi.runtime.register_invoke_transform(_reject_invoke)
@@ -486,11 +711,14 @@ class WorkloadPhaseStack(RegistryPhaseStack):
             raise ValueError("Workload composition requires a secret declaration")
         secrets.validate_target(settings)
         if secrets.hardened:
-            # Refuse a configured primary password or a non-IAM engine (V-17)
-            # before any registration; DataPlane repeats the engine check.
+            # Refuse a configured primary password or Redis AUTH token, or a
+            # non-IAM DocumentDB (V-17) or Redis (V-9) engine, before any
+            # registration; DataPlane repeats both engine checks.
             reject_documentdb_password_config()
+            reject_redis_auth_token_config()
             require_iam_documentdb_engine(settings.documentdb.engine_version)
-            _guard_hardened_stack(secrets.workload_step)
+            require_iam_redis_engine(settings.redis.engine_version)
+            _guard_hardened_stack(secrets.workload_step, _redis_identity(settings))
         super().__init__(registries=registries)
         self.settings = settings
         if secrets.hardened:
@@ -507,13 +735,17 @@ class WorkloadPhaseStack(RegistryPhaseStack):
 
         Every plane is credential-free: seeded secret metadata, the network
         with the bootstrap-job SG, DocumentDB with the managed password and the
-        plain MONGODB-AWS URL, the queues, and ECS services at zero tasks. A
+        plain MONGODB-AWS URL, Redis with IAM users and required TLS (S1.4),
+        the queues, and ECS services at zero tasks. A
         step-2 contract renders the same set until each step-2 story adds its
         resources; the guard refuses those types at step 1.
         """
         opts = pulumi.ResourceOptions(
             parent=self,
-            transformations=[_step_guard(secrets.workload_step), self._tag_resource],
+            transformations=[
+                _step_guard(secrets.workload_step, _redis_identity(settings)),
+                self._tag_resource,
+            ],
         )
         self.runtime_secrets = RuntimeSecrets(
             "runtime-secrets", descriptor=secrets, opts=opts

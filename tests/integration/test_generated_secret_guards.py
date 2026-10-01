@@ -156,12 +156,20 @@ def test_plain_environment_and_hardened_scale_guards(monkeypatch):
     with pytest.raises(ValueError, match="overlap"):
         compute.require_plain_environment(rows, [{"name": "APP_SECRET"}])
     # The native preview leaves the container JSON unknown, so serialize here.
-    plain = [{"environment": rows, "secrets": [{"name": "OTHER"}]}]
-    assert compute.ComputePlane._serialize_container(plain) == json.dumps(plain)
-    with pytest.raises(ValueError, match="overlap"):
-        compute.ComputePlane._serialize_container(
-            [{"environment": rows, "secrets": [{"name": "APP_SECRET"}]}]
-        )
+    plain = [{"environment": rows, "secrets": [{"name": "OTHER", "valueFrom": "x"}]}]
+    for unversioned in (False, True):
+        serialize = compute.ComputePlane._serialize_container
+        if unversioned:
+            with pytest.raises(ValueError, match="must not pin a version"):
+                serialize(plain, unversioned=unversioned)
+        else:
+            assert serialize(plain, unversioned=unversioned) == json.dumps(plain)
+        overlap = [{"environment": rows, "secrets": [{"name": "APP_SECRET"}]}]
+        with pytest.raises(ValueError, match="closed name pairs"):
+            serialize(overlap, unversioned=unversioned)
+        overlap[0]["secrets"][0]["valueFrom"] = SECRET_ARN
+        with pytest.raises(ValueError, match="overlap"):
+            serialize(overlap, unversioned=unversioned)
     fake = SimpleNamespace(apply=lambda callback: callback("https://sqs/queue"))
     monkeypatch.setattr(compute.pulumi.Output, "from_input", lambda _: fake)
     plane = object.__new__(compute.ComputePlane)
@@ -203,13 +211,15 @@ def _task(engine, environment, secrets=None):
 
 @pytest.mark.parametrize("engine", [False, True])
 def test_task_definition_property_check_reads_resolved_definitions(engine):
-    """The guard checks a resolved JSON string and defers an unresolved value."""
+    """The guard checks a resolved JSON string and refuses a plain map (F-01)."""
     from app.workload_phase import _reject_secret_material
 
     plain = [{"name": "APP_ENV", "value": "prod"}]
     secret = [{"name": "APP_SECRET", "valueFrom": SECRET_ARN}]
     assert _reject_secret_material(_task(engine, plain, secret)) is None
-    assert _reject_secret_material(_task(engine, None)) is None
+    # A map is no JSON string: it was never a deferral and now fails closed.
+    with pytest.raises(ValueError, match="unreviewed property"):
+        _reject_secret_material(_task(engine, None))
     for environment, secrets in (
         ([{"name": "APP_SECRET", "value": "x"}], secret),
         (plain, [{"name": "B", "valueFrom": SECRET_ARN + ":::" + "1" * 32}]),

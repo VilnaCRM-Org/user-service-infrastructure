@@ -215,15 +215,107 @@ def test_credential_free_values_pass_unchanged(value):
 def test_overlapping_or_credential_environment_raises(environment, secrets):
     with pytest.raises(ValueError):
         require_plain_environment(environment, secrets)
-    with pytest.raises(ValueError):
+    for unversioned in (False, True):
+        with pytest.raises(ValueError):
+            ComputePlane._serialize_container(
+                [{"environment": environment, "secrets": secrets}],
+                unversioned=unversioned,
+            )
+
+
+SECRET_ARN = (
+    "arn:aws:secretsmanager:eu-central-1:891377212104:secret:"
+    "/user-service-infrastructure/runtime/test/synthetic-app_secret-AbCdEf"
+)
+
+
+def _container(**changes):
+    """One container with every key ``_container_definitions_json`` emits."""
+    container = {
+        "name": "fixture",
+        "image": "891377212104.dkr.ecr.eu-central-1.amazonaws.com/fixture:sha-1",
+        "essential": True,
+        "command": ["/bin/sh", "-ec", "exec /synthetic/run"],
+        "environment": [{"name": "A", "value": "x"}],
+        "secrets": [{"name": "APP_SECRET", "valueFrom": SECRET_ARN}],
+        "portMappings": [],
+        "readonlyRootFilesystem": True,
+        "mountPoints": [{"sourceVolume": "v", "containerPath": "/v"}],
+        "linuxParameters": {"capabilities": {"drop": ["ALL"]}},
+        "healthCheck": {"command": ["CMD", "/synthetic/check"], "retries": 3},
+        "logConfiguration": {"logDriver": "awslogs", "options": {"a": "b"}},
+    }
+    return {**container, **changes}
+
+
+@pytest.mark.parametrize("unversioned", [False, True])
+def test_plain_container_serializes_unchanged(unversioned):
+    containers = [
+        {"environment": [{"name": "A", "value": "x"}], "secrets": []},
+        _container(),
+    ]
+    assert ComputePlane._serialize_container(
+        containers, unversioned=unversioned
+    ) == json.dumps(containers)
+
+
+def test_only_the_hardened_serializer_refuses_a_versioned_reference():
+    """S1.7: pre-hardening stays version-pinned (AD-25); hardened is bare."""
+    versioned = SECRET_ARN + ":::" + "1" * 32
+    containers = [_container(secrets=[{"name": "S", "valueFrom": versioned}])]
+    assert ComputePlane._serialize_container(containers, unversioned=False)
+    with pytest.raises(ValueError, match="must not pin a version"):
+        ComputePlane._serialize_container(containers, unversioned=True)
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        # F-01 (b): exact-case keys only, and no key repeated in another case.
+        ({"Environment": []}, "unreviewed key"),
+        ({"dockerLabels": {"a": "b"}}, "unreviewed key"),
+        ({"entryPoint": ["/bin/sh"]}, "unreviewed key"),
+        (
+            {"logConfiguration": {"options": {}, "Options": {}}},
+            "repeats a key",
+        ),
+        ({"environment": [{"name": "A", "value": "x", "Value": "y"}]}, "closed"),
+        ({"secrets": [{"name": "A", "ValueFrom": SECRET_ARN}]}, "closed"),
+        ({"environment": [{"name": ["A"], "value": "x"}]}, "closed"),
+        ({"environment": {"name": "A"}}, "closed"),
+        # F-01 (c): every string leaf but ``valueFrom`` is credential-free.
+        ({"command": ["/bin/sh", "-ec", f"export K={ACCESS_KEY}"]}, "access key"),
+        ({"healthCheck": {"command": ["CMD", ACCESS_KEY]}}, "access key"),
+        ({"logConfiguration": {"options": {"x": "https://u:p@h"}}}, "userinfo"),
+        ({"logConfiguration": {"options": {ACCESS_KEY: "x"}}}, "access key"),
+        ({"image": "https://u:p@registry.example/app:1"}, "userinfo"),
+        ({"mountPoints": [{"containerPath": "/v?token=x"}]}, "credential parameter"),
+        ({"secrets": [{"name": ACCESS_KEY, "valueFrom": SECRET_ARN}]}, "access key"),
+    ],
+)
+@pytest.mark.parametrize("unversioned", [False, True])
+def test_the_serializer_applies_the_guard_rules(changes, message, unversioned):
+    """F-01: ``_serialize_container`` and the guard refuse the same shapes."""
+    with pytest.raises(ValueError, match=message):
         ComputePlane._serialize_container(
-            [{"environment": environment, "secrets": secrets}]
+            [_container(**changes)], unversioned=unversioned
         )
+    with pytest.raises(ValueError, match="must be a list"):
+        ComputePlane._serialize_container(_container(), unversioned=unversioned)
+    with pytest.raises(ValueError, match="unreviewed key"):
+        ComputePlane._serialize_container(["fixture"], unversioned=unversioned)
 
 
-def test_plain_container_serializes_unchanged():
-    containers = [{"environment": [{"name": "A", "value": "x"}], "secrets": []}]
-    assert ComputePlane._serialize_container(containers) == json.dumps(containers)
+def test_a_secret_reference_skips_only_the_credential_scan():
+    """F-01: ``secrets[].valueFrom`` keeps its own bare-ARN check instead."""
+    arn = SECRET_ARN.replace("synthetic-app_secret", ACCESS_KEY)
+    containers = [_container(secrets=[{"name": "S", "valueFrom": arn}])]
+    assert ComputePlane._serialize_container(containers, unversioned=True)
+    with pytest.raises(ValueError, match="access key"):
+        ComputePlane._serialize_container(
+            [_container(environment=[{"name": "A", "value": arn}])],
+            unversioned=True,
+        )
 
 
 @pytest.mark.parametrize("scale", [None, 1, 2])

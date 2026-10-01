@@ -351,7 +351,8 @@ def test_native_hardened_workload_rejects_a_non_iam_engine(native_stack):
     with pytest.raises(AutomationRuntimeError) as failure:
         stack.preview(on_event=events.append)
     assert "V-17" in str(failure.value)
-    assert not [row for row in resources(events) if row.type.startswith("aws:docdb")]
+    # F-04: the refusal runs before the first workload registration.
+    assert not [row for row in resources(events) if row.type.startswith("aws:")]
 
 
 @pytest.mark.parametrize(
@@ -384,6 +385,14 @@ def test_native_hardened_workload_rejects_a_non_iam_engine(native_stack):
         # N1: a BYODKIM private key fails the SES identity property check.
         ("root:byodkim-identity", "unreviewed property", None),
         ("stack:byodkim-identity", "unreviewed property", None),
+        # F-01 (a): the engine transform refuses a secret-marked definition.
+        ("root:secret-task", "unreviewed property", None),
+        # F-01 (b): PascalCase container keys fail.
+        ("root:pascal-task", "unreviewed property", None),
+        # F-02: an OIDC listener action carries a client secret.
+        ("root:oidc-listener", "unreviewed property", None),
+        # F-03: an inline policy bypasses the step-1 SecretPolicy refusal.
+        ("stack:policy-secret", "unreviewed property", None),
     ],
 )
 def test_native_hardened_workload_rejects_readded_secret_material(

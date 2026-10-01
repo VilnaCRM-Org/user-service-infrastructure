@@ -19,12 +19,22 @@ create-only admission is S4.9. After step 1 the XP-8 values are exported.
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import json
+from typing import Any
+
+import pulumi_aws as aws
+from pulumi.output import Unknown
+from pulumi.runtime.rpc import is_rpc_secret
 
 import pulumi
-from app.compute import INITIAL_SERVICE_SCALE, ComputePlane, require_plain_environment
-from app.data import DOCUMENTDB_IAM_ENGINE_VERSION, DataPlane
+from app.compute import INITIAL_SERVICE_SCALE, ComputePlane, require_plain_containers
+from app.data import (
+    DOCUMENTDB_IAM_ENGINE_VERSION,
+    DataPlane,
+    require_iam_documentdb_engine,
+)
 from app.environment import (
     DEFAULT_COST_CENTER,
     DEFAULT_OWNER,
@@ -40,11 +50,7 @@ from app.messaging import MessagingPlane
 from app.network import NetworkPlane
 from app.registry import RegistryInputs
 from app.registry_phase import RegistryPhaseStack
-from app.runtime_secrets import (
-    RuntimeSecrets,
-    RuntimeSecretsDescriptor,
-    require_unversioned_reference,
-)
+from app.runtime_secrets import RuntimeSecrets, RuntimeSecretsDescriptor
 
 # Closed taggable resource types used by the four installed workload planes.
 # SecretVersion, lifecycle policies and route associations do not accept tags.
@@ -165,7 +171,7 @@ HARDENED_TYPES = (
 EASY_DKIM_KEYS = frozenset({"next_signing_key_length", "nextSigningKeyLength"})
 
 
-def _easy_dkim_only(props) -> bool:
+def _easy_dkim_only(props, _sdk_path: bool) -> bool:
     """Accept no DKIM attributes or a plain map of the key length alone."""
     return all(
         props.get(key) is None
@@ -187,7 +193,7 @@ DOCUMENTDB_PASSWORD_INPUTS = (
 )
 
 
-def _managed_iam_documentdb(props) -> bool:
+def _managed_iam_documentdb(props, _sdk_path: bool) -> bool:
     """Accept only the managed password on the IAM-capable engine (S1.2, S1.3).
 
     ``manageMasterUserPassword`` must be literally true, no primary password
@@ -203,53 +209,175 @@ def _managed_iam_documentdb(props) -> bool:
     )
 
 
-def _plain_container(container) -> bool:
-    """Check one container: plain environment, bare-ARN secret references."""
-    environment = container.get("environment", [])
-    secrets = container.get("secrets", [])
-    if not all(
-        type(row) is dict and set(row) == fields
-        for rows, fields in (
-            (environment, {"name", "value"}),
-            (secrets, {"name", "valueFrom"}),
-        )
-        for row in rows
-    ):
+def _unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build one JSON object; ECS would merge keys that differ only in case."""
+    if len({key.casefold() for key, _ in pairs}) != len(pairs):
+        raise ValueError("Container definitions repeat a key")
+    return dict(pairs)
+
+
+# Marks a value the check cannot inspect yet and leaves to a later layer.
+DEFERRED = object()
+
+
+def _resolved(future: Any) -> bool:
+    """Tell whether a future already holds a result, without awaiting it."""
+    return (
+        isinstance(future, asyncio.Future)
+        and future.done()
+        and not future.cancelled()
+        and future.exception() is None
+    )
+
+
+def _engine_output(value: pulumi.Output) -> Any:
+    """Read an engine-path output value without awaiting it.
+
+    ``deserialize_output_value`` resolves the value and secret futures before
+    the transform runs, and leaves an unknown preview value ``None``. A secret
+    or an unresolved output stays opaque, so the caller refuses it.
+    """
+    # ``vars`` avoids ``Output.__getattr__``, which would lift a missing
+    # attribute into a new pending output instead of failing.
+    fields = vars(value)
+    secret, future = fields.get("_is_secret"), fields.get("_future")
+    if not (_resolved(secret) and _resolved(future)) or secret.result() is not False:
+        return value
+    result = future.result()
+    return Unknown() if result is None else result
+
+
+def _inspectable(value: Any, sdk_path: bool) -> Any:
+    """Return ``DEFERRED`` or the value the check inspects.
+
+    On the SDK path an ``Output`` is not yet inspectable. It reaches the
+    engine transform once the SDK serializes it: resolved for an ``up``,
+    unknown in a preview, or secret, which fails. On the engine path the SDK
+    sends an output value, read by ``_engine_output``, or a plain value; a
+    secret arrives as a secret map or a secret output value and fails. Only
+    an unknown preview value is deferred there: a preview writes nothing, and
+    the ``up`` that writes the definition sends it resolved.
+    """
+    if sdk_path:
+        return DEFERRED if isinstance(value, pulumi.Output) else value
+    if type(value) is pulumi.Output:
+        value = _engine_output(value)
+    return DEFERRED if type(value) is Unknown else value
+
+
+def _plain_task_environment(props, sdk_path: bool) -> bool:
+    """Accept container definitions that hold no secret material (FR-03, FR-08).
+
+    A JSON string is inspected; an SDK ``Output`` or an unknown engine-path
+    preview value is deferred (``_inspectable``). Anything else fails,
+    including a secret-marked input, a map, a list or any other object. The
+    string must pass ``require_plain_containers`` with bare-ARN references,
+    and no JSON object may repeat a key in any case.
+    """
+    value = _inspectable(
+        _either(props, "container_definitions", "containerDefinitions"), sdk_path
+    )
+    if value is DEFERRED:
+        return True
+    if type(value) is not str:
         return False
-    require_plain_environment(environment, secrets)
-    for row in secrets:
-        require_unversioned_reference(row["valueFrom"])
+    try:
+        containers = json.loads(value, object_pairs_hook=_unique_keys)
+        require_plain_containers(containers, unversioned=True)
+    except (ValueError, TypeError):
+        return False
     return True
 
 
-def _plain_task_environment(props) -> bool:
-    """Accept container definitions whose only secrets are ``valueFrom`` ARNs.
+# SDK input types the guard reads field by field. Any other object, such as an
+# ``Output``, a preview ``Unknown`` or the engine's secret map, is opaque.
+REVIEWED_INPUT_TYPES = (
+    aws.ecs.TaskDefinitionVolumeArgs,
+    aws.lb.ListenerDefaultActionArgs,
+)
 
-    Environment names must be disjoint from the secret names, every value must
-    be credential-free (FR-03, AD-20) and every ``valueFrom`` a bare ARN with
-    no version (S1.7). A resolved JSON string is checked here. An unresolved
-    value (an SDK ``Output`` or a preview ``Unknown``) is not yet inspectable:
-    the engine transform sees the resolved string before an ``up`` writes it,
-    and ``ComputePlane`` checks the same rules when it serializes.
+
+def _fields(value: Any) -> dict[str, Any] | None:
+    """Read a plain map or a reviewed input type; ``None`` means opaque."""
+    if type(value) is dict and not is_rpc_secret(value):
+        return value
+    if type(value) in REVIEWED_INPUT_TYPES:
+        return vars(value)
+    return None
+
+
+def _name_only_volumes(props) -> bool:
+    """Accept task volumes that only name ephemeral storage.
+
+    The FSx ``authorizationConfig.credentialsParameter`` and the free-form
+    Docker ``driverOpts`` fail with every other volume setting (F-02 audit).
     """
-    value = _either(props, "container_definitions", "containerDefinitions")
-    if type(value) is not str:
+    volumes = props.get("volumes")
+    if volumes is None:
         return True
-    try:
-        containers = json.loads(value)
-        return type(containers) is list and all(
-            type(container) is dict and _plain_container(container)
-            for container in containers
-        )
-    except (ValueError, TypeError):
+    return type(volumes) is list and all(
+        (fields := _fields(volume)) is not None and set(fields) == {"name"}
+        for volume in volumes
+    )
+
+
+def _reviewed_task_definition(props, sdk_path: bool) -> bool:
+    """Check the container definitions and the task volumes."""
+    return _plain_task_environment(props, sdk_path) and _name_only_volumes(props)
+
+
+def _no_oidc_action(props, _sdk_path: bool) -> bool:
+    """Refuse a listener action that could carry an OIDC ``clientSecret`` (F-02).
+
+    Each default action must be a readable map or input type with no
+    ``authenticate_oidc`` key in any casing; an opaque action or list fails.
+    """
+    actions = _either(props, "default_actions", "defaultActions")
+    if actions is None:
+        return True
+    if type(actions) is not list:
         return False
+    for action in actions:
+        fields = _fields(action)
+        if fields is None or any(
+            str(key).replace("_", "").casefold() == "authenticateoidc" for key in fields
+        ):
+            return False
+    return True
+
+
+def _no_inline_secret_policy(props, _sdk_path: bool) -> bool:
+    """Refuse an inline ``policy``: it would bypass the SecretPolicy refusal.
+
+    A resource policy joins only as the step-2 ``SecretPolicy`` with its own
+    story (FR-34 B, AD-08). The key is ``policy`` in both casings.
+    """
+    return props.get("policy") is None
+
+
+def _no_service_connect(props, _sdk_path: bool) -> bool:
+    """Refuse Service Connect, whose log configuration has ``secretOptions``."""
+    return (
+        _either(props, "service_connect_configuration", "serviceConnectConfiguration")
+        is None
+    )
 
 
 # Reviewed property checks for allowlisted types whose typed inputs could
-# carry secret material. Every other allowlisted type has no such input.
+# carry secret material or bypass a step-1 refusal. The typed-input audit of
+# pulumi-aws 7.23.0 (secret, password, token, private_key, client_secret)
+# found these types and no other: the DocumentDB password inputs, the task
+# definition's container definitions and FSx credentials parameter, the
+# listener OIDC ``clientSecret``, the secret's inline ``policy``, the Service
+# Connect ``secretOptions`` and the SES BYODKIM private key. Each check gets
+# the props and whether they come from the SDK path (snake_case, raw inputs)
+# rather than the engine path (camelCase, deserialized).
 HARDENED_PROPERTY_CHECKS = {
     "aws:docdb/cluster:Cluster": _managed_iam_documentdb,
-    "aws:ecs/taskDefinition:TaskDefinition": _plain_task_environment,
+    "aws:ecs/service:Service": _no_service_connect,
+    "aws:ecs/taskDefinition:TaskDefinition": _reviewed_task_definition,
+    "aws:lb/listener:Listener": _no_oidc_action,
+    "aws:secretsmanager/secret:Secret": _no_inline_secret_policy,
     "aws:sesv2/emailIdentity:EmailIdentity": _easy_dkim_only,
 }
 
@@ -284,7 +412,8 @@ def _reject_secret_material(
     if args.type_ not in HARDENED_TYPES:
         raise ValueError("Hardened workload graph holds an unreviewed type")
     check = HARDENED_PROPERTY_CHECKS.get(args.type_)
-    if check is not None and not check(args.props):
+    sdk_path = isinstance(args, pulumi.ResourceTransformationArgs)
+    if check is not None and not check(args.props, sdk_path):
         raise ValueError("Hardened workload graph holds an unreviewed property")
     return None
 
@@ -340,8 +469,10 @@ class WorkloadPhaseStack(RegistryPhaseStack):
             raise ValueError("Workload composition requires a secret declaration")
         secrets.validate_target(settings)
         if secrets.hardened:
-            # Refuse a configured primary password before any registration.
+            # Refuse a configured primary password or a non-IAM engine (V-17)
+            # before any registration; DataPlane repeats the engine check.
             reject_documentdb_password_config()
+            require_iam_documentdb_engine(settings.documentdb.engine_version)
             _guard_hardened_stack(secrets.workload_step)
         super().__init__(registries=registries)
         self.settings = settings

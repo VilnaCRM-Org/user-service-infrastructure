@@ -382,6 +382,8 @@ it is S4.10 N3.
     `{secret_arn, purpose}`;
   - `SecretRotation(rotate_immediately=False)` `depends_on` the seed
     (AD-06 step-2 order);
+  - `depends_on` from the S2.1 autoscaling targets and policies to its `SecretRotation`s (AD-06; S2.1 landed first), with a
+    test;
   - an output-schema test;
   - `aws:lambda/invocation:Invocation` added to `CRITICAL_TYPE_PATTERNS` in
     `scripts/pulumi_ci_guardrails.py` (lines 17-30). The same edit adds the
@@ -413,7 +415,9 @@ it is S4.10 N3.
   removes it with its cluster) rendering the document of the contract state
   `documentdb_secret_policy` ∈ {`deny-other-readers`, `allow-rotation`,
   `tls-only`} (architecture AD-08). The initial state is
-  `deny-other-readers`.
+  `deny-other-readers`. It also adds `depends_on` from the S2.1 autoscaling
+  targets and policies to its `SecretPolicy`s (AD-06; S2.1 landed first),
+  with a test.
 
 **Acceptance criteria:**
 
@@ -486,7 +490,7 @@ it is S4.10 N3.
 - **N:** a start action with `min < 1`, or a stop action in a plan that also
   changes the target, fails.
 - **B1:** appending the stop entry `seq: 1` after the start entry `seq: 1`, then the start entry `seq: 2`, renders
-  exactly one new URN each time, and every earlier action's rendered inputs
+  one new URN per service each time, and every earlier action's rendered inputs
   (`schedule`, `scalable_target_action`) are byte-equal to the previous
   rendering (FR-11: no change to an earlier action).
 - **B2:** a fixture that changes an earlier entry's `at` changes that URN's

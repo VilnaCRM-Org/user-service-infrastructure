@@ -387,6 +387,22 @@ def _fixture_builders(options, identity):
             manage_master_user_password=True,
             opts=options,
         ),
+        # FR-10 N (S1.9, m10): a DocumentDB log group off the runtime CMK.
+        "docdb-audit-logs-no-key": lambda: aws.cloudwatch.LogGroup(
+            "fixture-logs", name="/aws/docdb/fixture/audit", opts=options
+        ),
+        "docdb-profiler-logs-no-key": lambda: aws.cloudwatch.LogGroup(
+            "fixture-logs", name="/aws/docdb/fixture/profiler", opts=options
+        ),
+        "docdb-audit-logs-jwt-key": lambda: aws.cloudwatch.LogGroup(
+            "fixture-logs",
+            name="/aws/docdb/fixture/audit",
+            kms_key_id=(
+                "arn:aws:kms:eu-central-1:891377212104:key/"
+                "00000000-0000-4000-8000-000000000011"
+            ),
+            opts=options,
+        ),
         # N (V-17): an elastic cluster has no IAM authentication.
         "docdb-elastic-cluster": lambda: aws.docdb.ElasticCluster(
             "fixture-elastic-cluster",

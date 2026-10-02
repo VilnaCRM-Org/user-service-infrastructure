@@ -236,12 +236,21 @@ def _managed_iam_documentdb(props, sdk_path: bool) -> bool:
 
     ``manageMasterUserPassword`` must be literally true, no primary password
     input may be present, and the engine must be DocumentDB 5.0.0 (V-17).
+    No ``masterUserSecretKmsKeyId`` may be present: the managed secret stays
+    on the AWS-managed key (A-05, FR-10, S1.9).
     """
     return (
         _either(
             props, "manage_master_user_password", "manageMasterUserPassword", sdk_path
         )
         is True
+        and _either(
+            props,
+            "master_user_secret_kms_key_id",
+            "masterUserSecretKmsKeyId",
+            sdk_path,
+        )
+        is None
         and all(props.get(key) is None for key in DOCUMENTDB_PASSWORD_INPUTS)
         and props.get("engine") == "docdb"
         and _either(props, "engine_version", "engineVersion", sdk_path)
@@ -588,6 +597,28 @@ def _not_a_redis_secret(props, sdk_path: bool) -> bool:
     return type(name) is str and "redis" not in name.lower()
 
 
+# DocumentDB names its audit and profiler export groups under this prefix.
+DOCUMENTDB_LOG_GROUP_PREFIX = "/aws/docdb/"
+
+
+def _runtime_cmk_log_group(props, sdk_path: bool, runtime_cmk=None) -> bool:
+    """Bind the DocumentDB log groups to the D-4 runtime CMK (FR-10, S1.9).
+
+    The name must be a plain string. A group under ``/aws/docdb/`` needs
+    ``kmsKeyId`` equal to ``runtime_cmk``, the hardened contract's
+    ``central.cmk.runtime.arn``. Any other group may carry no key or exactly
+    that key: the ECS groups get it in S1.8, and the check over every log
+    group is S4.10 N3. An unbound check accepts no DocumentDB group, and an
+    opaque name or key fails closed.
+    """
+    name = _inspectable(props.get("name"), sdk_path)
+    key = _read(props, "kms_key_id", "kmsKeyId", sdk_path)
+    bound = runtime_cmk is not None and key == runtime_cmk
+    return type(name) is str and (
+        bound or (key is None and not name.startswith(DOCUMENTDB_LOG_GROUP_PREFIX))
+    )
+
+
 def _reviewed_secret(props, sdk_path: bool) -> bool:
     """Apply both secret rules: no inline policy and no Redis secret (S1.3, S1.4)."""
     return _no_inline_secret_policy(props, sdk_path) and _not_a_redis_secret(
@@ -604,10 +635,13 @@ def _reviewed_secret(props, sdk_path: bool) -> bool:
 # Connect ``secretOptions``, the SES BYODKIM private key, the Redis
 # replication group's ``authToken`` and the Redis user's ``passwords``. The
 # Redis user group has no secret input, but it is checked because it could
-# bind the open built-in ``default`` user (S1.4 gate F1). Each check gets
+# bind the open built-in ``default`` user (S1.4 gate F1). The log group has
+# no secret input either; it is checked because D-4 binds the DocumentDB
+# audit and profiler groups to the runtime CMK (FR-10, S1.9). Each check gets
 # the props and whether they come from the SDK path (snake_case, raw inputs)
 # rather than the engine path (camelCase, deserialized).
 HARDENED_PROPERTY_CHECKS = {
+    "aws:cloudwatch/logGroup:LogGroup": _runtime_cmk_log_group,
     "aws:docdb/cluster:Cluster": _managed_iam_documentdb,
     "aws:ecs/service:Service": _no_service_connect,
     "aws:ecs/taskDefinition:TaskDefinition": _reviewed_task_definition,
@@ -624,6 +658,15 @@ HARDENED_PROPERTY_CHECKS = {
 REDIS_IDENTITY_CHECKS = frozenset({_iam_redis_group, _redis_user, _redis_user_group})
 
 
+def _bound_arguments(check, redis_identity, runtime_cmk) -> tuple[Any, ...]:
+    """The graph-bound value a check compares against, if it takes one."""
+    if check in REDIS_IDENTITY_CHECKS:
+        return (redis_identity,)
+    if check is _runtime_cmk_log_group:
+        return (runtime_cmk,)
+    return ()
+
+
 def _merge_tags(existing, baseline: dict[str, str]) -> dict[str, str]:
     """Preserve extra explicit tags, rejecting conflicts with baseline metadata."""
     existing = {} if existing is None else existing
@@ -638,6 +681,7 @@ def _reject_secret_material(
     args: pulumi.ResourceTransformationArgs | pulumi.ResourceTransformArgs,
     step: int = 1,
     redis_identity: tuple[str, str, str, str] | None = None,
+    runtime_cmk: str | None = None,
 ) -> None:
     """Fail closed before secret material or an unreviewed type joins the graph.
 
@@ -647,7 +691,9 @@ def _reject_secret_material(
     type (FR-34), and the default is that stricter step.
     ``redis_identity`` is this graph's ``redis_iam_identity``; the Redis user
     group, its users and the replication group may name no other ID (S1.4 gate
-    F1 and F11), and without it no readable ID passes.
+    F1 and F11), and without it no readable ID passes. ``runtime_cmk`` is the
+    contract's ``central.cmk.runtime.arn``; without it no DocumentDB log group
+    passes (S1.9).
     """
     if args.type_.startswith(SECRET_MATERIAL_TYPES):
         raise ValueError("Hardened workload graph must not hold secret material")
@@ -659,7 +705,7 @@ def _reject_secret_material(
         raise ValueError("Hardened workload graph holds an unreviewed type")
     check = HARDENED_PROPERTY_CHECKS.get(args.type_)
     sdk_path = isinstance(args, pulumi.ResourceTransformationArgs)
-    bound = (redis_identity,) if check in REDIS_IDENTITY_CHECKS else ()
+    bound = _bound_arguments(check, redis_identity, runtime_cmk)
     if check is not None and not check(args.props, sdk_path, *bound):
         raise ValueError("Hardened workload graph holds an unreviewed property")
     return None
@@ -674,13 +720,16 @@ def _reject_invoke(_args: pulumi.InvokeTransformArgs) -> None:
     raise ValueError("Hardened workload graph must not call a provider function")
 
 
-def _step_guard(step: int, redis_identity: tuple[str, str, str, str]):
-    """Bind the guard to the contract's step and this graph's Redis identity.
+def _step_guard(step: int, redis_identity: tuple[str, str, str, str], runtime_cmk: str):
+    """Bind the guard to the contract's step, Redis identity and runtime CMK.
 
     Both registrations share it.
     """
     return functools.partial(
-        _reject_secret_material, step=step, redis_identity=redis_identity
+        _reject_secret_material,
+        step=step,
+        redis_identity=redis_identity,
+        runtime_cmk=runtime_cmk,
     )
 
 
@@ -689,7 +738,9 @@ def _redis_identity(settings: StackSettings) -> tuple[str, str, str, str]:
     return redis_iam_identity(settings.stack_tag)
 
 
-def _guard_hardened_stack(step: int, redis_identity: tuple[str, str, str, str]) -> None:
+def _guard_hardened_stack(
+    step: int, redis_identity: tuple[str, str, str, str], runtime_cmk: str
+) -> None:
     """Guard the whole stack before its first hardened resource (FR-09, F1).
 
     The SDK stack transformation reaches every resource this program builds,
@@ -700,7 +751,7 @@ def _guard_hardened_stack(step: int, redis_identity: tuple[str, str, str, str]) 
     transformation in ``_compose_hardened`` stays as a second layer. These
     are the last transforms the program registers.
     """
-    guard = _step_guard(step, redis_identity)
+    guard = _step_guard(step, redis_identity, runtime_cmk)
     pulumi.runtime.register_stack_transformation(guard)
     pulumi.runtime.register_resource_transform(guard)
     pulumi.runtime.register_invoke_transform(_reject_invoke)
@@ -733,7 +784,11 @@ class WorkloadPhaseStack(RegistryPhaseStack):
             reject_redis_auth_token_config()
             require_iam_documentdb_engine(settings.documentdb.engine_version)
             require_iam_redis_engine(settings.redis.engine_version)
-            _guard_hardened_stack(secrets.workload_step, _redis_identity(settings))
+            _guard_hardened_stack(
+                secrets.workload_step,
+                _redis_identity(settings),
+                secrets.runtime_cmk_arn,
+            )
         super().__init__(registries=registries)
         self.settings = settings
         if secrets.hardened:
@@ -758,7 +813,11 @@ class WorkloadPhaseStack(RegistryPhaseStack):
         opts = pulumi.ResourceOptions(
             parent=self,
             transformations=[
-                _step_guard(secrets.workload_step, _redis_identity(settings)),
+                _step_guard(
+                    secrets.workload_step,
+                    _redis_identity(settings),
+                    secrets.runtime_cmk_arn,
+                ),
                 self._tag_resource,
             ],
         )

@@ -187,7 +187,7 @@
           "type": "string",
           "minLength": 7,
           "maxLength": 256,
-          "pattern": "^alias/[A-Za-z0-9/_-]+$"
+          "pattern": "^alias/(?!aws/)[A-Za-z0-9/_-]+$"
         }
       }
     },
@@ -1097,6 +1097,9 @@
                   "$ref": "#/$defs/cmk_key"
                 },
                 "jwt": {
+                  "$ref": "#/$defs/cmk_key"
+                },
+                "jwt_previous": {
                   "$ref": "#/$defs/cmk_key"
                 },
                 "two_factor": {

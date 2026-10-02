@@ -371,6 +371,20 @@ def test_hardened_descriptor_reports_only_seeded_declarations(contract):
     }
 
 
+def test_hardened_descriptor_reports_the_runtime_cmk(contract):
+    """D-4 (S1.9): the runtime CMK comes from reviewed central metadata only."""
+    hardened = _hardened_contract()
+    runtime = hardened["workload"]["central"]["cmk"]["runtime"]["arn"]
+    assert module.RuntimeSecretsDescriptor(hardened).runtime_cmk_arn == runtime
+    assert all(
+        secret["kms_key_arn"] == runtime
+        for secret in hardened["workload"]["secret_lifecycle"]["references"].values()
+    )
+    # The pre-hardening shape has no ``cmk`` metadata (AD-25).
+    with pytest.raises(ValueError, match="hardened"):
+        _ = module.RuntimeSecretsDescriptor(contract).runtime_cmk_arn
+
+
 def test_v8_hardened_secret_types_are_read_by_metadata_only(tmp_path):
     from poc_provider_runtime import PINS
 

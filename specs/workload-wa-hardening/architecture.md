@@ -204,7 +204,8 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
     `restore_operator_role_arn`, `restore_reader_role_arn` (S5.1);
     `apply_role_arn`, `recovery_role_arn`, `exercise_role_arn` (the §3.2a
     allow-lists); `rotation_function_arns`, `redeploy_function_arn` (S5.3);
-    `cmk` (runtime, JWT, 2FA ARNs and aliases; S5.4); `lambda_network`
+    `cmk` (runtime, JWT, 2FA ARNs and aliases, and `jwt_previous`, the optional
+    verify-only JWT key; S5.4); `lambda_network`
     (XP-8: subnet IDs, bootstrap-job SG ID) and
     `documentdb_managed_secret_arn` (XP-8). S1.1 adds all of them to the
     schema; each consumer story (S1.5, S2.5, S3.3) only reads them.
@@ -633,8 +634,9 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
 
   USI passes the key ARNs as plain environment values, under the names the
   user-service stories S5.11 and S5.12 define: `JWT_KMS_KEY_ID` (the current
-  JWT key), `JWT_KMS_PREVIOUS_KEY_ID` (the previous JWT key during a key change,
-  D-17; empty otherwise), `TWO_FACTOR_KMS_KEY_ID` (the 2FA key) and `AWS_REGION`.
+  JWT key), `JWT_KMS_PREVIOUS_KEY_ID` (the optional verify-only JWT key, field
+  `cmk.jwt_previous`, D-17: the new key while it is pre-published, then the old
+  key; empty otherwise), `TWO_FACTOR_KMS_KEY_ID` (the 2FA key) and `AWS_REGION`.
 - **AD-15a Per-key grant table (D-4, R4-M8, m7).** No key policy has an
   `arn:aws:iam::<acct>:root` `kms:*` statement. Every principal is named. Each
   row is both a key-policy statement and, for IAM roles, a matching identity
@@ -653,6 +655,7 @@ api-gateway-infrastructure: REST API + WAF + VPC link V2 → internal ALB (D-3, 
   | runtime | `delivery.logs.amazonaws.com` (service) | `kms:GenerateDataKey*`, `kms:Decrypt` | `aws:SourceAccount` = `<a>`; `aws:SourceArn` like `arn:aws:logs:<r>:<a>:*` (V-16) |
   | runtime | `cloudwatch.amazonaws.com`, `events.amazonaws.com` (services, SNS publish) | `kms:GenerateDataKey*`, `kms:Decrypt` | `aws:SourceAccount` = `<a>` |
   | JWT (RSA_4096, SIGN_VERIFY) | ECS task role | `kms:Sign`, `kms:GetPublicKey` | `kms:SigningAlgorithm=RSASSA_PKCS1_V1_5_SHA_256` on `Sign` |
+| previous JWT (the verify-only slot `cmk.jwt_previous`, D-17 window only) | ECS task role | `kms:GetPublicKey` | exact key ARN. The old key gets this row in place of the JWT row once the step-4 rollout of user-service S5.11 has replaced every task, and loses it at step 7. While the new key is pre-published in the slot (step 3) it already holds the JWT row, because it becomes the current key at step 4. |
   | 2FA (symmetric) | ECS task role | `kms:Encrypt`, `kms:Decrypt` | `ForAllValues:StringEquals kms:EncryptionContextKeys` = [`user_id`] and `Null kms:EncryptionContextKeys` = false |
   | runtime (TEST only) | TEST exercise role `GitHubCiExercise-user-service-infrastructure-test` (created by S5.1; this row's key-policy and identity statements are S5.4's, the role's other grants S5.23's) | `kms:Decrypt` | `kms:ViaService=s3.<r>.amazonaws.com`; `kms:EncryptionContext:aws:s3:arn` like `arn:aws:s3:::<flow-log bucket>/*` (reading flow-log objects, S4.6 step 12) |
 

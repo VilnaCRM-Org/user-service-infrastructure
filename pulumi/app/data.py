@@ -302,11 +302,14 @@ class DataPlane(pulumi.ComponentResource):
 
         The hardened branch of ``WorkloadPhaseStack`` composes this plane under
         its stack-wide guard. The task role authenticates with MONGODB-AWS, so
-        no URL secret exists (``document_db_url`` is removed). The
-        pre-hardening path is unchanged until S4.10.
+        no URL secret exists (``document_db_url`` is removed). The audit and
+        profiler log groups use the D-4 runtime CMK from central metadata
+        (S1.9). The pre-hardening path is unchanged until S4.10.
         """
         descriptor = cast(RuntimeSecrets, self._runtime_secrets).descriptor
-        cluster, instances = self._build_documentdb(settings, network, None)
+        cluster, instances = self._build_documentdb(
+            settings, network, None, log_kms_key_id=descriptor.runtime_cmk_arn
+        )
         port = settings.documentdb.port
         return HardenedDocumentDbOutputs(
             endpoint=cluster.endpoint,
@@ -447,8 +450,14 @@ class DataPlane(pulumi.ComponentResource):
         settings: StackSettings,
         network: NetworkPlane,
         password: pulumi.Input[str] | None,
+        log_kms_key_id: str | None = None,
     ) -> tuple[aws.docdb.Cluster, list[pulumi.Resource]]:
-        """Provision the DocumentDB cluster; ``None`` selects the managed password."""
+        """Provision the DocumentDB cluster; ``None`` selects the managed password.
+
+        ``log_kms_key_id`` is the hardened runtime CMK for the audit and
+        profiler log groups (D-4, S1.9); ``None`` keeps the pre-hardening
+        groups without a key input (AD-25).
+        """
         documentdb_subnet_group = aws.docdb.SubnetGroup(
             "user-service-documentdb-subnets",
             subnet_ids=network.outputs.data_subnet_ids,
@@ -482,6 +491,7 @@ class DataPlane(pulumi.ComponentResource):
                 f"user-service-documentdb-{export}-logs",
                 name=f"/aws/docdb/{cluster_identifier}/{export}",
                 retention_in_days=DOCUMENTDB_LOG_RETENTION_DAYS,
+                kms_key_id=log_kms_key_id,
                 opts=pulumi.ResourceOptions(parent=self),
             )
             for export in DOCUMENTDB_LOG_EXPORTS

@@ -43,6 +43,14 @@ REPLICATION_GROUP = "user-service-redis"
 APP_USER = "user-service-redis-app-user"
 DEFAULT_USER = "user-service-redis-default-user"
 USER_GROUP = "user-service-redis-user-group"
+# Synthetic D-4 runtime CMK (the hardened fixture's ``central.cmk.runtime``).
+RUNTIME_CMK = (
+    "arn:aws:kms:eu-central-1:891377212104:key/00000000-0000-4000-8000-000000000010"
+)
+DOCUMENTDB_LOG_GROUPS = (
+    "user-service-documentdb-audit-logs",
+    "user-service-documentdb-profiler-logs",
+)
 
 
 class DocumentDbMocks(RecordingMocks):
@@ -101,7 +109,10 @@ def _network():
 def _secrets(hardened, database="user_service"):
     return SimpleNamespace(
         descriptor=SimpleNamespace(
-            hardened=hardened, database_name=database, ca_bundle_path="/etc/ca.pem"
+            hardened=hardened,
+            database_name=database,
+            ca_bundle_path="/etc/ca.pem",
+            runtime_cmk_arn=RUNTIME_CMK,
         ),
         secret_arns={"document_db_url": ARN, "redis_url": ARN},
         values={},
@@ -171,6 +182,29 @@ def test_hardened_cluster_keeps_the_aws_managed_key_under_exception_a05():
     inputs = resources[CLUSTER]["inputs"]
     assert "masterUserSecretKmsKeyId" not in inputs
     assert not any("kms" in key.lower() for key in inputs)
+
+
+def test_hardened_documentdb_log_groups_use_the_runtime_cmk():
+    """FR-10 P (D-4, S1.9): the audit and profiler groups carry the runtime CMK."""
+    resources, _ = _register(_secrets(hardened=True))
+    for name in DOCUMENTDB_LOG_GROUPS:
+        inputs = resources[name]["inputs"]
+        assert inputs["kmsKeyId"] == RUNTIME_CMK
+        assert inputs["retentionInDays"] == 30
+        assert inputs["name"].startswith("/aws/docdb/")
+    assert {
+        resources[name]["inputs"]["name"].rsplit("/", 1)[1]
+        for name in DOCUMENTDB_LOG_GROUPS
+    } == {"audit", "profiler"}
+
+
+def test_pre_hardening_documentdb_log_groups_stay_unencrypted_until_s4_10():
+    """AD-25: the pre-hardening graph is unchanged; no key input is added."""
+    secrets = _secrets(hardened=False, database="app")
+    secrets.persist_url = lambda purpose, value: pulumi.Output.from_input(ARN)
+    resources, _ = _register(secrets, material=True, engine_version="4.0.0")
+    for name in DOCUMENTDB_LOG_GROUPS:
+        assert "kmsKeyId" not in resources[name]["inputs"]
 
 
 def test_hardened_data_plane_holds_no_generated_secret_material():

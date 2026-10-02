@@ -47,7 +47,8 @@ the contract invalid, so admission is refused before any read (NFR-07).
 Every declared secret is encrypted by the runtime CMK: its `kms_key_arn` must
 equal `central.cmk.runtime.arn`, and the runtime, JWT and 2FA CMK ARNs must be
 pairwise distinct (D-4). The JWT or 2FA key, the `aws/secretsmanager` key or
-any other key in the account is refused. `rotation.schedule_days` must be the
+any other key in the account is refused. S1.9 adds the optional verify-only JWT
+key and the DocumentDB log-group binding (see "CMK binding" below). `rotation.schedule_days` must be the
 exact integer `90`.
 
 For such a projection the program declares only `Secret` resources: no Random
@@ -397,6 +398,43 @@ Residual risks and advisories (S1.4 gate F10):
   exact strings the guard requires.
 - Advisory for S5.13: S5.13 must test against the exact access string
   `on ~* +@all -@dangerous`, the one the guard admits for the IAM app user.
+
+### CMK binding (S1.9, FR-10, D-4, D-17)
+
+The hardened contract's `central.cmk` holds the D-4 keys as `{arn, alias}`
+pairs: `runtime`, `jwt` and `two_factor` are required, and `jwt_previous` is
+optional. `jwt_previous` is the optional verify-only JWT key (D-17), present
+only during a JWT key change: it holds the new key while it is pre-published
+and then the old key. The app verifies with the public halves of the current
+and the verify-only JWT key (`GetPublicKey`) and signs only with the current
+one; S1.8 passes the verify-only key as `JWT_KMS_PREVIOUS_KEY_ID`, empty when
+absent. BI S5.4 changes the task role's grants by reviewed amendments, by
+phase. At S5.11 step 2, before the new key is pre-published in the slot, the
+new key gets `kms:Sign` and `kms:GetPublicKey`, because it becomes the
+current key at step 4. Once the old key is in the slot (steps 4-6), it keeps
+only `kms:GetPublicKey`; its `kms:Sign` is revoked only after the step-4
+rollout has replaced every task. At step 7 every grant on the old key is
+removed. Each key joins the task role's `-Guard` and `-Boundary` allowed-key
+lists with its first grant and leaves them with its last grant. The key
+change has 7 steps (user-service S5.11).
+Any other member of `cmk` fails the schema. No two keys may share an ARN or
+an alias, so a key or alias that names another D-4 key fails, and a secret on
+the verify-only JWT key is refused like any key other than the runtime CMK.
+The values in the committed fixtures are synthetic; the real ARNs and aliases
+come from BI S5.4 through a reviewed contract PR.
+
+On the hardened path the DocumentDB audit and profiler log groups carry
+`kms_key_id` equal to `central.cmk.runtime.arn`, read through
+`RuntimeSecretsDescriptor.runtime_cmk_arn`. The pre-hardening log groups keep
+no key input until S4.10 removes that branch (AD-25). The stack-wide guard binds
+`HARDENED_PROPERTY_CHECKS` to the runtime CMK: a log group under
+`/aws/docdb/` without exactly that `kmsKeyId` fails, any other log group may
+carry no key or exactly that key, and a log group whose name or key the guard
+cannot read fails closed. The ECS web and worker groups get the runtime CMK in
+S1.8; the check over every workload log group is S4.10 N3. The DocumentDB
+`Cluster` check also refuses `masterUserSecretKmsKeyId` in either casing, so
+the managed secret stays on the AWS-managed key (A-05). The live checks are
+S4.6 step 7: `DescribeSecret` `KmsKeyId` and `DescribeLogGroups` `kmsKeyId`.
 
 ## Legacy managed path fails closed (S1.10, FR-29, AD-22)
 

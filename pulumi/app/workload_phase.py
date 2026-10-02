@@ -61,7 +61,7 @@ from app.environment import (
 )
 from app.messaging import MessagingPlane
 from app.network import NetworkPlane
-from app.observability import ObservabilityPlane
+from app.observability import ObservabilityPlane, alarm_targets
 from app.registry import RegistryInputs
 from app.registry_phase import RegistryPhaseStack
 from app.runtime_secrets import RuntimeSecrets, RuntimeSecretsDescriptor
@@ -137,11 +137,13 @@ ELASTIC_DOCUMENTDB_TYPE = "aws:docdb/elasticCluster:ElasticCluster"
 # input and no check, while the Redis user group's check refuses the open
 # built-in ``default`` user (S1.4 gate F1). The autoscaling types have no
 # secret input in pulumi-aws 7.23.0, so they have no check. S2.3 adds the
-# observability component, the alarm topic and its topic policy (AD-11).
+# observability component, the alarm topic and its topic policy (AD-11); S2.4
+# adds the §3.1 metric alarms, whose only actions are that topic (FR-13).
 HARDENED_TAGGED_TYPES = frozenset(
     {
         "aws:appautoscaling/target:Target",
         "aws:cloudwatch/logGroup:LogGroup",
+        "aws:cloudwatch/metricAlarm:MetricAlarm",
         "aws:docdb/cluster:Cluster",
         "aws:docdb/clusterInstance:ClusterInstance",
         "aws:docdb/clusterParameterGroup:ClusterParameterGroup",
@@ -836,10 +838,11 @@ class WorkloadPhaseStack(RegistryPhaseStack):
         Every plane is credential-free: seeded secret metadata, the network
         with the bootstrap-job SG, DocumentDB with the managed password and the
         plain MONGODB-AWS URL, Redis with IAM users and required TLS (S1.4),
-        the queues, ECS services at zero tasks and the alarm topic on the
-        runtime CMK (S2.3). A step-2 contract adds the
-        autoscaling plane (S2.1); the other step-2 stories add their resources
-        in turn, and the guard refuses every step-2 type at step 1.
+        the queues, ECS services at zero tasks, the alarm topic on the
+        runtime CMK (S2.3) and the §3.1 alarms on that topic (S2.4). A step-2
+        contract adds the autoscaling plane (S2.1); the other step-2 stories
+        add their resources in turn, and the guard refuses every step-2 type
+        at step 1.
         """
         opts = pulumi.ResourceOptions(
             parent=self,
@@ -887,6 +890,11 @@ class WorkloadPhaseStack(RegistryPhaseStack):
             settings=settings,
             runtime_cmk_arn=secrets.runtime_cmk_arn,
             account_id=secrets.account_id,
+            targets=alarm_targets(
+                settings,
+                self.compute.scalable_services,
+                self.data.redis.replication_group_id,
+            ),
             opts=opts,
         )
         if secrets.workload_step == 2:

@@ -357,19 +357,59 @@ This file is the execution ledger. It is not a planning input.
   rollout; step 7 removes it), and S19-M3 adds the AD-15a verify-only row so
   S5.4's "only the AD-15a rows" acceptance covers the D-17 window grant.
 
+- **D-18 single-architecture amendment (user decision, 2026-10-02).** The
+  user answered the coordinator's multi-arch question in chat with "Use
+  single arch for all platforms as we have in dockerfile". `decisions.md`
+  records it as D-18: `linux/amd64` (`X86_64`) for TEST and PROD,
+  single-platform single-manifest releases, no image index, no arm64
+  build and no multi-arch publishing. The plan follows (no other decision
+  text changed): PRD FR-14 (a) and its verification row record ARM64 as
+  a declined cost and sustainability option, and XP-4 and XP-12 name
+  `linux/amd64` single-image manifests; the brief and the architecture
+  component list name single-architecture images; user-service S5.14 is
+  re-scoped to "single-arch publishing stays fail-closed" (BuildKit
+  provenance and SBOM attestations off, the publisher refuses a
+  non-single-image manifest); S2.6 records the declined option; S4.9's
+  admission check, S4.10's topology and S4.14's pins are single-platform
+  checks, and S4.14 narrows the contract and receipt schema enums, the
+  image-config check (`scripts/poc_workload_images.py` line 243) and
+  `docs/poc-workload-admission.md` line 44 to `linux/amd64`; the
+  `publish_platform` field and the ARM64 fixtures of revisions 10 and 11
+  (R10-n6, R11-m3, R11-m4) are withdrawn. The code and schema narrowing
+  is S4.14's implementation work; this amendment changes plan text only.
+  The readiness round records are unchanged. Gate fix round 1 (F1, F2,
+  I3, I4): the brief front matter and the manifest preface below record
+  the D-18 brief change; the FR-14 verification row names the
+  release-platform tests; S4.14 gives the PROD contract schema the same
+  `linux/amd64`-only enum; and `tests/unit/test_workload_hardening_bundle.py`
+  checks the manifest hashes, the brief amendment record and the FR-14
+  trace.
+  Follow-up (2026-10-02): the S5.14 row in `epics-stories.md` now matches
+  the user-service single-arch publisher (user-service PR #511, head
+  `a5dd97b`): `--platform linux/amd64 --provenance=false --sbom=false`,
+  a `linux/amd64`-only release-manifest codec, and the refusal reasons
+  `publisher-platform`, `publisher-attestation-flags`,
+  `publisher-archive-not-single` and `publisher-manifest-not-single`.
+  `readiness.md` keeps its round text unchanged; a one-sentence
+  "Superseded by D-18 (2026-10-02)" note now follows each statement that
+  read as a live arm64, multi-arch or `publish_platform` promise (the
+  R11-m3, R11-m4 and R10-n6 rows, the revision-10 and revision-11
+  ordered-list notes, the "ARM64 before S4.14" residual and the
+  revision-10 audit finding 2 and its residual). The manifest below hashes both changed files.
+
 ## Artifacts (sha256, revision 14)
 
-`run-summary.md` is not hashed here, because it contains the hashes. `decisions.md` is a planning input and is hashed. Commit `68584e1` added its D-14 row after revision 5; revision 6 changed only that row's label (a user decision, not a planning default); revisions 7, 8 and 9 do not change it; revision 10 adds the D-15 row (a user decision of 2026-09-30); revision 11 changes only D-15's note text (R11-n3); revisions 12, 13 and 14 do not change it. `research.md` is unchanged since revision 4; `brief.md` changed last in revision 10 (front matter and AS-4, D-15).
+`run-summary.md` is not hashed here, because it contains the hashes. `decisions.md` is a planning input and is hashed. Commit `68584e1` added its D-14 row after revision 5; revision 6 changed only that row's label (a user decision, not a planning default); revisions 7, 8 and 9 do not change it; revision 10 adds the D-15 row (a user decision of 2026-09-30); revision 11 changes only D-15's note text (R11-n3); revisions 12, 13 and 14 do not change it; later amendments add the D-16, D-17 and D-18 rows. `research.md` is unchanged since revision 4; `brief.md` changed in revision 10 (front matter and AS-4, D-15) and last in the D-18 amendment of 2026-10-02 (the front-matter revision note and the user-service scope line, line 108).
 Check with `sha256sum -c` over the block below, from `specs/workload-wa-hardening/`.
 
 ```
 beca16ba9ab95d76cd28ed47ac8e806549b94805ddca9a2d138a790ee0f0ca59  research.md
-5d7d1e37b9417de7cbe7b4fa0bcafe28ed723da997c22be7ef5902b384e302e4  brief.md
-18228d0075defe4cd689cc070cc648c94e49bd68a52ebae92e80b8939c750a0a  prd.md
-dcd03ea1fb77008dc2ed7264b5aa1f5dade0eb024cd4f71aff37f7ec6a8d50b5  architecture.md
-20f2048e6d0c716c06fa8ec4cd6e71de6a017173fbb4e2b73d3c18a2d20372c0  epics-stories.md
-c264677ab97a2c48dcb315b1c001e61c1b3c279015a98cba29f2fbdb34a2ae55  decisions.md
-45553cbd61f1ae16c238cba9f3ee4f555ede5e06d5e9aaa9199670f0ad81046a  readiness.md
+1712de950689f5c87b62a0e420a298bd4582e4e42b74f943a0a99a4e836299b4  brief.md
+cfe84f75fbca85aa182a7c0c4ba40e36e24344a4903a87879372aee2a9291e28  prd.md
+3fb504585224bc4a3d17e7b5d2fe7c8a90f7dc19bcafaa0a6d1343d6f30a2514  architecture.md
+3da2c9add16ac7d81497b008382c424533de3392be207a8be82a79b2c0bb4a37  epics-stories.md
+d141bad2c3a9e56c5503c4a16c4e9c1506afcd1ee4773696c4977a871ec15633  decisions.md
+e0eabebc0a64c9838c9c3ffabad683707fc0f680cc873a57aef63f4d5743937a  readiness.md
 ```
 
 ## Gates
@@ -468,9 +508,9 @@ from this list.
       `G-GitHubGovernanceApply` (R11-m1); no CI role gets
       `iam:CreateServiceLinkedRole`, and the five SLRs are an S4.6 step-1
       `iam:GetRole` precondition with an independent-owner creator
-      (R11-m2); S4.10's ARM64 tests need no higher row (R11-m3); the
-      publisher platform is the committed `publish_platform` field at job
-      level, never `client_payload` (R11-m4); the #284 and #285 facts,
+      (R11-m2); the release platform is `linux/amd64` only (D-18), so
+      there is no `publish_platform` field and no ARM64 test (R11-m3 and
+      R11-m4 are moot); the #284 and #285 facts,
       S5.2's post-#284 baseline, D-15 option (a) and the layer count are
       exact (R11-n1…n4).
 - [ ] D-15 is recorded in `decisions.md` with the user's wording and date,
@@ -501,10 +541,13 @@ from this list.
 - [ ] The certificate-replacement residual (PRD §7 XP-10) is exact, and
       its gap with D-15's accepted rationale is surfaced to the user in
       `readiness.md` "Remaining user decisions", not decided.
-- [ ] FR-14 (a) ARM64 has owners for every AMD64 pin (S4.9 admission,
-      S4.10 topology, S4.14 capabilities, projection and the publisher
-      request's platform, `docs/poc-workload-admission.md` line 111;
-      R10-n6, recheck of audit 2).
+- [ ] FR-14 (a) ARM64 is declined by D-18: every AMD64 pin stays and has
+      an owner (S4.9 single-platform admission, S4.10 topology `X86_64`,
+      S4.14 schema enums, image-config check, capabilities, projection and
+      the publisher request literal, `docs/poc-workload-admission.md` lines
+      44 and 111), user-service S5.14 keeps publishing fail-closed
+      single-image `linux/amd64` manifests, and the cost document records
+      the declined option.
 - [ ] Seed amendments are serialized in C-BI order (#219's, S5.2, S5.17,
       S5.4, XP-11 in row 42, XP-14's PROD addition, S5.24a, S5.24b), with
       no forward dependency (R10-m2).

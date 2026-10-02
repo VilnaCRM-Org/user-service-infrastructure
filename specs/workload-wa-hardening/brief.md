@@ -4,7 +4,7 @@ workflow: _bmad/bmm/workflows/1-analysis/bmad-create-product-brief (Create mode,
 task: workload-wa-hardening
 source_baseline: 66776772979956de9c5abdbee7c45641a1b533fa
 date: 2026-09-30
-revision: 8 (AS-4 lists D-15, bundle revision 10; D-14 added in revision 7, R7-n1; otherwise unchanged since the revision-5 round-5 m7 alignment; decisions D-1…D-15 of 2026-09-30 applied)
+revision: 8 (AS-4 lists D-15, bundle revision 10; D-14 added in revision 7, R7-n1; the D-18 amendment of 2026-10-02 changed only the user-service scope line (single-architecture `linux/amd64` images) and this note; otherwise unchanged since the revision-5 round-5 m7 alignment; decisions D-1…D-15 of 2026-09-30 and D-18 of 2026-10-02 applied)
 inputDocuments: [specs/poc/README.md, specs/poc/secret-lifecycle.md, docs/poc-workload-recovery.md, research.md]
 ---
 
@@ -105,7 +105,7 @@ safe to deploy. The main problems:
   recovery grants);
 - `user-service` (non-root image, #501, MONGODB-AWS check, the Redis IAM
   token provider, KMS signing and encryption, in-container TLS for PROD,
-  multi-arch images);
+  single-architecture `linux/amd64` images, D-18);
 - `api-gateway-infrastructure` (the API front door).
 
 **Out of scope:**

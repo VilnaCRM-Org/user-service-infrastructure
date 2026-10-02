@@ -63,7 +63,7 @@ All of these are defined in `prd.md` and `architecture.md`.
 | FR-11 | S2.1, S5.2, S4.9 (`rollback-zero`) |
 | FR-12 | S2.2 |
 | FR-13 | S2.3, S2.4, S2.5, S5.4 |
-| FR-14 | S2.6, S5.14, S3.3, S4.9 (ARM64 admission check), S4.10 (topology `cpuArchitecture`), S4.14 (capabilities and projection platform pins, image-publisher request platform) (R10-n6, recheck of audit 2) |
+| FR-14 | S2.6 (TEST schedule, cost document; ARM64 declined, D-18), S3.3, S5.14 (single-arch fail-closed publishing), S4.9 (single-platform admission check), S4.10 (topology `cpuArchitecture` stays `X86_64`), S4.14 (single release platform `linux/amd64`: schema, image-config, capabilities and projection pins, publisher request literal) (D-18) |
 | FR-15 | S3.1, S5.2, S5.4 |
 | FR-16 | S3.2 |
 | FR-17 | S3.3 |
@@ -601,16 +601,23 @@ matching):**
 - **Scope:**
   - TEST night and weekend scheduled actions, created in **step 2** (they
     are in the FR-34 step-2 set; their min/max effect is on the AD-23 list);
-  - ARM64 in the program when the contract marks the image multi-arch; the
-    **admission** check that refuses ARM64 without an arm64 manifest lives in
-    S4.9 (C-contract);
+  - no ARM64 in the program (D-18): the task definition stays `X86_64`,
+    and the cost document records Fargate ARM64 as a declined cost and
+    sustainability option (the Graviton price and energy benefit is
+    traded for one build and test path; the DocumentDB and ElastiCache
+    instance classes are not part of D-18). The refusal of any release
+    platform other than `linux/amd64` lives in S4.9 (admission) and S4.14
+    (schema, image-config, capabilities and projection pins);
   - `docs/poc-cost-review.md`, which includes the endpoint, NAT and
     CloudTrail read-event costs. Every figure carries a data-source label
     (AWS Pricing Calculator export or AWS Price List API query for
     `eu-central-1` with its retrieval date, or Cost Explorer actuals with
     the billing period), and the NFR-11 forecast threshold applies (m17).
 
-**Acceptance criteria:** the PRD FR-14 rows; NFR-11. **N:** a figure without
+**Acceptance criteria:** the PRD FR-14 rows; NFR-11; the cost document
+states the declined Fargate ARM64 option (D-18) with a source-labelled
+estimate or an explicit qualitative trade-off, and the doc test pins that
+statement. **N:** a figure without
 a source label, an after-estimate more than 20% above its before-estimate
 without a justification line, or any PROD increase without a justification
 line (audit), fails the doc test. **B:** a TEST increase of exactly 20% needs
@@ -866,27 +873,17 @@ step 13 (induced failure).
     records the change;
   - `specs/poc-workload-runner.md` topology and checker text, with
     doc-marker tests;
-  - **release platform in the topology (FR-14 (a), R10-n6, pre-commit
-    audit 2):** the native task-definition check's `runtimePlatform`
-    `cpuArchitecture` (`scripts/poc_workload_topology.py` line 828, today
-    `X86_64`) follows the contract's release platform: `X86_64` for
-    `linux/amd64`, `ARM64` for `linux/arm64`. **Tests at this row
-    (R11-m3):** a unit test of `_task_execution_inputs`
-    (`scripts/poc_workload_topology.py` lines 814-839), with a
-    `WorkloadPhaseProjection` built directly (not through
-    `project_workload_phase`): a `linux/arm64` release accepts
-    `cpuArchitecture: ARM64` and rejects `X86_64` with
-    `workload-task-execution-inputs`, and a `linux/amd64` release the
-    reverse. End to end, an ARM64 contract **fails closed** at this row:
-    `validate_first_workload_topology` (line 371) calls `_checked`, which
-    rebuilds the projection through `project_workload_phase` and `_images`
-    (`scripts/poc_workload_phase_entrypoint.py` lines 119 and 126-133),
-    and `_images` requires `linux/amd64` (line 59) until S4.14 (row 39)
-    widens it; S4.10 asserts that failure (`workload-supported-platform`).
-    The positive end-to-end ARM64 fixture (an ARM64 contract with an ARM64
-    program passes `validate_first_workload_topology`) is S4.14's. The
-    existing end-to-end tests stay AMD64
-    (`tests/unit/test_poc_workload_topology.py` lines 166 and 279).
+  - **release platform in the topology (D-18):** the native
+    task-definition check's `runtimePlatform` `cpuArchitecture`
+    (`scripts/poc_workload_topology.py` line 828) stays `X86_64`, with no
+    derivation from the release platform, because the only release
+    platform is `linux/amd64`. **Test at this row:** a task definition
+    with `cpuArchitecture: ARM64` stays rejected with
+    `workload-task-execution-inputs` (`_task_execution_inputs`, lines
+    814-839; the existing case at `tests/unit/test_poc_workload_topology.py`
+    line 228 is kept). No ARM64 acceptance test and no end-to-end ARM64
+    fixture exists at this row or any other. The existing end-to-end tests stay
+    AMD64 (`tests/unit/test_poc_workload_topology.py` lines 166 and 279).
 - **V-27** (engine source, R6-m12) is a first case, like V-24: whether
   `importID` persists on a checkpoint row after an `import_` apply, read
   from the pinned Pulumi engine.
@@ -1071,12 +1068,13 @@ step 13 (induced failure).
   workload-phase fixture a missing receipt fails the upload step.
 - **Live (TEST):** S4.6 step 4.
 
-### S4.9 (USI): Step-2, rollback-zero and policy-update admission; multi-arch admission (FR-34)
+### S4.9 (USI): Step-2, rollback-zero and policy-update admission; single-platform admission (FR-34)
 
 - **Chains:** C-contract after S4.11 (R6-M2). It precedes S4.2, whose
   `resume` applies its per-mode rules, its `start_at` window and the
   `rollback-zero` resume boundary.
-- **Depends on:** S4.10 (URN sets), S4.11 (anchors), S2.6 (ARM64 flag).
+- **Depends on:** S4.10 (URN sets), S4.11 (anchors), S2.6 (row 24; kept
+  for ordering, no ARM64 flag since D-18).
 - **Scope:**
   - admission mode `step2`: saved-plan steps only `create` or `same`;
     created URNs equal the S4.10 step-2 set (seed Invocations, rotations,
@@ -1128,28 +1126,21 @@ step 13 (induced failure).
     lookup are the S4.11 library's, and the job that writes the record is
     S4.13's. `hold` admission calls the S4.11 lookup for the stop
     observation bound to the latest success receipt (the `stop` plan's);
-  - the multi-arch admission check (moved from S2.6). **Where it lives
-    (R10-n6):** in `scripts/poc_workload_admission.py` (C-contract), after
-    `images.inspect_images` in `observe_workload` (lines 464-475): an
-    ARM64 contract is refused unless the image rows carry an arm64
-    manifest and config platform. S4.9 edits neither
+  - the single-platform admission check (D-18; moved from S2.6). **Where
+    it lives (R10-n6):** in `scripts/poc_workload_admission.py`
+    (C-contract), after `images.inspect_images` in `observe_workload`
+    (lines 464-475): the contract `release.platform` must be
+    `linux/amd64`, and every image row must be a single-image manifest
+    (never a manifest list or image index) whose config platform is
+    `linux/amd64`; anything else is refused. S4.9 edits neither
     `scripts/poc_workload_images.py` nor
     `scripts/poc_workload_capabilities.py` (only S4.14 edits them). The
-    AMD64-only pins further down the path have their own owners
-    (pre-commit audit 2): S4.10 (row 28, the only C-topology writer)
-    derives the topology `cpuArchitecture` (`scripts/poc_workload_topology.py`
-    line 828, today `X86_64`) from the release platform (`X86_64` for
-    `linux/amd64`, `ARM64` for `linux/arm64`); S4.14 (row 39) widens the
-    capabilities release-platform check (`scripts/poc_workload_capabilities.py`
-    lines 327-330, `workload-supported-platform`) and the projection check
-    (`scripts/poc_workload_phase_entrypoint.py` line 59) to the schema's
-    enum (`linux/amd64`, `linux/arm64`), and the publisher request's
-    platform (`scripts/poc_publisher_dispatch.py` line 170; see S4.14's
-    release-platform pins). Until S4.14 merges, an ARM64 contract fails
-    closed at those pins, after S4.9's check. FR-14 (a) is admissible from
-    gate 1 only through S4.10 (row 28) and S4.14 (row 39), which owns the
-    publisher line 170 row; both are on the gate-1 list and precede S4.6
-    (row 43), so there is no forward dependency.
+    other AMD64 pins on the path keep their owners: S4.10 (row 28) keeps
+    the topology `cpuArchitecture` at `X86_64`, and S4.14 (row 39) narrows
+    the schema enums and the image-config check to `linux/amd64` and pins
+    the capabilities, projection and publisher-request literals. None of
+    them is widened, so there is no ARM64 path to admit and no forward
+    dependency.
 
 **Acceptance criteria:**
 
@@ -1157,7 +1148,9 @@ step 13 (induced failure).
 - **N1:** a step-2 plan updating the ECS service is refused.
 - **N2:** step 2 without a step-1 success receipt, the S5.5 receipt or the
   XP-8 metadata is refused.
-- **N3:** ARM64 without an arm64 manifest is refused.
+- **N3:** a `release.platform` other than `linux/amd64`, an image config
+  platform other than `linux/amd64`, or a manifest list or image index is
+  refused (D-18).
 - **N4:** a `rollback-zero` plan updating the target in any field other than
   `suspendedState`, deleting anything, or combining `stop` with the
   suspension is refused.
@@ -1797,7 +1790,7 @@ step 13 (induced failure).
   | `scripts/poc_registry_completion.py` | 30, 32, 33, 105, 257, 367; 118; 116, 150, 153, 159, 173, 198, 200, 280, 282 | XP-14 | the registry-completion row |
   | `scripts/poc_mail_prerequisite.py` | —; 13, 14, 15; 13, 27, 394 | XP-14 | the capture row (the SES and DKIM inventory) and the `_mail_semantics` row |
   | `scripts/poc_scheduled_registry_drift.py` | 24, 106, 138, 184; 177, 178; 125, 126, 128 | XP-14 | excluded from S4.14 and S4.17: the TEST registry scheduled diagnostic, connected to no workflow (`specs/poc/README.md` lines 52-57); S4.17 models its gate and does not call it |
-  | `scripts/poc_publisher_dispatch.py` | 89; 170 | XP-14 (with the PROD counterpart of XP-12); S4.14 | 89 excluded from S4.14: the TEST image publisher environment `poc-test-images`, used by the TEST registry dispatch job (`self-deploy.yml` lines 762 and 780); PROD image publication is outside this plan. 170 (`"platform": "linux/amd64"` in the publisher request) is S4.14's: the release-platform row (FR-14 (a), recheck of pre-commit audit 2) |
+  | `scripts/poc_publisher_dispatch.py` | 89; 170 | XP-14 (with the PROD counterpart of XP-12); S4.14 | 89 excluded from S4.14: the TEST image publisher environment `poc-test-images`, used by the TEST registry dispatch job (`self-deploy.yml` lines 762 and 780); PROD image publication is outside this plan. 170 (`"platform": "linux/amd64"` in the publisher request) is S4.14's: the literal stays unchanged (D-18), and S4.14 adds a test that it is the only platform the request sends |
   | `scripts/poc_workload_reconciliation.py` | —; —; 15 | S4.14 | the reconciliation row (`PREFIX`/`ROOT` imports) |
   | `scripts/poc_workload_secret_result.py` | —; —; 68 | S4.10 (the PROD registry set: XP-14, stubbed) | the S4.10 registry-set note below |
   | `scripts/configure_github_repository_controls.py` | 80, 85 | — | excluded: environment-name lists that already include `prod` and `prod-preview` (S5.21 edits the file for other reasons) |
@@ -2022,87 +2015,43 @@ step 13 (induced failure).
     - **live:** the gate-1 PR (S4.6 step 1) writes the TEST `workload`
       block with the XP-10 ARN, and S4.7's PROD contract PRs write the
       XP-15 ARN. No role reads SSM on any path;
-  - **release-platform pins (FR-14 (a), R10-n6, pre-commit audit 2):** as
-    the one editor of the capabilities module, S4.14 widens its
-    release-platform check (lines 327-330, `workload-supported-platform`)
-    and the projection check (`scripts/poc_workload_phase_entrypoint.py`
-    line 59) from `linux/amd64` to the schema enum (`linux/amd64`,
-    `linux/arm64`; `schemas/poc-test-v1.schema.json` lines 448-452). S4.9's
-    admission check refuses ARM64 without an arm64 manifest, and S4.10
-    derives the topology `cpuArchitecture`. Fixture: an ARM64 contract
-    with arm64 image rows passes both pins; `linux/arm` or
-    `windows/amd64` still fails the schema. **End-to-end ARM64 topology
-    fixture (moved here from S4.10, R11-m3):** an ARM64 contract with an
-    ARM64 program passes `validate_first_workload_topology`
-    (`scripts/poc_workload_topology.py` line 371), and an ARM64 contract
-    with an `X86_64` task definition fails with
-    `workload-task-execution-inputs`; S4.10's fail-closed ARM64 assertion
-    is replaced by these in this PR. **The image-publisher request
-    (recheck of pre-commit audit 2):** `scripts/poc_publisher_dispatch.py`
-    line 170 sends the literal `"platform": "linux/amd64"` in every
-    publisher request, and `observe_workload` → `inspect_release`
-    requires the build-provenance platform to equal the contract
-    `release.platform` (`scripts/poc_workload_admission.py`:
-    `_evidence_values`, line 335, builds the expected provenance with
-    `release["platform"]` at line 355 and compares at lines 370-377,
-    reasons `workload-quality-evidence` and `workload-build-evidence`;
-    `inspect_release` calls it at line 448).
-    Without a change an ARM64 contract still fails there. S4.14 owns this
-    line too (the publisher dispatch is not XP-14-only for it; XP-14 keeps
-    line 89, the PROD environment). **Source of the platform (R11-m4):**
-    a committed, schema-validated contract field reviewed in a USI PR,
-    never `client_payload`. The two branches of revision 10 do not work:
-    a release block cannot be the source, because `test_registry_dispatch`
-    runs only after `test_registry_proof` (`.github/workflows/self-deploy.yml`
-    lines 721-731) and a `phase: registry` contract cannot carry
-    `workload` (`schemas/poc-test-v1.schema.json` lines 821-836); and a
-    "reviewed dispatch input" has no carrier, because the workflow
-    triggers only on `repository_dispatch` (lines 5-8), its
-    `client_payload` comes from a PR comment (lines 44-51), and a `vars.*`
-    value is set by an administrator outside review. So S4.14 adds, in its
-    C-contract slot, an optional top-level contract field
-    `publish_platform` with the release-platform enum (`linux/amd64`,
-    `linux/arm64`) to `schemas/poc-test-v1.schema.json` (the PROD schema
-    does not get it: PROD image publication is outside this plan, XP-14):
-    absent means `linux/amd64` (today's behavior, so the committed
-    `specs/poc/poc-test.json` does not change), and in a `phase: workload`
-    contract a present value must equal `workload.release.platform`
-    (reason `publish-platform-release-mismatch`). An ARM64 publication
-    needs a reviewed USI contract PR that sets it. The value reaches the
-    dispatcher once, at job level: `poc_prepare_source` exports it from
-    the validated contract as a job output, and the
-    `test_registry_dispatch` job's `env` block (lines 739-748) sets
-    `POC_PUBLISH_PLATFORM` from that output, so the `prepare` step (lines
-    760-762) and the `dispatch` step (lines 774-781) see the same value.
-    `prepare()` (`scripts/poc_publisher_dispatch.py` lines 143-175) builds
-    the request with that value at line 170, after checking that it is in
-    the enum and equals the field of the authenticated source contract
-    (the contract whose digest the request carries as
-    `registry_contract_digest`); `dispatch()` reuses `prepare()` (line
-    217). Files: `scripts/poc_publisher_dispatch.py` (lines 143-175),
-    `.github/workflows/self-deploy.yml` (the `poc_prepare_source` outputs
-    and lines 739-748), the TEST contract schema, the contract validator,
-    and `tests/unit/test_poc_publisher_dispatch.py` (line 128, the
-    expected request), with the workflow-shape pin of the job `env`
-    (C-runner, `@Kravalg`-approved). Fixtures: `linux/arm64` produces an
-    arm64 request; an absent field produces `linux/amd64`; a value
-    outside the enum fails the schema; an environment value that differs
-    from the authenticated contract fails `prepare`; the request built by
-    the `prepare` mode equals the one the `dispatch` mode sends; no job
-    `env` entry reads `github.event.client_payload` for the platform; an
-    `arm64` request with an
-    `amd64` release block fails admission. **Docs (NFR-10):**
-    `docs/poc-workload-admission.md` line 111 ("Only the current AMD64
-    settings bridge is supported") is replaced by the two-platform
-    statement and pinned by the story's doc test. **Ordering:** XP-12 (the
-    image publication, an external precondition of the gate-1 PR, row 43,
-    with no row of its own) runs the publisher, so an ARM64 publication
-    runs after S4.14 (row 39); an AMD64 one is unaffected. **Cross-repo
-    precondition:** the user-service publisher must accept a `linux/arm64`
-    request (S5.14, row 24, before this row); until then an arm64 request
-    is refused by the publisher and the admission equality check still
-    fails closed. S4.14 depends on
-    no higher row, and no row below 39 needs the new publisher behavior;
+  - **single release platform (D-18):** as the one editor of the
+    capabilities and images modules, S4.14 keeps the capabilities
+    release-platform check (`scripts/poc_workload_capabilities.py` lines
+    327-330, `workload-supported-platform`) and the projection check
+    (`scripts/poc_workload_phase_entrypoint.py` line 59) at
+    `linux/amd64`, narrows the image-config platform check
+    (`scripts/poc_workload_images.py` line 243, `image-config-platform`)
+    from `{linux/amd64, linux/arm64}` to `linux/amd64`, and narrows the
+    `release.platform` enum of `schemas/poc-test-v1.schema.json` (lines
+    1196-1199) and the image-row `platform` enum of
+    `schemas/poc-workload-step-receipt-v1.schema.json` (lines 333-336) to
+    `linux/amd64` only; the new PROD contract schema
+    `schemas/poc-prod-v1.schema.json` carries the same `linux/amd64`-only
+    `release.platform` enum. `docs/poc-workload-admission.md` line 44 then
+    names only the `linux/amd64` release platform, and line 111 states
+    that only the `linux/amd64` (`X86_64`) settings bridge is supported
+    (D-18); the story's doc test pins both. Fixtures: `linux/arm64`,
+    `linux/arm` and `windows/amd64` fail the TEST and the PROD contract
+    schema; an `arm64` image
+    config fails `image-config-platform` (the `arm64` acceptance case of
+    `tests/unit/test_poc_workload_image_config.py` line 93 becomes this
+    refusal); the `linux/arm64` refusals of
+    `tests/unit/test_poc_workload_capabilities.py` line 365 and
+    `tests/unit/test_poc_workload_phase_entrypoint.py` lines 189 and 223
+    stay. **The image-publisher request:**
+    `scripts/poc_publisher_dispatch.py` line 170 keeps the literal
+    `"platform": "linux/amd64"`, and `tests/unit/test_poc_publisher_dispatch.py`
+    pins it as the only platform a request sends; `observe_workload` →
+    `inspect_release` keeps requiring the build-provenance platform to
+    equal the contract `release.platform` (`scripts/poc_workload_admission.py`
+    `_evidence_values`, lines 335-377). There is no `publish_platform`
+    contract field, no `POC_PUBLISH_PLATFORM` job environment, no
+    `publish-platform-release-mismatch` reason and no end-to-end ARM64
+    topology fixture (the revision-10 and revision-11 ARM64 design,
+    R10-n6, R11-m3 and R11-m4, is withdrawn by D-18). XP-12 publishes
+    `linux/amd64` images only, and S4.14 needs no publisher change from
+    user-service S5.14;
   - **every TEST-only pin on the path (R6-m5)**, each with its PROD fixture
     or its owner:
 
@@ -3766,7 +3715,7 @@ secret-read deny or Resource-`*` guard deny is widened or narrowed by it
 | S5.11 | US | KMS JWT signing (league and lexik), JWKS from `GetPublicKey` | Verifies / tampered rejected / dual-key window: tokens verify with the public halves (`GetPublicKey`) of the current key and the verify-only key (`JWT_KMS_PREVIOUS_KEY_ID`: the new key while pre-published, then the old key), signing only with the current key, across the 7-step key change |
 | S5.12 | US | KMS 2FA encryption with context `user_id` | Enrol and verify / wrong context fails / size bound |
 | S5.13 | US | **Redis IAM token provider (D-1):** SigV4 token per new connection from the task-role credentials (lower-case replication-group id, user id), `AUTH [user, token]` over TLS, re-`AUTH` or reconnect before 11 h, no re-auth inside `MULTI`/Lua, a Symfony `RedisAdapter` connection factory for `REDIS_URL` and `REDIS_LOCKOUT_URL`, `auth_failure{backend=redis}` log metric. V-2 and V-9 (source and docs). | Integration test against a local ACL Valkey 7.2 authenticates / an expired or wrong-user token fails with a counted `auth_failure` / a connection aged 11 h re-authenticates; token regenerated when credentials rotate |
-| S5.14 | US | Multi-arch publishing (amd64 and arm64, immutable `sha-` tags) | Both architectures / missing architecture refused by USI admission (S4.9) / manifest digest pinned |
+| S5.14 | US | **Single-arch publishing stays fail-closed (D-18):** `linux/amd64` only, immutable `sha-` tags; each target is built with `--platform linux/amd64 --provenance=false --sbom=false`, so BuildKit provenance and SBOM attestations are disabled and a push can never become an image index; the user-service release-manifest codec accepts only `linux/amd64`. The user-service publisher refuses, with these exact reasons: a requested platform or a saved image config that is not `linux/amd64` (`publisher-platform`, at request validation before any build or AWS credential, and again at the build, the pre-credential `prepare` step and `publish`); a builder whose `docker build` does not offer both attestation flags (`publisher-attestation-flags`); a saved archive that does not hold exactly one image manifest (`publisher-archive-not-single`); and an ECR read-back that is not a single-image manifest, such as an image index, manifest list, attestation manifest or missing media type (`publisher-manifest-not-single`), before any release evidence is written | A push is a single-image manifest / a non-`linux/amd64` image is refused by the user-service publisher (`publisher-platform`) and by USI admission (S4.9); an index or attestation manifest is refused by the publisher (`publisher-archive-not-single` before credentials, `publisher-manifest-not-single` on read-back); a builder without both attestation flags stops (`publisher-attestation-flags`); the release codec refuses a `linux/arm64` manifest (reason `platform`) / the platform stays `linux/amd64` and the manifest digest is pinned |
 | S5.25 | US | **DocumentDB `auth_failure` emitter (X-1):** a MongoDB authentication-exception subscriber that reuses S5.13's `AuthFailureMetric` to emit `auth_failure{backend=documentdb}`. NFR-05 measures `auth_failure{backend=redis\|documentdb}`; S5.13 emits only the `redis` half. After S5.10 and S5.13 merge. | A forced MONGODB-AWS authentication failure emits one `auth_failure{backend=documentdb}` / a non-authentication Mongo exception emits none / the `redis` series is unchanged |
 | S5.26 | US | **Early IAM-env fail-fast (follow-up to S5.10 G-4 and S5.12 L-1):** when the IAM env is wrong, the app fails at container start, before frankenphp/supervisord, not on the first connection build as today. Covers `MONGODB_URL` with MONGODB-AWS, the Redis IAM env, `TWO_FACTOR_KMS_KEY_ID` and `AWS_REGION`. After S5.10, S5.12 and S5.13 merge. | Each wrong or missing value exits non-zero at start with a named error / a correct env starts normally / no value is printed |
 | S5.15 | — | **Dropped** (D-5, decided 2026-09-30: forced re-login is accepted, no previous-key tolerance is built). | — |
@@ -3837,13 +3786,13 @@ secret-read deny or Resource-`*` guard deny is widened or narrowed by it
 | 21 | S3.2 → S3.1 → S3.3 → S3.4 network (egress inventory first in S3.4) | USI | C-network, C-guard, C-composition |
 | 22 | S3.5-B TEST TLS risk acceptance | USI | independent |
 | 23 | S5.9 non-root → S3.7 | US → USI | C-compute |
-| 24 | S5.14 multi-arch → S2.6 cost/Graviton + TEST schedules (cost figures with source labels) | US → USI | C-compute, C-autoscaling |
+| 24 | S5.14 single-arch fail-closed publishing → S2.6 cost + TEST schedules (cost figures with source labels; Fargate ARM64 recorded as declined, D-18) | US → USI | C-compute, C-autoscaling |
 | 25 | S3.5-A PROD HTTPS target group (PROD shape); `_validate_target` by stack | USI | C-compute tail, C-composition tail |
 | 26 | S5.16 front door | AGI | independent |
 | 27 | S4.1 → S4.4 → S4.5 diagnostics, guard and timing | USI | C-runner head (m5) |
 | 28 | S4.10 hardened topology (both stacks), native gates, secret history, checkpoint-field allowance; pins removed | USI | C-contract, C-topology |
 | 29 | S4.11 receipts after every apply, including a failed result inspection (failure-path publication job; phase-guarded upload), projection inputs in the success receipt; observation-record authentication; anchor rebinding | USI | C-runner, C-contract |
-| 30 | S4.9 step-2, rollback-zero (hold needs the stop observation, authenticated by the S4.11 library; the suspension flag), policy-update + multi-arch admission; per-action window | USI | C-contract |
+| 30 | S4.9 step-2, rollback-zero (hold needs the stop observation, authenticated by the S4.11 library; the suspension flag), policy-update + single-platform admission; per-action window | USI | C-contract |
 | 31 | S4.2 resume (any operation, under S4.9's rules) + abandon admission + fail-closed prior check | USI | C-contract |
 | 32 | S5.21 Kravalg-only environments (`test`, `prod`, `test-recovery`, `test-exercise`, `prod-recovery`; `governance-evidence` unchanged) | USI (repository controls) | C-controls |
 | 33 | S5.23 TEST exercise role grants (a reviewed amendment of the S5.1 exercise stack) | BI | C-BI; seed operations |
@@ -3852,7 +3801,7 @@ secret-read deny or Resource-`*` guard deny is widened or narrowed by it
 | 36 | S5.22 ruleset: `abandon-manifest-approval` required with a pinned issuer | USI (repository controls) | C-controls |
 | 37 | S4.12 runner mode routing | USI | C-runner, C-contract |
 | 38 | S4.13 accepted-workload receipt (observation job with pre-credential admission, lock-tolerant checkpoint capture, start and stop; same-run receipt binding); separate `test_workload_drift` job with the FR-32 plan-plus-gate reducer; lineage-derived `workload_route`; TEST scheduled-drift exclusion; releases (reviewed README/spec/log-health/test amendment); workflow-shape test rewrites | USI | C-runner, C-contract |
-| 39 | S4.14 PROD path (worker, workflow, gate 2a/2b; every TEST-only pin with a PROD fixture or XP-14; stack → contract mapping; PROD contract schema; PROD scheduled-drift exclusion; token-free image config read; D-15 certificate ARN in both contract schemas, no runner parameter rule, no SSM read path; release platform in the publisher request, line 170, from the committed `publish_platform` contract field at job level, never `client_payload`, R11-m4; the end-to-end ARM64 topology fixture, R11-m3) | USI | C-runner, C-contract |
+| 39 | S4.14 PROD path (worker, workflow, gate 2a/2b; every TEST-only pin with a PROD fixture or XP-14; stack → contract mapping; PROD contract schema; PROD scheduled-drift exclusion; token-free image config read; D-15 certificate ARN in both contract schemas, no runner parameter rule, no SSM read path; single release platform `linux/amd64`: schema enums, image-config, capabilities and projection pins, publisher request literal at line 170 pinned by a test, D-18) | USI | C-runner, C-contract |
 | 40 | S4.15 acceptance-receipt validator (+ scheduled-drift result schema; gate-2b items: TEST `checked` only, PROD `before-acceptance` with `null` success-receipt fields plus the S5.24a/S5.24b simulator links, R9-n1) + two-gate hard-stop test (both contracts) | USI | C-contract |
 | 41 | S4.16 TEST exercise workflow | USI | independent |
 | 42 | S5.18a restore-rehearsal grants (no VPC; a reviewed amendment of the S5.1 restore stack), then XP-11's BI identity change and TEST seed boundary amendment (the TEST Preview and Apply observation reads, no SSM, denies unchanged and guards unchanged relative to its baseline catalog; an external gate-1 prerequisite that takes this C-BI slot and needs the XP-10 ARN, R10-m2) | BI | C-BI; XP-11 before gate 1 |
@@ -3907,13 +3856,10 @@ function-role and restore stacks inside row 43. No row changes a
 PassRole guard of the platform appliers. S5.7 (row 34) and S5.19 (row 47) create their own
 stacks. S5.2's PassRole fragment names only row 8's ECS roles, and the
 S4.6 step-1 service-linked-role read (row 43) checks what row 8
-created or found. **Test level (R11-m3):** S4.10 (row 28) tests the
-ARM64 branch only through `_task_execution_inputs` and asserts that
-the end-to-end ARM64 path fails closed at the entrypoint's line-59 pin;
-the positive end-to-end ARM64 fixture is S4.14's (row 39), which widens
-that pin. **Publisher platform (R11-m4):** S4.14's `publish_platform`
-field is committed and reviewed in a USI PR and read at job level; the
-user-service publisher's arm64 support is S5.14 (row 24). S4.9
+created or found. **Release platform (D-18; R11-m3 and R11-m4 are
+moot):** the only release platform is `linux/amd64`; there is no ARM64
+fixture and no `publish_platform` field, S4.10 (row 28) keeps `X86_64`,
+and S4.14 (row 39) narrows the remaining enums and pins. S4.9
 (row 30) depends only on S4.10 (row 28), S4.11 (row 29) and S2.6 (row 24);
 its `hold` rule reads the observation record through the S4.11 library,
 and its N8 fixtures are S4.11-written records, so neither the code nor the

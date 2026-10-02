@@ -321,6 +321,85 @@ Docs-verified cases recorded with these runbooks:
 - **Missing data:** `missing`: the metric is published only while clients authenticate with IAM, and the alarm is informational.
 - **Evidence to keep:** the call metric, the DocumentDB audit entries for `MONGODB-AWS`, and the client connection counts.
 
+## Network Hardening
+
+### Managed default security group (S3.2, FR-16)
+
+The hardened workload program declares one `aws:ec2/defaultSecurityGroup:DefaultSecurityGroup`
+(`user-service-default-sg`) on the workload VPC with empty `ingress` and empty `egress`. Nothing in the
+workload may use the default group, so it holds zero rules (Security Hub EC2.2).
+
+- **Adoption:** AWS creates the default group with the VPC, and the group cannot be deleted. Pulumi does
+  not create a new group: on the first apply it adopts the existing default group and removes every
+  ingress and egress rule it finds. No import step is needed.
+- **Drift:** a rule added outside Pulumi shows as drift and the next apply removes it. A rule added in
+  code fails the hardened guard (`Hardened workload graph holds an unreviewed property`) before any
+  preview.
+- **Destroy:** deleting the resource, or destroying the stack, only stops Pulumi managing the group.
+  The group stays in the VPC with the rules it had, which is zero rules, until AWS deletes the VPC.
+- **Pre-hardening graph:** the bridge graph does not manage the default group (AD-25).
+
+### VPC flow logs (S3.1, FR-15)
+
+The hardened workload program declares one `aws:ec2/flowLog:FlowLog` (`user-service-vpc-flow-log`) on the
+workload VPC with `traffic_type` `ALL`, destination type `s3` and no IAM role argument. Delivery to S3 runs as
+the `delivery.logs.amazonaws.com` service, so no role exists.
+
+- **Bucket:** `<stack tag>-<account>-flow-logs`, owned by the `flow-logs` component. SSE-KMS with the runtime CMK
+  (`central.cmk.runtime.arn`, D-4) and the bucket key on; public access blocked; object ownership
+  `BucketOwnerEnforced`; `force_destroy=false` and Pulumi `protect`; records expire after 30 days in TEST and
+  90 days in PROD.
+- **Bucket policy:** denies every request without TLS (`aws:SecureTransport` `false`). It allows only
+  `delivery.logs.amazonaws.com` `s3:PutObject` on `AWSLogs/<acct>/*` (Sid `AWSLogDeliveryWrite`, with
+  `s3:x-amz-acl` = `bucket-owner-full-control`) and `s3:GetBucketAcl` on the bucket (Sid
+  `AWSLogDeliveryAclCheck`), each with `aws:SourceAccount` = the account and `aws:SourceArn` like
+  `arn:aws:logs:<region>:<acct>:*`. The two allows mirror the AWS-documented flow-log statements exactly.
+- **Ordering:** the flow log depends on the bucket policy, so AWS creates the flow log only after the reviewed
+  policy is in place. The encryption rule names the runtime CMK by key ARN, never by key ID or alias.
+- **Guards:** a flow log with an IAM role argument and any hardened bucket with `force_destroy=true` fail the
+  hardened guard. The component refuses SSE-S3, SSE-KMS with any key other than the runtime CMK key ARN, a
+  bucket policy without the TLS deny or a delivery statement without `aws:SourceArn`, before any registration.
+- **Runtime key policy (enforced elsewhere):** the FR-15 negative case "SSE-KMS without the delivery principal
+  in the runtime key policy fails" has no input in this repository. The contract's `central.cmk.runtime`
+  holds only `arn` and `alias`, and the key policy belongs to bootstrap-infrastructure (AD-15a). The runtime
+  key policy's `delivery.logs.amazonaws.com` statement (`kms:GenerateDataKey*` and `kms:Decrypt`, with
+  `aws:SourceAccount` and `aws:SourceArn` like `arn:aws:logs:<region>:<acct>:*`) is owned and tested by
+  bootstrap-infrastructure S5.4. The live proof is S4.6 step 12 (a TEST object delivered with the runtime CMK),
+  under the V-16 STOP rule below.
+- **V-16 (closed offline from AWS docs, verified 2026-10-02):**
+  - <https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs-s3-permissions.html>: the bucket policy grants
+    `delivery.logs.amazonaws.com` `s3:PutObject` on `arn:aws:s3:::<bucket>/AWSLogs/<account_id>/*` with
+    `StringEquals` `aws:SourceAccount` and `s3:x-amz-acl` = `bucket-owner-full-control` and `ArnLike`
+    `aws:SourceArn` `arn:aws:logs:<region>:<account>:*`, and `s3:GetBucketAcl` on the bucket with the same
+    `aws:SourceAccount` and `aws:SourceArn` conditions. If the flow-log creator owns the bucket and holds
+    `s3:GetBucketPolicy` and `s3:PutBucketPolicy`, AWS attaches this policy itself; the VPC guide says it
+    "overwrites any existing policy", while the CloudWatch guide below says the statement is appended only when
+    missing.
+  - <https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs-s3-cmk-policy.html>: SSE-KMS must use a
+    customer managed key, and the bucket encryption must name the key ARN (a key ID can cause a
+    "LogDestination undeliverable" error).
+  - <https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/AWS-logs-infrastructure-V2-S3.html>: SSE-KMS
+    needs a customer managed key (an AWS managed key makes logs unreadable). The documented key-policy
+    statement for `delivery.logs.amazonaws.com` lists `kms:Encrypt`, `kms:Decrypt`, `kms:ReEncrypt*`,
+    `kms:GenerateDataKey*` and `kms:DescribeKey` with `aws:SourceAccount` and `aws:SourceArn`. AD-15a keeps the
+    narrower `kms:GenerateDataKey*` and `kms:Decrypt` (least privilege: S3 SSE-KMS `PutObject` uses
+    `GenerateDataKey` and multipart upload uses `Decrypt`). This difference is recorded and AD-15a stands.
+  - <https://docs.aws.amazon.com/vpc/latest/tgw/flow-logs-s3.html>: the flow-log creator needs
+    `logs:CreateLogDelivery` and `logs:DeleteLogDelivery`. The apply role holds `ec2:CreateFlowLogs` and
+    `logs:CreateLogDelivery` (S5.2); the matching deletes belong to the TEST recovery role (S5.7).
+  - **STOP rule:** if live delivery in S4.6 step 12 fails, STOP and widen the runtime key policy by a reviewed
+    bootstrap-infrastructure PR. SSE-S3 is not a fallback: D-4 decided SSE-KMS, and changing it needs a new
+    user decision.
+- **Auto-attach and drift check:** because the bucket policy already holds the AWS-documented statements, AWS
+  finds them present when the flow log is created and has nothing to attach. Live check after the first apply:
+  read the bucket policy (`aws s3api get-bucket-policy`) and compare it with the reviewed document. Run
+  `pulumi -C pulumi preview` and confirm no change on `user-service-flow-logs-policy`. If the live policy differs
+  from the reviewed document, STOP and open a reviewed PR; do not accept the AWS-written policy.
+- **Import and abandon:** no N-06 import list or abandon manifest exists yet, so nothing joins them at S3.1
+  (AD-16, D-11). S4.2 owns the abandon-manifest schema, including "log-bucket families always retain" and the
+  N5 refusal of delete on the flow-log bucket. S4.3 owns `import-list.json`. S4.10 owns `delete-actions.json`
+  and the `retainOnDelete` allowance.
+
 ## CI Troubleshooting
 
 Map failures back to their local commands:

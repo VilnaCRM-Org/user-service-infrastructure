@@ -43,18 +43,24 @@ class NetworkPlane(pulumi.ComponentResource):
         settings: StackSettings,
         private_gateway: bool = False,
         bootstrap_job: bool = False,
+        default_security_group: bool = False,
         opts: Optional[pulumi.ResourceOptions] = None,
     ) -> None:
         """Build preview-safe outputs or provision the managed network topology.
 
         ``bootstrap_job`` adds the hardened bootstrap-job SG and its DocumentDB
-        ingress (S1.3); the pre-hardening graph never sets it (AD-25).
+        ingress (S1.3); ``default_security_group`` manages the VPC default SG
+        with zero rules (S3.2, FR-16). The pre-hardening graph sets neither
+        (AD-25).
         """
         super().__init__("user-service-infrastructure:network:Plane", name, None, opts)
 
         self.outputs = (
             self._build_managed_network(
-                settings, private_gateway=private_gateway, bootstrap_job=bootstrap_job
+                settings,
+                private_gateway=private_gateway,
+                bootstrap_job=bootstrap_job,
+                default_security_group=default_security_group,
             )
             if settings.is_managed
             else self._build_preview_outputs(settings)
@@ -120,6 +126,7 @@ class NetworkPlane(pulumi.ComponentResource):
         *,
         private_gateway: bool = False,
         bootstrap_job: bool = False,
+        default_security_group: bool = False,
     ) -> NetworkOutputs:
         """Provision the VPC, subnets, routes, and security groups."""
         vpc = aws.ec2.Vpc(
@@ -129,6 +136,8 @@ class NetworkPlane(pulumi.ComponentResource):
             enable_dns_support=True,
             opts=pulumi.ResourceOptions(parent=self),
         )
+        if default_security_group:
+            self._default_security_group(vpc)
 
         internet_gateway = aws.ec2.InternetGateway(
             "user-service-igw",
@@ -385,6 +394,23 @@ class NetworkPlane(pulumi.ComponentResource):
                     cidr_blocks=[settings.network.vpc_cidr],
                 )
             ],
+            opts=pulumi.ResourceOptions(parent=self),
+        )
+
+    def _default_security_group(self, vpc: aws.ec2.Vpc) -> None:
+        """Adopt the VPC default SG and hold it at zero rules (S3.2, FR-16).
+
+        AWS creates the default group with the VPC and it cannot be deleted.
+        Pulumi adopts it on create and removes every ingress and egress rule;
+        deleting this resource only stops managing it and leaves the group in
+        place with no rules (docs/sre-operations.md, "Managed default security
+        group (S3.2, FR-16)").
+        """
+        aws.ec2.DefaultSecurityGroup(
+            "user-service-default-sg",
+            vpc_id=vpc.id,
+            ingress=[],
+            egress=[],
             opts=pulumi.ResourceOptions(parent=self),
         )
 

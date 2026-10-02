@@ -2026,11 +2026,14 @@ step 13 (induced failure).
     `release.platform` enum of `schemas/poc-test-v1.schema.json` (lines
     1196-1199) and the image-row `platform` enum of
     `schemas/poc-workload-step-receipt-v1.schema.json` (lines 333-336) to
-    `linux/amd64` only. `docs/poc-workload-admission.md` line 44 then
+    `linux/amd64` only; the new PROD contract schema
+    `schemas/poc-prod-v1.schema.json` carries the same `linux/amd64`-only
+    `release.platform` enum. `docs/poc-workload-admission.md` line 44 then
     names only the `linux/amd64` release platform, and line 111 states
     that only the `linux/amd64` (`X86_64`) settings bridge is supported
     (D-18); the story's doc test pins both. Fixtures: `linux/arm64`,
-    `linux/arm` and `windows/amd64` fail the schema; an `arm64` image
+    `linux/arm` and `windows/amd64` fail the TEST and the PROD contract
+    schema; an `arm64` image
     config fails `image-config-platform` (the `arm64` acceptance case of
     `tests/unit/test_poc_workload_image_config.py` line 93 becomes this
     refusal); the `linux/arm64` refusals of

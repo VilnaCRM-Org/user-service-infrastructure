@@ -377,19 +377,25 @@ This file is the execution ledger. It is not a planning input.
   `publish_platform` field and the ARM64 fixtures of revisions 10 and 11
   (R10-n6, R11-m3, R11-m4) are withdrawn. The code and schema narrowing
   is S4.14's implementation work; this amendment changes plan text only.
-  The readiness round records are unchanged.
+  The readiness round records are unchanged. Gate fix round 1 (F1, F2,
+  I3, I4): the brief front matter and the manifest preface below record
+  the D-18 brief change; the FR-14 verification row names the
+  release-platform tests; S4.14 gives the PROD contract schema the same
+  `linux/amd64`-only enum; and `tests/unit/test_workload_hardening_bundle.py`
+  checks the manifest hashes, the brief amendment record and the FR-14
+  trace.
 
 ## Artifacts (sha256, revision 14)
 
-`run-summary.md` is not hashed here, because it contains the hashes. `decisions.md` is a planning input and is hashed. Commit `68584e1` added its D-14 row after revision 5; revision 6 changed only that row's label (a user decision, not a planning default); revisions 7, 8 and 9 do not change it; revision 10 adds the D-15 row (a user decision of 2026-09-30); revision 11 changes only D-15's note text (R11-n3); revisions 12, 13 and 14 do not change it; later amendments add the D-16, D-17 and D-18 rows. `research.md` is unchanged since revision 4; `brief.md` changed last in revision 10 (front matter and AS-4, D-15).
+`run-summary.md` is not hashed here, because it contains the hashes. `decisions.md` is a planning input and is hashed. Commit `68584e1` added its D-14 row after revision 5; revision 6 changed only that row's label (a user decision, not a planning default); revisions 7, 8 and 9 do not change it; revision 10 adds the D-15 row (a user decision of 2026-09-30); revision 11 changes only D-15's note text (R11-n3); revisions 12, 13 and 14 do not change it; later amendments add the D-16, D-17 and D-18 rows. `research.md` is unchanged since revision 4; `brief.md` changed in revision 10 (front matter and AS-4, D-15) and last in the D-18 amendment of 2026-10-02 (the front-matter revision note and the user-service scope line, line 108).
 Check with `sha256sum -c` over the block below, from `specs/workload-wa-hardening/`.
 
 ```
 beca16ba9ab95d76cd28ed47ac8e806549b94805ddca9a2d138a790ee0f0ca59  research.md
-8c405b4d81a721340861a8b7ef3bcacbf6f80b849a7fbbeccb2b45f7187f230e  brief.md
-df0350ef158652f0e69e10d657c4fd30bd13e87d445230a89c23f0f97406755f  prd.md
-07f7cfcd742620d29ad4e698537b7b054361f71e8d311ae6e38d9b794d09b5cb  architecture.md
-a43afb620e1a322e123e783ede6bd7ff8578cae7a78674d1c61baf64e7c053e2  epics-stories.md
+1712de950689f5c87b62a0e420a298bd4582e4e42b74f943a0a99a4e836299b4  brief.md
+cfe84f75fbca85aa182a7c0c4ba40e36e24344a4903a87879372aee2a9291e28  prd.md
+3fb504585224bc4a3d17e7b5d2fe7c8a90f7dc19bcafaa0a6d1343d6f30a2514  architecture.md
+9d51e6878fe8c5256e977d51f88e53402f201c06e90a098ad4b5ab1c793d32b0  epics-stories.md
 d141bad2c3a9e56c5503c4a16c4e9c1506afcd1ee4773696c4977a871ec15633  decisions.md
 45553cbd61f1ae16c238cba9f3ee4f555ede5e06d5e9aaa9199670f0ad81046a  readiness.md
 ```

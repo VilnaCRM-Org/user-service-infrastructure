@@ -384,6 +384,18 @@ This file is the execution ledger. It is not a planning input.
   `linux/amd64`-only enum; and `tests/unit/test_workload_hardening_bundle.py`
   checks the manifest hashes, the brief amendment record and the FR-14
   trace.
+  Follow-up (2026-10-02): the S5.14 row in `epics-stories.md` now matches
+  the user-service single-arch publisher (user-service PR #511, head
+  `a5dd97b`): `--platform linux/amd64 --provenance=false --sbom=false`,
+  a `linux/amd64`-only release-manifest codec, and the refusal reasons
+  `publisher-platform`, `publisher-attestation-flags`,
+  `publisher-archive-not-single` and `publisher-manifest-not-single`.
+  `readiness.md` keeps its round text unchanged; a one-sentence
+  "Superseded by D-18 (2026-10-02)" note now follows each statement that
+  read as a live arm64, multi-arch or `publish_platform` promise (the
+  R11-m3, R11-m4 and R10-n6 rows, the revision-11 ordered-list note, the
+  "ARM64 before S4.14" residual and the revision-10 audit finding 2 and
+  its residual). The manifest below hashes both changed files.
 
 ## Artifacts (sha256, revision 14)
 
@@ -395,9 +407,9 @@ beca16ba9ab95d76cd28ed47ac8e806549b94805ddca9a2d138a790ee0f0ca59  research.md
 1712de950689f5c87b62a0e420a298bd4582e4e42b74f943a0a99a4e836299b4  brief.md
 cfe84f75fbca85aa182a7c0c4ba40e36e24344a4903a87879372aee2a9291e28  prd.md
 3fb504585224bc4a3d17e7b5d2fe7c8a90f7dc19bcafaa0a6d1343d6f30a2514  architecture.md
-9d51e6878fe8c5256e977d51f88e53402f201c06e90a098ad4b5ab1c793d32b0  epics-stories.md
+3da2c9add16ac7d81497b008382c424533de3392be207a8be82a79b2c0bb4a37  epics-stories.md
 d141bad2c3a9e56c5503c4a16c4e9c1506afcd1ee4773696c4977a871ec15633  decisions.md
-45553cbd61f1ae16c238cba9f3ee4f555ede5e06d5e9aaa9199670f0ad81046a  readiness.md
+91d45f751e3a649e3b7236e6487c8b0c275fe7e923d5610597b0e01658a99683  readiness.md
 ```
 
 ## Gates

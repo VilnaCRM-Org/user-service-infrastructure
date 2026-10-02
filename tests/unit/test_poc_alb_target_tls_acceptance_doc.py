@@ -16,6 +16,7 @@ REQUIRED_MARKERS = (
     "Acceptance conditions (attested by the owner)",
     "Planned, not in place at this base",
     "a PROD stack with an HTTP target group is refused by admission",
+    "80 at this base; 8080 once",
 )
 
 

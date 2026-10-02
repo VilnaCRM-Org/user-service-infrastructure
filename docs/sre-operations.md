@@ -339,6 +339,31 @@ workload may use the default group, so it holds zero rules (Security Hub EC2.2).
   The group stays in the VPC with the rules it had, which is zero rules, until AWS deletes the VPC.
 - **Pre-hardening graph:** the bridge graph does not manage the default group (AD-25).
 
+### VPC flow logs (S3.1, FR-15)
+
+The hardened workload program declares one `aws:ec2/flowLog:FlowLog` (`user-service-vpc-flow-log`) on the
+workload VPC with `traffic_type` `ALL`, destination type `s3` and no IAM role argument. Delivery to S3 runs as
+the `delivery.logs.amazonaws.com` service, so no role exists.
+
+- **Bucket:** `<stack tag>-<account>-flow-logs`, owned by the `flow-logs` component. SSE-KMS with the runtime CMK
+  (`central.cmk.runtime.arn`, D-4) and the bucket key on; public access blocked; object ownership
+  `BucketOwnerEnforced`; `force_destroy=false` and Pulumi `protect`; records expire after 30 days in TEST and
+  90 days in PROD.
+- **Bucket policy:** denies every request without TLS (`aws:SecureTransport` `false`). It allows only
+  `delivery.logs.amazonaws.com` `s3:PutObject` on `AWSLogs/<acct>/*` and `s3:GetBucketAcl` on the bucket, each
+  with `aws:SourceAccount` = the account and `aws:SourceArn` like `arn:aws:logs:<region>:<acct>:*`.
+- **Guards:** a flow log with an IAM role argument and any hardened bucket with `force_destroy=true` fail the
+  hardened guard. The component refuses SSE-S3, SSE-KMS with any key other than the runtime CMK, a bucket policy
+  without the TLS deny or a delivery statement without `aws:SourceArn`, before any registration.
+- **V-16 (first case, docs):** the runtime key policy is governance-owned. It must allow
+  `delivery.logs.amazonaws.com` `kms:GenerateDataKey*` and `kms:Decrypt` with `aws:SourceAccount` and
+  `aws:SourceArn` (AD-15a). The apply role holds `ec2:CreateFlowLogs` and `logs:CreateLogDelivery` (S5.2); the
+  matching deletes belong to the TEST recovery role (S5.7). If delivery fails with SSE-KMS, STOP and fix the key
+  or bucket policy by a reviewed PR. SSE-S3 is not a fallback: D-4 decided SSE-KMS, and changing it needs a new
+  user decision.
+- **Import and abandon:** no N-06 import list or abandon manifest exists yet. When S4.3 and S4.10 add them, the
+  bucket family joins the import list and is always `retain` in an abandon manifest (AD-16, D-11).
+
 ## CI Troubleshooting
 
 Map failures back to their local commands:

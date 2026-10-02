@@ -580,6 +580,20 @@ def _fixture_builders(options, identity):
             ],
             opts=options,
         ),
+        # FR-15 N (S3.1): a flow log with an IAM role, or a bucket that
+        # could be force-destroyed.
+        "flow-log-role": lambda: aws.ec2.FlowLog(
+            "fixture-flow-log",
+            vpc_id="vpc-fixture",
+            traffic_type="ALL",
+            log_destination_type="cloud-watch-logs",
+            log_destination="arn:aws:logs:eu-central-1:891377212104:log-group:fixture",
+            iam_role_arn="arn:aws:iam::891377212104:role/fixture",
+            opts=options,
+        ),
+        "bucket-force-destroy": lambda: aws.s3.BucketV2(
+            "fixture-bucket", bucket="fixture-bucket", force_destroy=True, opts=options
+        ),
         # N2: a hardened program calls no provider function.
         "random-password-invoke": lambda: aws.secretsmanager.get_random_password(
             password_length=16
@@ -715,6 +729,7 @@ def _probe(root, mode, mutation, coverage_path):
             str(root / "pulumi/app/access_logs.py"),
             str(root / "pulumi/app/autoscaling.py"),
             str(root / "pulumi/app/observability.py"),
+            str(root / "pulumi/app/flow_logs.py"),
             str(root / "pulumi/app/environment.py"),
             str(root / "scripts/poc_workload_phase_entrypoint.py"),
         ],

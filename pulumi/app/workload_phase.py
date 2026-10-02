@@ -59,6 +59,7 @@ from app.environment import (
     validate_health_check_runtime,
     validate_runtime_roles,
 )
+from app.flow_logs import FlowLogs
 from app.messaging import MessagingPlane
 from app.network import NetworkPlane
 from app.observability import (
@@ -76,7 +77,7 @@ from app.runtime_secrets import RuntimeSecrets, RuntimeSecretsDescriptor
 # hardened graph, which ``HARDENED_TYPES`` alone decides. S2.3 adds the
 # observability types: the alarm topic now, and the metric alarm and the
 # EventBridge rule that S2.4 and S2.5 render. S3.2 adds the managed VPC
-# default security group.
+# default security group and S3.1 the VPC flow log.
 TAGGABLE_TYPES = frozenset(
     {
         "aws:appautoscaling/target:Target",
@@ -87,6 +88,7 @@ TAGGABLE_TYPES = frozenset(
         "aws:docdb/subnetGroup:SubnetGroup",
         "aws:ec2/defaultSecurityGroup:DefaultSecurityGroup",
         "aws:ec2/eip:Eip",
+        "aws:ec2/flowLog:FlowLog",
         "aws:ec2/internetGateway:InternetGateway",
         "aws:ec2/natGateway:NatGateway",
         "aws:ec2/routeTable:RouteTable",
@@ -146,6 +148,8 @@ ELASTIC_DOCUMENTDB_TYPE = "aws:docdb/elasticCluster:ElasticCluster"
 # observability component, the alarm topic and its topic policy (AD-11); S2.4
 # adds the §3.1 metric alarms, whose only actions are that topic (FR-13).
 # S3.2 adds the VPC default security group, held at zero rules (FR-16).
+# S3.1 adds the role-less VPC flow log and its component; the flow-log bucket
+# family reuses the reviewed S3 types of the ALB access logs (FR-15).
 HARDENED_TAGGED_TYPES = frozenset(
     {
         "aws:appautoscaling/target:Target",
@@ -157,6 +161,7 @@ HARDENED_TAGGED_TYPES = frozenset(
         "aws:docdb/subnetGroup:SubnetGroup",
         "aws:ec2/defaultSecurityGroup:DefaultSecurityGroup",
         "aws:ec2/eip:Eip",
+        "aws:ec2/flowLog:FlowLog",
         "aws:ec2/internetGateway:InternetGateway",
         "aws:ec2/natGateway:NatGateway",
         "aws:ec2/routeTable:RouteTable",
@@ -207,6 +212,7 @@ HARDENED_COMPONENT_TYPES = frozenset(
         "user-service-infrastructure:core:EnvironmentSettings",
         "user-service-infrastructure:data:Plane",
         "user-service-infrastructure:messaging:Plane",
+        "user-service-infrastructure:network:FlowLogs",
         "user-service-infrastructure:network:Plane",
         "user-service-infrastructure:observability:Plane",
         "user-service-infrastructure:registry:Plane",
@@ -438,6 +444,29 @@ def _no_default_sg_rules(props, _sdk_path: bool) -> bool:
         props.get(key) is None or (type(props[key]) is list and not props[key])
         for key in ("ingress", "egress")
     )
+
+
+def _roleless_flow_log(props, sdk_path: bool) -> bool:
+    """Send ALL VPC traffic to S3 without an IAM role (S3.1, FR-15).
+
+    An IAM role or cross-account delivery role in either casing fails, and
+    the traffic type and destination type must be the literals ``ALL`` and
+    ``s3``; an opaque value fails closed.
+    """
+    return (
+        _either(props, "iam_role_arn", "iamRoleArn", sdk_path) is None
+        and _either(
+            props, "deliver_cross_account_role", "deliverCrossAccountRole", sdk_path
+        )
+        is None
+        and _read(props, "traffic_type", "trafficType", sdk_path) == "ALL"
+        and _read(props, "log_destination_type", "logDestinationType", sdk_path) == "s3"
+    )
+
+
+def _retained_bucket(props, sdk_path: bool) -> bool:
+    """Refuse ``force_destroy`` on every hardened bucket (S3.1, FR-15)."""
+    return _read(props, "force_destroy", "forceDestroy", sdk_path) in (None, False)
 
 
 def _no_service_connect(props, sdk_path: bool) -> bool:
@@ -709,7 +738,9 @@ def _reviewed_secret(props, sdk_path: bool) -> bool:
 # no secret input; it is checked because D-8 binds it to the runtime CMK
 # (S2.3). The metric alarm has no secret input; it is checked because FR-13
 # sends its actions only to the alarm topic (S2.4 gate I1). The default SG has
-# no secret input; it is checked because FR-16 allows it no rule (S3.2). Each
+# no secret input; it is checked because FR-16 allows it no rule (S3.2). The
+# flow log and the bucket have no secret input; they are checked because
+# FR-15 allows no IAM role and no ``force_destroy`` (S3.1). Each
 # check gets the props and whether they come from the SDK path (snake_case,
 # raw inputs) rather than the engine path (camelCase, deserialized).
 HARDENED_PROPERTY_CHECKS = {
@@ -717,12 +748,14 @@ HARDENED_PROPERTY_CHECKS = {
     "aws:cloudwatch/metricAlarm:MetricAlarm": _alarm_topic_actions,
     "aws:docdb/cluster:Cluster": _managed_iam_documentdb,
     "aws:ec2/defaultSecurityGroup:DefaultSecurityGroup": _no_default_sg_rules,
+    "aws:ec2/flowLog:FlowLog": _roleless_flow_log,
     "aws:ecs/service:Service": _no_service_connect,
     "aws:ecs/taskDefinition:TaskDefinition": _reviewed_task_definition,
     "aws:elasticache/replicationGroup:ReplicationGroup": _iam_redis_group,
     "aws:elasticache/user:User": _redis_user,
     "aws:elasticache/userGroup:UserGroup": _redis_user_group,
     "aws:lb/listener:Listener": _no_oidc_action,
+    "aws:s3/bucketV2:BucketV2": _retained_bucket,
     "aws:secretsmanager/secret:Secret": _reviewed_secret,
     "aws:sesv2/emailIdentity:EmailIdentity": _easy_dkim_only,
     "aws:sns/topic:Topic": _runtime_cmk_topic,
@@ -899,8 +932,9 @@ class WorkloadPhaseStack(RegistryPhaseStack):
         Every plane is credential-free: seeded secret metadata, the network
         with the bootstrap-job SG, DocumentDB with the managed password and the
         plain MONGODB-AWS URL, Redis with IAM users and required TLS (S1.4),
-        the queues, ECS services at zero tasks, the alarm topic on the
-        runtime CMK (S2.3) and the §3.1 alarms on that topic (S2.4). A step-2
+        the VPC flow log to its runtime-CMK bucket (S3.1), the queues, ECS
+        services at zero tasks, the alarm topic on the runtime CMK (S2.3) and
+        the §3.1 alarms on that topic (S2.4). A step-2
         contract adds the autoscaling plane (S2.1); the other step-2 stories
         add their resources in turn, and the guard refuses every step-2 type
         at step 1.
@@ -926,6 +960,14 @@ class WorkloadPhaseStack(RegistryPhaseStack):
             private_gateway=True,
             bootstrap_job=True,
             default_security_group=True,
+            opts=opts,
+        )
+        self.flow_logs = FlowLogs(
+            "flow-logs",
+            settings=settings,
+            vpc_id=self.network.outputs.vpc_id,
+            account_id=secrets.account_id,
+            runtime_cmk_arn=secrets.runtime_cmk_arn,
             opts=opts,
         )
         self.data = DataPlane(

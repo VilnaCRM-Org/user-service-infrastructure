@@ -283,6 +283,7 @@ TARGETS = AlarmTargets(
     cluster_name="cluster",
     service_names={"web": "web", "worker": "worker"},
     documentdb_cluster_identifier="docdb",
+    documentdb_instance_identifiers=("docdb-1",),
     documentdb_instance_class="db.t4g.medium",
     redis_cache_cluster_ids=("redis-001",),
 )

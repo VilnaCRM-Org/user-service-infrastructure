@@ -61,7 +61,11 @@ from app.environment import (
 )
 from app.messaging import MessagingPlane
 from app.network import NetworkPlane
-from app.observability import ObservabilityPlane, alarm_targets
+from app.observability import (
+    ObservabilityPlane,
+    alarm_targets,
+    stack_alarm_topic_arn,
+)
 from app.registry import RegistryInputs
 from app.registry_phase import RegistryPhaseStack
 from app.runtime_secrets import RuntimeSecrets, RuntimeSecretsDescriptor
@@ -646,6 +650,27 @@ def _runtime_cmk_topic(props, sdk_path: bool, runtime_cmk=None) -> bool:
     )
 
 
+def _alarm_topic_actions(props, sdk_path: bool, alarm_topic=None) -> bool:
+    """Send every metric alarm's actions to the alarm topic alone (FR-13, S2.4).
+
+    ``alarmActions`` and ``okActions`` must each be exactly ``[alarm_topic]``,
+    this stack's alarm topic ARN, and no insufficient-data action may exist.
+    An unbound check accepts no alarm, and an opaque action list fails closed.
+    """
+    actions = [
+        _read(props, "alarm_actions", "alarmActions", sdk_path),
+        _read(props, "ok_actions", "okActions", sdk_path),
+    ]
+    insufficient = _read(
+        props, "insufficient_data_actions", "insufficientDataActions", sdk_path
+    )
+    return (
+        alarm_topic is not None
+        and actions == [[alarm_topic], [alarm_topic]]
+        and insufficient in (None, [])
+    )
+
+
 def _reviewed_secret(props, sdk_path: bool) -> bool:
     """Apply both secret rules: no inline policy and no Redis secret (S1.3, S1.4)."""
     return _no_inline_secret_policy(props, sdk_path) and _not_a_redis_secret(
@@ -666,11 +691,13 @@ def _reviewed_secret(props, sdk_path: bool) -> bool:
 # no secret input either; it is checked because D-4 binds the DocumentDB
 # audit and profiler groups to the runtime CMK (FR-10, S1.9). The SNS topic has
 # no secret input; it is checked because D-8 binds it to the runtime CMK
-# (S2.3). Each check gets
+# (S2.3). The metric alarm has no secret input; it is checked because FR-13
+# sends its actions only to the alarm topic (S2.4 gate I1). Each check gets
 # the props and whether they come from the SDK path (snake_case, raw inputs)
 # rather than the engine path (camelCase, deserialized).
 HARDENED_PROPERTY_CHECKS = {
     "aws:cloudwatch/logGroup:LogGroup": _runtime_cmk_log_group,
+    "aws:cloudwatch/metricAlarm:MetricAlarm": _alarm_topic_actions,
     "aws:docdb/cluster:Cluster": _managed_iam_documentdb,
     "aws:ecs/service:Service": _no_service_connect,
     "aws:ecs/taskDefinition:TaskDefinition": _reviewed_task_definition,
@@ -690,12 +717,16 @@ REDIS_IDENTITY_CHECKS = frozenset({_iam_redis_group, _redis_user, _redis_user_gr
 RUNTIME_CMK_CHECKS = frozenset({_runtime_cmk_log_group, _runtime_cmk_topic})
 
 
-def _bound_arguments(check, redis_identity, runtime_cmk) -> tuple[Any, ...]:
+def _bound_arguments(
+    check, redis_identity, runtime_cmk, alarm_topic
+) -> tuple[Any, ...]:
     """The graph-bound value a check compares against, if it takes one."""
     if check in REDIS_IDENTITY_CHECKS:
         return (redis_identity,)
     if check in RUNTIME_CMK_CHECKS:
         return (runtime_cmk,)
+    if check is _alarm_topic_actions:
+        return (alarm_topic,)
     return ()
 
 
@@ -714,6 +745,7 @@ def _reject_secret_material(
     step: int = 1,
     redis_identity: tuple[str, str, str, str] | None = None,
     runtime_cmk: str | None = None,
+    alarm_topic: str | None = None,
 ) -> None:
     """Fail closed before secret material or an unreviewed type joins the graph.
 
@@ -725,7 +757,8 @@ def _reject_secret_material(
     group, its users and the replication group may name no other ID (S1.4 gate
     F1 and F11), and without it no readable ID passes. ``runtime_cmk`` is the
     contract's ``central.cmk.runtime.arn``; without it no DocumentDB log group
-    (S1.9) and no SNS topic (S2.3) passes.
+    (S1.9) and no SNS topic (S2.3) passes. ``alarm_topic`` is this stack's
+    alarm topic ARN; without it no metric alarm passes (S2.4).
     """
     if args.type_.startswith(SECRET_MATERIAL_TYPES):
         raise ValueError("Hardened workload graph must not hold secret material")
@@ -737,7 +770,7 @@ def _reject_secret_material(
         raise ValueError("Hardened workload graph holds an unreviewed type")
     check = HARDENED_PROPERTY_CHECKS.get(args.type_)
     sdk_path = isinstance(args, pulumi.ResourceTransformationArgs)
-    bound = _bound_arguments(check, redis_identity, runtime_cmk)
+    bound = _bound_arguments(check, redis_identity, runtime_cmk, alarm_topic)
     if check is not None and not check(args.props, sdk_path, *bound):
         raise ValueError("Hardened workload graph holds an unreviewed property")
     return None
@@ -752,8 +785,13 @@ def _reject_invoke(_args: pulumi.InvokeTransformArgs) -> None:
     raise ValueError("Hardened workload graph must not call a provider function")
 
 
-def _step_guard(step: int, redis_identity: tuple[str, str, str, str], runtime_cmk: str):
-    """Bind the guard to the contract's step, Redis identity and runtime CMK.
+def _step_guard(
+    step: int,
+    redis_identity: tuple[str, str, str, str],
+    runtime_cmk: str,
+    alarm_topic: str,
+):
+    """Bind the guard to the step, Redis identity, runtime CMK and alarm topic.
 
     Both registrations share it.
     """
@@ -762,6 +800,7 @@ def _step_guard(step: int, redis_identity: tuple[str, str, str, str], runtime_cm
         step=step,
         redis_identity=redis_identity,
         runtime_cmk=runtime_cmk,
+        alarm_topic=alarm_topic,
     )
 
 
@@ -771,7 +810,10 @@ def _redis_identity(settings: StackSettings) -> tuple[str, str, str, str]:
 
 
 def _guard_hardened_stack(
-    step: int, redis_identity: tuple[str, str, str, str], runtime_cmk: str
+    step: int,
+    redis_identity: tuple[str, str, str, str],
+    runtime_cmk: str,
+    alarm_topic: str,
 ) -> None:
     """Guard the whole stack before its first hardened resource (FR-09, F1).
 
@@ -783,7 +825,7 @@ def _guard_hardened_stack(
     transformation in ``_compose_hardened`` stays as a second layer. These
     are the last transforms the program registers.
     """
-    guard = _step_guard(step, redis_identity, runtime_cmk)
+    guard = _step_guard(step, redis_identity, runtime_cmk, alarm_topic)
     pulumi.runtime.register_stack_transformation(guard)
     pulumi.runtime.register_resource_transform(guard)
     pulumi.runtime.register_invoke_transform(_reject_invoke)
@@ -820,6 +862,7 @@ class WorkloadPhaseStack(RegistryPhaseStack):
                 secrets.workload_step,
                 _redis_identity(settings),
                 secrets.runtime_cmk_arn,
+                stack_alarm_topic_arn(settings, secrets.account_id),
             )
         super().__init__(registries=registries)
         self.settings = settings
@@ -851,6 +894,7 @@ class WorkloadPhaseStack(RegistryPhaseStack):
                     secrets.workload_step,
                     _redis_identity(settings),
                     secrets.runtime_cmk_arn,
+                    stack_alarm_topic_arn(settings, secrets.account_id),
                 ),
                 self._tag_resource,
             ],
@@ -894,6 +938,7 @@ class WorkloadPhaseStack(RegistryPhaseStack):
                 settings,
                 self.compute.scalable_services,
                 self.data.redis.replication_group_id,
+                self.data.documentdb.instances,
             ),
             opts=opts,
         )

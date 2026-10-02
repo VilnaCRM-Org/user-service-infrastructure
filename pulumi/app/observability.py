@@ -32,7 +32,7 @@ __all__ = [
     "alarm_topic_policy",
     "require_reviewed_topic_policy",
     "require_runtime_cmk",
-    "require_topic_actions",
+    "stack_alarm_topic_arn",
 ]
 
 # The only principals that may publish to the alarm topic (FR-13).
@@ -152,9 +152,15 @@ def require_reviewed_topic_policy(
     return policy
 
 
-# PRD §3.1 alarm catalogue (FR-13). Every alarm sets an explicit missing-data
-# mode; a quiet metric (no messages, no requests, no tasks) is not a failure.
-MISSING_DATA = "notBreaching"
+# PRD §3.1 alarm catalogue (FR-13). Every alarm sets its own missing-data mode
+# (gate F3). ``notBreaching``: a quiet metric (no messages, no requests, no
+# errors, no tasks) is not a failure. ``breaching``: an always-published
+# metric bound to the data plane's outputs that stops reporting means the
+# dimension is wrong or the instance is gone. ``missing``: the alarm holds its
+# state; it has no insufficient-data action, so it pages nobody.
+NOT_BREACHING = "notBreaching"
+BREACHING = "breaching"
+MISSING = "missing"
 SQS_NAMESPACE = "AWS/SQS"
 ALB_NAMESPACE = "AWS/ApplicationELB"
 ECS_NAMESPACE = "ECS/ContainerInsights"
@@ -164,8 +170,10 @@ REDIS_NAMESPACE = "AWS/ElastiCache"
 # group ARN suffixes; the target group suffix starts with this segment.
 TARGET_GROUP_SEGMENT = "targetgroup/"
 # Container Insights math (§3.1, boundary B): the shortfall is positive only
-# while the service wants tasks, so a desired count of 0 never alarms.
-ECS_SHORTFALL_EXPRESSION = "IF(desired > 0, desired - running, 0)"
+# while the service wants tasks, so a desired count of 0 never alarms. A
+# missing ``RunningTaskCount`` counts as 0 running tasks (gate F1), so a
+# service whose tasks never start still alarms.
+ECS_SHORTFALL_EXPRESSION = "IF(desired > 0, desired - FILL(running, 0), 0)"
 # Memory of the reviewed DocumentDB instance classes, in GiB. ``FreeableMemory``
 # alarms below 10% of the class (§3.1); an unknown class fails closed.
 DOCUMENTDB_CLASS_MEMORY_GIB = {
@@ -189,29 +197,38 @@ class AlarmTargets:
     ``request_count_label`` is the compute plane's ``ALBRequestCountPerTarget``
     label (``<load balancer suffix>/<target group suffix>``). The Redis member
     IDs are the replication group's cache clusters, ``<group>-001`` onwards.
+    The DocumentDB cluster and instance identifiers are the data plane's
+    ``ClusterInstance`` outputs (gate I5), so the alarms name what it declares.
     """
 
     failed_queue_names: tuple[str, ...]
     request_count_label: pulumi.Input[str]
     cluster_name: pulumi.Input[str]
     service_names: dict[str, pulumi.Input[str]]
-    documentdb_cluster_identifier: str
+    documentdb_cluster_identifier: pulumi.Input[str]
+    documentdb_instance_identifiers: tuple[pulumi.Input[str], ...]
     documentdb_instance_class: str
     redis_cache_cluster_ids: tuple[str, ...]
 
 
 def alarm_targets(
-    settings: StackSettings, services: Any, redis_group_id: str
+    settings: StackSettings,
+    services: Any,
+    redis_group_id: str,
+    documentdb_instances: tuple[Any, ...],
 ) -> AlarmTargets:
     """Collect the alarm dimensions from the settings and the hardened planes.
 
     Only the hardened compute plane sets ``services``; without it the ALB and
-    ECS alarms would name nothing, so the catalogue fails closed.
+    ECS alarms would name nothing, so the catalogue fails closed. The same
+    holds for a data plane without DocumentDB instances.
     """
     if type(services) is not ScalableServices:
         raise ValueError("Alarm catalogue requires the hardened compute services")
     if set(services.service_names) != {"web", "worker"}:
         raise ValueError("Alarm catalogue requires the web and worker services")
+    if type(documentdb_instances) is not tuple or not documentdb_instances:
+        raise ValueError("Alarm catalogue requires the DocumentDB instances")
     members = settings.redis.replicas_per_node_group + 1
     return AlarmTargets(
         failed_queue_names=(
@@ -222,8 +239,9 @@ def alarm_targets(
         request_count_label=services.request_count_label,
         cluster_name=services.cluster_name,
         service_names=dict(services.service_names),
-        documentdb_cluster_identifier=build_resource_name(
-            settings.stack_tag, "docdb", max_length=63
+        documentdb_cluster_identifier=documentdb_instances[0].cluster_identifier,
+        documentdb_instance_identifiers=tuple(
+            instance.identifier for instance in documentdb_instances
         ),
         documentdb_instance_class=settings.documentdb.instance_class,
         redis_cache_cluster_ids=tuple(
@@ -260,7 +278,7 @@ def _query(query_id: str, namespace: str, metric_name: str, stat: str, **dims):
             namespace=namespace,
             metric_name=metric_name,
             stat=stat,
-            period=300 if namespace == REDIS_NAMESPACE else 60,
+            period=60 if namespace == ECS_NAMESPACE else 300,
             dimensions=dims,
         ),
     )
@@ -273,14 +291,16 @@ def _expression(query_id: str, expression: str, label: str):
     )
 
 
-def _window(comparison: str, threshold: float, periods: int, datapoints: int):
-    """Render the threshold and evaluation window of one alarm."""
+def _window(
+    comparison: str, threshold: float, periods: int, datapoints: int, missing: str
+):
+    """Render the threshold, evaluation window and missing-data mode."""
     return {
         "comparison_operator": comparison,
         "threshold": threshold,
         "evaluation_periods": periods,
         "datapoints_to_alarm": datapoints,
-        "treat_missing_data": MISSING_DATA,
+        "treat_missing_data": missing,
     }
 
 
@@ -293,19 +313,38 @@ def _ecs_shortfall(cluster: pulumi.Input[str], service: pulumi.Input[str]):
             _query("desired", ECS_NAMESPACE, "DesiredTaskCount", "Average", **dims),
             _expression("shortfall", ECS_SHORTFALL_EXPRESSION, "Tasks below desired"),
         ],
-        **_window("GreaterThanThreshold", 0, 10, 10),
+        **_window("GreaterThanThreshold", 0, 10, 10, NOT_BREACHING),
     }
+
+
+def _member_math(
+    namespace: str,
+    metric_name: str,
+    stat: str,
+    function: str,
+    dimension: str,
+    members: tuple[pulumi.Input[str], ...],
+):
+    """Combine one metric across every member (cache cluster or instance)."""
+    ids = [f"m{index}" for index in range(len(members))]
+    queries = [
+        _query(query_id, namespace, metric_name, stat, **{dimension: member})
+        for query_id, member in zip(ids, members)
+    ]
+    expression = f"{function}([{', '.join(ids)}])"
+    return [*queries, _expression("group", expression, metric_name)]
 
 
 def _redis_math(targets: AlarmTargets, metric_name: str, stat: str, function: str):
     """Combine one Redis metric across every cache cluster of the group."""
-    ids = [f"m{index}" for index in range(len(targets.redis_cache_cluster_ids))]
-    queries = [
-        _query(query_id, REDIS_NAMESPACE, metric_name, stat, CacheClusterId=member)
-        for query_id, member in zip(ids, targets.redis_cache_cluster_ids)
-    ]
-    expression = f"{function}([{', '.join(ids)}])"
-    return [*queries, _expression("group", expression, metric_name)]
+    return _member_math(
+        REDIS_NAMESPACE,
+        metric_name,
+        stat,
+        function,
+        "CacheClusterId",
+        targets.redis_cache_cluster_ids,
+    )
 
 
 def _documentdb_memory_floor(instance_class: str) -> int:
@@ -315,7 +354,7 @@ def _documentdb_memory_floor(instance_class: str) -> int:
     return DOCUMENTDB_CLASS_MEMORY_GIB[instance_class] * GIB // 10
 
 
-def _sts_anomaly(cluster_identifier: str):
+def _sts_anomaly(cluster_identifier: pulumi.Input[str]):
     """Alarm, for information, on DocumentDB STS calls above their band (V-11)."""
     return {
         "metric_queries": [
@@ -340,7 +379,8 @@ def _sts_anomaly(cluster_identifier: str):
         "comparison_operator": "GreaterThanUpperThreshold",
         "evaluation_periods": 3,
         "datapoints_to_alarm": 3,
-        "treat_missing_data": MISSING_DATA,
+        # Published only while clients authenticate with IAM: absent is quiet.
+        "treat_missing_data": MISSING,
     }
 
 
@@ -366,7 +406,7 @@ def alarm_definitions(targets: AlarmTargets) -> dict[str, dict[str, Any]]:
                 60,
                 QueueName=queue,
             ),
-            **_window("GreaterThanOrEqualToThreshold", 1, 5, 5),
+            **_window("GreaterThanOrEqualToThreshold", 1, 5, 5, NOT_BREACHING),
         }
         for queue in targets.failed_queue_names
     }
@@ -380,7 +420,7 @@ def alarm_definitions(targets: AlarmTargets) -> dict[str, dict[str, Any]]:
                     60,
                     LoadBalancer=load_balancer,
                 ),
-                **_window("GreaterThanThreshold", 5, 5, 3),
+                **_window("GreaterThanThreshold", 5, 5, 3, NOT_BREACHING),
             },
             "alb-elb-5xx": {
                 **_metric(
@@ -390,7 +430,7 @@ def alarm_definitions(targets: AlarmTargets) -> dict[str, dict[str, Any]]:
                     60,
                     LoadBalancer=load_balancer,
                 ),
-                **_window("GreaterThanThreshold", 5, 5, 3),
+                **_window("GreaterThanThreshold", 5, 5, 3, NOT_BREACHING),
             },
             "alb-unhealthy-targets": {
                 **_metric(
@@ -401,7 +441,7 @@ def alarm_definitions(targets: AlarmTargets) -> dict[str, dict[str, Any]]:
                     LoadBalancer=load_balancer,
                     TargetGroup=target_group,
                 ),
-                **_window("GreaterThanOrEqualToThreshold", 1, 3, 3),
+                **_window("GreaterThanOrEqualToThreshold", 1, 3, 3, NOT_BREACHING),
             },
             "ecs-web-below-desired": _ecs_shortfall(
                 targets.cluster_name, targets.service_names["web"]
@@ -409,33 +449,41 @@ def alarm_definitions(targets: AlarmTargets) -> dict[str, dict[str, Any]]:
             "ecs-worker-below-desired": _ecs_shortfall(
                 targets.cluster_name, targets.service_names["worker"]
             ),
+            # The busiest instance, not the cluster average (gate F2).
             "docdb-cpu": {
-                **_metric(
-                    DOCUMENTDB_NAMESPACE, "CPUUtilization", "Average", 300, **documentdb
+                "metric_queries": _member_math(
+                    DOCUMENTDB_NAMESPACE,
+                    "CPUUtilization",
+                    "Average",
+                    "MAX",
+                    "DBInstanceIdentifier",
+                    targets.documentdb_instance_identifiers,
                 ),
-                **_window("GreaterThanThreshold", 80, 3, 3),
+                **_window("GreaterThanThreshold", 80, 3, 3, BREACHING),
             },
             "docdb-freeable-memory": {
                 **_metric(
                     DOCUMENTDB_NAMESPACE, "FreeableMemory", "Minimum", 300, **documentdb
                 ),
-                **_window("LessThanThreshold", memory_floor, 3, 3),
+                **_window("LessThanThreshold", memory_floor, 3, 3, BREACHING),
             },
+            # The member IDs are derived names, not outputs: the alarm can
+            # exist before the group, so missing data holds its state.
             "redis-memory": {
                 "metric_queries": _redis_math(
                     targets, "DatabaseMemoryUsagePercentage", "Maximum", "MAX"
                 ),
-                **_window("GreaterThanThreshold", 80, 3, 3),
+                **_window("GreaterThanThreshold", 80, 3, 3, MISSING),
             },
             "redis-evictions": {
                 "metric_queries": _redis_math(targets, "Evictions", "Sum", "SUM"),
-                **_window("GreaterThanThreshold", 0, 1, 1),
+                **_window("GreaterThanThreshold", 0, 1, 1, NOT_BREACHING),
             },
             "redis-auth-failures": {
                 "metric_queries": _redis_math(
                     targets, "AuthenticationFailures", "Sum", "SUM"
                 ),
-                **_window("GreaterThanThreshold", 0, 1, 1),
+                **_window("GreaterThanThreshold", 0, 1, 1, NOT_BREACHING),
             },
             "docdb-sts-calls": _sts_anomaly(targets.documentdb_cluster_identifier),
         }
@@ -443,21 +491,15 @@ def alarm_definitions(targets: AlarmTargets) -> dict[str, dict[str, Any]]:
     return definitions
 
 
-# Informational alarms page nobody when they clear, so they carry no OK action.
-INFORMATIONAL_ALARMS = frozenset({"docdb-sts-calls"})
+def stack_alarm_topic_arn(settings: StackSettings, account_id: str) -> str:
+    """Return this stack's alarm topic ARN, the only alarm action (FR-13).
 
-
-def require_topic_actions(
-    alarm_actions: Any, ok_actions: Any, topic_arn: str
-) -> tuple[list[str], list[str]]:
-    """Fail closed unless every action targets the alarm topic alone (FR-13).
-
-    The alarm action must be exactly the topic; the OK action is the topic or
-    nothing. Any other ARN, an extra action or a missing alarm action fails.
+    The observability plane names its topic with it, and the hardened guard
+    binds every metric alarm's actions to it.
     """
-    if alarm_actions != [topic_arn] or ok_actions not in ([], [topic_arn]):
-        raise ValueError("Alarm actions must target only the alarm topic")
-    return alarm_actions, ok_actions
+    return alarm_topic_arn(
+        settings.region, account_id, build_resource_name(settings.stack_tag, "alarms")
+    )
 
 
 class ObservabilityPlane(pulumi.ComponentResource):
@@ -483,7 +525,7 @@ class ObservabilityPlane(pulumi.ComponentResource):
         """
         key = require_runtime_cmk(runtime_cmk_arn)
         topic_name = build_resource_name(settings.stack_tag, "alarms")
-        topic_arn = alarm_topic_arn(settings.region, account_id, topic_name)
+        topic_arn = stack_alarm_topic_arn(settings, account_id)
         policy = require_reviewed_topic_policy(
             alarm_topic_policy(topic_arn, account_id), account_id, topic_arn
         )
@@ -503,18 +545,14 @@ class ObservabilityPlane(pulumi.ComponentResource):
             policy=json.dumps(policy),
             opts=pulumi.ResourceOptions(parent=self),
         )
+        # The hardened guard admits an alarm only with exactly these actions.
         for suffix, definition in definitions.items():
-            alarm_actions, ok_actions = require_topic_actions(
-                [topic_arn],
-                [] if suffix in INFORMATIONAL_ALARMS else [topic_arn],
-                topic_arn,
-            )
             aws.cloudwatch.MetricAlarm(
                 f"user-service-alarm-{suffix}",
                 name=build_resource_name(settings.stack_tag, suffix, max_length=255),
                 actions_enabled=True,
-                alarm_actions=alarm_actions,
-                ok_actions=ok_actions,
+                alarm_actions=[topic_arn],
+                ok_actions=[topic_arn],
                 **definition,
                 opts=pulumi.ResourceOptions(parent=self, depends_on=[topic_policy]),
             )

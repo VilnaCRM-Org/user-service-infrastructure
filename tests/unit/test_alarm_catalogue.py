@@ -2,9 +2,12 @@
 
 The oracle below is written from the PRD §3.1 table, not from the program's
 constants: one alarm per metric row, its threshold and window, an explicit
-missing-data mode, and actions only to the S2.3 alarm topic. The checker
-``_violations`` is also run against mutated rows, so a missing alarm, a missing
-topic action, an action to another ARN or a changed threshold fails the suite.
+missing-data mode chosen per alarm, and actions only to the S2.3 alarm topic.
+The checker ``_violations`` is also run against mutated rows, so a missing
+alarm, a missing topic action, an action to another ARN or a changed threshold
+fails the suite. The S2.4 gate fixes add the busiest-instance DocumentDB CPU
+alarm (F2), the ``FILL`` shortfall (F1), the per-alarm missing-data modes (F3),
+the hardened-guard action check (I1) and the data-plane binding (I5).
 """
 
 import copy
@@ -18,9 +21,11 @@ from app.observability import (
     _label_part,
     alarm_definitions,
     alarm_targets,
-    require_topic_actions,
 )
+from app.workload_phase import _reject_secret_material
 from test_poc_workload_phase import graph
+from test_runtime_secrets import _transform_args
+from test_workload_step_one import RUNTIME_CMK, _secret, _unresolved
 
 ALARM = "aws:cloudwatch/metricAlarm:MetricAlarm"
 PREFIX = "user-service-infrastructure-test-"
@@ -31,6 +36,11 @@ OTHER_ARN = "arn:aws:sns:eu-central-1:891377212104:someone-else"
 LOAD_BALANCER = "app/user-service-alb/123"
 TARGET_GROUP = "targetgroup/user-service-target-group/123"
 DOCDB = {"DBClusterIdentifier": "user-service-infrastructure-test-docdb"}
+# The data plane's two TEST instances (``documentDbInstanceCount`` default 2).
+DOCDB_INSTANCES = (
+    "user-service-infrastructure-test-docdb-1",
+    "user-service-infrastructure-test-docdb-2",
+)
 REDIS_MEMBERS = (
     "user-service-infrastructure-test-redis-001",
     "user-service-infrastructure-test-redis-002",
@@ -102,18 +112,6 @@ EXPECTED = {
         3,
         3,
     ),
-    # §3.1: >80% for 15 min.
-    "docdb-cpu": _single(
-        "AWS/DocDB",
-        "CPUUtilization",
-        "Average",
-        300,
-        DOCDB,
-        "GreaterThanThreshold",
-        80,
-        3,
-        3,
-    ),
     # §3.1: below 10% of the class for 15 min.
     "docdb-freeable-memory": _single(
         "AWS/DocDB",
@@ -142,7 +140,29 @@ ECS = {
     "ecs-worker-below-desired": "user-service-infrastructure-test-worker",
 }
 STS = "docdb-sts-calls"
-ALL = {*EXPECTED, *REDIS, *ECS, STS}
+# §3.1: >80% for 15 min, on the busiest instance (gate F2).
+DOCDB_CPU = "docdb-cpu"
+ALL = {*EXPECTED, *REDIS, *ECS, STS, DOCDB_CPU}
+# Gate F3: the missing-data mode of each alarm. A quiet DLQ, ALB, eviction,
+# auth-failure or ECS series is no failure; an always-published DocumentDB
+# series bound to the data plane breaches when absent; Redis memory and the
+# informational STS alarm keep their state.
+MISSING_DATA = {
+    "dlq-failed-send-email": "notBreaching",
+    "dlq-failed-domain-events": "notBreaching",
+    "dlq-failed-insert-user-batch": "notBreaching",
+    "alb-target-5xx": "notBreaching",
+    "alb-elb-5xx": "notBreaching",
+    "alb-unhealthy-targets": "notBreaching",
+    "ecs-web-below-desired": "notBreaching",
+    "ecs-worker-below-desired": "notBreaching",
+    "docdb-cpu": "breaching",
+    "docdb-freeable-memory": "breaching",
+    "redis-memory": "missing",
+    "redis-evictions": "notBreaching",
+    "redis-auth-failures": "notBreaching",
+    "docdb-sts-calls": "missing",
+}
 
 
 @pytest.fixture(scope="module")
@@ -153,21 +173,21 @@ def alarms(tmp_path_factory):
     return {row["inputs"]["name"].removeprefix(PREFIX): row for row in rows}
 
 
-def _redis_queries(metric, stat, function):
+def _member_queries(namespace, dimension, members, metric, stat, function):
     return [
         *(
             {
                 "id": f"m{index}",
                 "metric": {
-                    "dimensions": {"CacheClusterId": member},
+                    "dimensions": {dimension: member},
                     "metricName": metric,
-                    "namespace": "AWS/ElastiCache",
+                    "namespace": namespace,
                     "period": 300,
                     "stat": stat,
                 },
                 "returnData": False,
             }
-            for index, member in enumerate(REDIS_MEMBERS)
+            for index, member in enumerate(members)
         ),
         {
             "expression": f"{function}([m0, m1])",
@@ -176,6 +196,12 @@ def _redis_queries(metric, stat, function):
             "returnData": True,
         },
     ]
+
+
+def _redis_queries(metric, stat, function):
+    return _member_queries(
+        "AWS/ElastiCache", "CacheClusterId", REDIS_MEMBERS, metric, stat, function
+    )
 
 
 def _ecs_queries(service):
@@ -201,7 +227,7 @@ def _ecs_queries(service):
         )
     ] + [
         {
-            "expression": "IF(desired > 0, desired - running, 0)",
+            "expression": "IF(desired > 0, desired - FILL(running, 0), 0)",
             "id": "shortfall",
             "label": "Tasks below desired",
             "returnData": True,
@@ -221,6 +247,21 @@ def _shape_violations(suffix, inputs):
             "threshold": threshold,
             "evaluationPeriods": periods,
             "datapointsToAlarm": periods,
+        }
+    elif suffix == DOCDB_CPU:
+        expected = {
+            "metricQueries": _member_queries(
+                "AWS/DocDB",
+                "DBInstanceIdentifier",
+                DOCDB_INSTANCES,
+                "CPUUtilization",
+                "Average",
+                "MAX",
+            ),
+            "comparisonOperator": "GreaterThanThreshold",
+            "threshold": 80,
+            "evaluationPeriods": 3,
+            "datapointsToAlarm": 3,
         }
     elif suffix in ECS:
         # §3.1: 10 min; suppressed when desired = 0.
@@ -269,16 +310,15 @@ def _violations(alarms):
         inputs = row["inputs"]
         if suffix in ALL:
             found += [f"{suffix}: {key}" for key in _shape_violations(suffix, inputs)]
-        ok_expected = [] if suffix == STS else [TOPIC_ARN]
         if inputs.get("alarmActions") != [TOPIC_ARN]:
             found.append(f"{suffix}: alarmActions")
-        if inputs.get("okActions") != ok_expected:
+        if inputs.get("okActions") != [TOPIC_ARN]:
             found.append(f"{suffix}: okActions")
         if inputs.get("insufficientDataActions") not in (None, []):
             found.append(f"{suffix}: insufficientDataActions")
         if inputs.get("actionsEnabled") is not True:
             found.append(f"{suffix}: actionsEnabled")
-        if inputs.get("treatMissingData") != "notBreaching":
+        if inputs.get("treatMissingData") != MISSING_DATA.get(suffix):
             found.append(f"{suffix}: treatMissingData")
     return found
 
@@ -322,6 +362,14 @@ def _missing_data(alarms):
     del alarms["redis-memory"]["inputs"]["treatMissingData"]
 
 
+def _global_missing_data(alarms):
+    alarms["docdb-cpu"]["inputs"]["treatMissingData"] = "notBreaching"
+
+
+def _no_ok_action(alarms):
+    alarms["docdb-sts-calls"]["inputs"]["okActions"] = []
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
@@ -333,6 +381,8 @@ def _missing_data(alarms):
         _window,
         _expression,
         _missing_data,
+        _global_missing_data,
+        _no_ok_action,
     ],
 )
 def test_a_changed_catalogue_fails_the_suite(alarms, mutate):
@@ -343,12 +393,21 @@ def test_a_changed_catalogue_fails_the_suite(alarms, mutate):
 
 
 def _shortfall(expression, desired, running):
-    """Evaluate the reviewed ``IF(d > 0, d - r, 0)`` shape for one datapoint."""
-    match = re.fullmatch(r"IF\((\w+) > 0, (\w+) - (\w+), 0\)", expression)
+    """Evaluate the reviewed shortfall shape for one datapoint.
+
+    ``running`` is ``None`` when ``RunningTaskCount`` has no datapoint. A bare
+    ``running`` then has no value, so the expression has none either; only
+    ``FILL(running, 0)`` turns the gap into 0 running tasks.
+    """
+    match = re.fullmatch(
+        r"IF\(desired > 0, desired - (FILL\(running, 0\)|running), 0\)", expression
+    )
     assert match is not None
-    values = {"desired": desired, "running": running}
-    first, minuend, subtrahend = match.groups()
-    return values[minuend] - values[subtrahend] if values[first] > 0 else 0
+    if desired == 0:
+        return 0
+    if running is None and match.group(1) == "running":
+        return None
+    return desired - (running or 0)
 
 
 @pytest.mark.parametrize("suffix", sorted(ECS))
@@ -358,9 +417,13 @@ def _shortfall(expression, desired, running):
         # B: desired = 0 (TEST night or weekend stop, PROD rollback-zero).
         (0, 0, False),
         (0, 2, False),
+        (0, None, False),
         (2, 1, True),
         (2, 2, False),
         (1, 3, False),
+        # Gate F1: no task ever starts, so RunningTaskCount is missing.
+        (2, None, True),
+        (2, 0, True),
     ],
 )
 def test_running_below_desired_is_suppressed_while_desired_is_zero(
@@ -371,33 +434,175 @@ def test_running_below_desired_is_suppressed_while_desired_is_zero(
     expression = inputs["metricQueries"][2]["expression"]
     value = _shortfall(expression, desired, running)
     assert inputs["comparisonOperator"] == "GreaterThanThreshold"
-    assert (value > inputs["threshold"]) is fires
+    assert (value is not None and value > inputs["threshold"]) is fires
+
+
+def _documentdb_cpu(inputs, per_instance):
+    """Model the alarm's value from per-instance CPU averages.
+
+    A cluster-level ``Average`` is the mean of the instances; the reviewed
+    ``MAX`` expression over per-instance queries is the busiest instance.
+    """
+    queries = inputs.get("metricQueries")
+    if queries is None:
+        assert inputs["dimensions"] == DOCDB
+        assert inputs["statistic"] == "Average"
+        return sum(per_instance.values()) / len(per_instance)
+    values = {
+        query["id"]: per_instance[query["metric"]["dimensions"]["DBInstanceIdentifier"]]
+        for query in queries
+        if "metric" in query
+    }
+    (expression,) = [query["expression"] for query in queries if query["returnData"]]
+    match = re.fullmatch(r"MAX\(\[(\w+(?:, \w+)*)\]\)", expression)
+    assert match is not None
+    return max(values[query_id] for query_id in match.group(1).split(", "))
 
 
 @pytest.mark.parametrize(
-    ("alarm_actions", "ok_actions"),
+    ("writer", "reader", "fires"),
     [
-        ([], [TOPIC_ARN]),
-        ([OTHER_ARN], []),
-        ([TOPIC_ARN, OTHER_ARN], []),
-        ([TOPIC_ARN], [OTHER_ARN]),
-        ([TOPIC_ARN], [TOPIC_ARN, TOPIC_ARN]),
-        (None, None),
-        (TOPIC_ARN, []),
+        # Gate F2: a 95% writer with a 10% reader averages 52.5%.
+        (95, 10, True),
+        (10, 95, True),
+        (81, 0, True),
+        (80, 80, False),
+        (50, 10, False),
     ],
 )
-def test_an_action_off_the_alarm_topic_fails_closed(alarm_actions, ok_actions):
-    """FR-13 N: only the alarm topic may receive an alarm or OK action."""
-    with pytest.raises(ValueError, match="only the alarm topic"):
-        require_topic_actions(alarm_actions, ok_actions, TOPIC_ARN)
-
-
-def test_the_topic_actions_are_accepted():
-    assert require_topic_actions([TOPIC_ARN], [], TOPIC_ARN) == ([TOPIC_ARN], [])
-    assert require_topic_actions([TOPIC_ARN], [TOPIC_ARN], TOPIC_ARN) == (
-        [TOPIC_ARN],
-        [TOPIC_ARN],
+def test_documentdb_cpu_alarms_on_the_busiest_instance(alarms, writer, reader, fires):
+    """§3.1 >80%: one hot instance fires even when the cluster average is low."""
+    inputs = alarms["docdb-cpu"]["inputs"]
+    value = _documentdb_cpu(
+        inputs, {DOCDB_INSTANCES[0]: writer, DOCDB_INSTANCES[1]: reader}
     )
+    assert inputs["comparisonOperator"] == "GreaterThanThreshold"
+    assert (value > inputs["threshold"]) is fires
+
+
+def test_the_documentdb_alarms_name_the_data_plane_resources(tmp_path_factory):
+    """Gate I5: the alarm dimensions are the declared cluster and instances."""
+    receipt = graph(tmp_path_factory.mktemp("bound"), "hardened")
+    rows = list(receipt["registrations"].values())
+    instances = [
+        row["inputs"]
+        for row in rows
+        if row["type"] == "aws:docdb/clusterInstance:ClusterInstance"
+    ]
+    (cluster,) = [
+        row["inputs"] for row in rows if row["type"] == "aws:docdb/cluster:Cluster"
+    ]
+    alarms = {
+        row["inputs"]["name"].removeprefix(PREFIX): row["inputs"]
+        for row in rows
+        if row["type"] == ALARM
+    }
+    named = [
+        query["metric"]["dimensions"]
+        for query in alarms["docdb-cpu"].get("metricQueries", [])
+        if "metric" in query
+    ]
+    assert sorted(dims["DBInstanceIdentifier"] for dims in named) == sorted(
+        instance["identifier"] for instance in instances
+    )
+    assert sorted(instance["identifier"] for instance in instances) == list(
+        DOCDB_INSTANCES
+    )
+    assert {instance["clusterIdentifier"] for instance in instances} == {
+        cluster["clusterIdentifier"]
+    }
+    sts = alarms["docdb-sts-calls"]["metricQueries"][0]["metric"]["dimensions"]
+    for dims in (alarms["docdb-freeable-memory"]["dimensions"], sts):
+        assert dims == {"DBClusterIdentifier": cluster["clusterIdentifier"]}
+    assert cluster["clusterIdentifier"] == DOCDB["DBClusterIdentifier"]
+
+
+@pytest.mark.parametrize(
+    "addition",
+    [
+        "root:alarm-foreign-action",
+        "stack:alarm-foreign-action",
+        "root:alarm-extra-action",
+        "root:alarm-no-ok-action",
+        "stack:alarm-foreign-ok-action",
+        "root:alarm-insufficient-data-action",
+        "root:alarm-no-action",
+    ],
+)
+def test_the_hardened_guard_refuses_an_alarm_off_the_topic(tmp_path, addition):
+    """Gate I1 N: an alarm whose actions are not exactly the topic never registers."""
+    receipt = graph(tmp_path, "hardened", addition)
+    assert receipt["error"] is not None
+    assert "unreviewed property" in receipt["error"]
+    assert not [
+        name for name in receipt["registrations"] if name.startswith("fixture-")
+    ]
+
+
+def test_the_hardened_guard_admits_an_alarm_on_the_topic(tmp_path):
+    """Gate I1 P: exact topic alarm and OK actions pass the stack guard."""
+    receipt = graph(tmp_path, "hardened", "root:alarm-on-topic")
+    assert receipt["error"] is None
+    assert "fixture-alarm" in receipt["registrations"]
+
+
+def _alarm_args(engine_path, alarm=None, ok=None, insufficient=None):
+    """One metric alarm's guard arguments in the casing of its path."""
+    names = (
+        ("alarmActions", "okActions", "insufficientDataActions")
+        if engine_path
+        else ("alarm_actions", "ok_actions", "insufficient_data_actions")
+    )
+    props = {"metricName": "Evictions"}
+    props.update(
+        {key: value for key, value in zip(names, (alarm, ok, insufficient)) if value}
+    )
+    return _transform_args(engine_path, ALARM, props)
+
+
+@pytest.mark.parametrize("engine_path", [False, True])
+def test_an_alarm_on_the_topic_passes_the_bound_guard(engine_path):
+    for insufficient in (None, []):
+        args = _alarm_args(engine_path, [TOPIC_ARN], [TOPIC_ARN], insufficient)
+        assert (
+            _reject_secret_material(
+                args, runtime_cmk=RUNTIME_CMK, alarm_topic=TOPIC_ARN
+            )
+            is None
+        )
+
+
+@pytest.mark.parametrize("engine_path", [False, True])
+def test_an_unbound_guard_admits_no_alarm(engine_path):
+    """Gate I1 N: without the stack's topic ARN no metric alarm passes."""
+    args = _alarm_args(engine_path, [TOPIC_ARN], [TOPIC_ARN])
+    with pytest.raises(ValueError, match="unreviewed property"):
+        _reject_secret_material(args, runtime_cmk=RUNTIME_CMK)
+
+
+@pytest.mark.parametrize("engine_path", [False, True])
+@pytest.mark.parametrize(
+    ("alarm", "ok", "insufficient"),
+    [
+        ([OTHER_ARN], [TOPIC_ARN], None),
+        ([TOPIC_ARN, OTHER_ARN], [TOPIC_ARN], None),
+        ([TOPIC_ARN], None, None),
+        ([TOPIC_ARN], [OTHER_ARN], None),
+        ([TOPIC_ARN], [TOPIC_ARN, TOPIC_ARN], None),
+        ([TOPIC_ARN], [TOPIC_ARN], [TOPIC_ARN]),
+        (None, [TOPIC_ARN], None),
+        (TOPIC_ARN, [TOPIC_ARN], None),
+        ([_secret(TOPIC_ARN)], [TOPIC_ARN], None),
+        (_unresolved(), [TOPIC_ARN], None),
+    ],
+)
+def test_an_alarm_off_the_topic_fails_the_bound_guard(
+    engine_path, alarm, ok, insufficient
+):
+    """Gate I1 N: any other, extra, missing or opaque action fails closed."""
+    args = _alarm_args(engine_path, alarm, ok, insufficient)
+    with pytest.raises(ValueError, match="unreviewed property"):
+        _reject_secret_material(args, runtime_cmk=RUNTIME_CMK, alarm_topic=TOPIC_ARN)
 
 
 SETTINGS = SimpleNamespace(
@@ -412,6 +617,12 @@ SETTINGS = SimpleNamespace(
 )
 
 
+INSTANCES = (
+    SimpleNamespace(identifier="docdb-1", cluster_identifier="docdb"),
+    SimpleNamespace(identifier="docdb-2", cluster_identifier="docdb"),
+)
+
+
 def _services(**names):
     return ScalableServices(
         cluster_name="cluster",
@@ -421,16 +632,15 @@ def _services(**names):
 
 
 def test_the_targets_name_one_redis_member_per_cache_cluster():
-    targets = alarm_targets(SETTINGS, _services(), "group")
+    targets = alarm_targets(SETTINGS, _services(), "group", INSTANCES)
     assert targets.redis_cache_cluster_ids == ("group-001", "group-002", "group-003")
     assert targets.failed_queue_names == (
         "failed-send-email",
         "failed-domain-events",
         "failed-insert-user-batch",
     )
-    assert targets.documentdb_cluster_identifier == (
-        "user-service-infrastructure-test-docdb"
-    )
+    assert targets.documentdb_cluster_identifier == "docdb"
+    assert targets.documentdb_instance_identifiers == ("docdb-1", "docdb-2")
 
 
 @pytest.mark.parametrize(
@@ -445,7 +655,14 @@ def test_the_targets_name_one_redis_member_per_cache_cluster():
 def test_the_catalogue_requires_the_hardened_services(services, message):
     """N: without the hardened services the ALB and ECS alarms name nothing."""
     with pytest.raises(ValueError, match=message):
-        alarm_targets(SETTINGS, services, "group")
+        alarm_targets(SETTINGS, services, "group", INSTANCES)
+
+
+@pytest.mark.parametrize("instances", [(), [INSTANCES[0]], None])
+def test_the_catalogue_requires_the_documentdb_instances(instances):
+    """N: without the data plane's instances the DocumentDB alarms name nothing."""
+    with pytest.raises(ValueError, match="DocumentDB instances"):
+        alarm_targets(SETTINGS, _services(), "group", instances)
 
 
 def _targets(**changes):
@@ -455,6 +672,7 @@ def _targets(**changes):
         "cluster_name": "cluster",
         "service_names": {"web": "web", "worker": "worker"},
         "documentdb_cluster_identifier": "docdb",
+        "documentdb_instance_identifiers": ("docdb-1",),
         "documentdb_instance_class": "db.t4g.medium",
         "redis_cache_cluster_ids": ("redis-001",),
     }
@@ -462,15 +680,15 @@ def _targets(**changes):
 
 
 @pytest.mark.parametrize(
-    ("targets", "message"),
+    ("changes", "message"),
     [
-        (_targets(failed_queue_names=("a", "b")), "three failed-\\* queues"),
-        (_targets(documentdb_instance_class="db.x9.huge"), "memory size"),
+        ({"failed_queue_names": ("a", "b")}, "three failed-\\* queues"),
+        ({"documentdb_instance_class": "db.x9.huge"}, "memory size"),
     ],
 )
-def test_an_incomplete_target_fails_closed(targets, message):
+def test_an_incomplete_target_fails_closed(changes, message):
     with pytest.raises(ValueError, match=message):
-        alarm_definitions(targets)
+        alarm_definitions(_targets(**changes))
 
 
 @pytest.mark.parametrize(

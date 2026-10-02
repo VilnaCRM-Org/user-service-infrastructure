@@ -366,7 +366,36 @@ def _fixture_builders(options, identity):
             user_info_endpoint="https://idp.example/userinfo",
         ),
     )
+    topic = (
+        "arn:aws:sns:eu-central-1:891377212104:user-service-infrastructure-test-alarms"
+    )
+    other = "arn:aws:sns:eu-central-1:891377212104:someone-else"
+
+    def alarm(**actions):
+        """S2.4 gate I1: a metric alarm that differs only in its actions."""
+        return lambda: aws.cloudwatch.MetricAlarm(
+            "fixture-alarm",
+            comparison_operator="GreaterThanThreshold",
+            evaluation_periods=1,
+            metric_name="Evictions",
+            namespace="AWS/ElastiCache",
+            period=300,
+            statistic="Sum",
+            threshold=0,
+            **actions,
+            opts=options,
+        )
+
     return {
+        "alarm-on-topic": alarm(alarm_actions=[topic], ok_actions=[topic]),
+        "alarm-foreign-action": alarm(alarm_actions=[other], ok_actions=[topic]),
+        "alarm-extra-action": alarm(alarm_actions=[topic, other], ok_actions=[topic]),
+        "alarm-no-ok-action": alarm(alarm_actions=[topic]),
+        "alarm-foreign-ok-action": alarm(alarm_actions=[topic], ok_actions=[other]),
+        "alarm-insufficient-data-action": alarm(
+            alarm_actions=[topic], ok_actions=[topic], insufficient_data_actions=[topic]
+        ),
+        "alarm-no-action": alarm(),
         "random-password": lambda: random.RandomPassword(
             "fixture-material", length=16, opts=options
         ),

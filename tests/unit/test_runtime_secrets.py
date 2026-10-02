@@ -689,20 +689,27 @@ def test_hardened_allowlist_is_exactly_the_rendered_graph(tmp_path):
     # component types over S1.1's (9, 4, 6). S1.4 adds the four ElastiCache
     # types: the replication group, its subnet group, the users and the group.
     # S2.1 adds the tagged scalable target, the untagged policy and scheduled
-    # action, and the autoscaling component.
+    # action, and the autoscaling component. S2.3 adds the tagged alarm topic,
+    # the untagged topic policy and the observability component.
     assert (
         len(HARDENED_TAGGED_TYPES),
         len(HARDENED_UNTAGGED_TYPES),
         len(HARDENED_COMPONENT_TYPES),
-    ) == (26, 13, 10)
+    ) == (27, 14, 11)
     assert {kind for kind in HARDENED_TYPES if kind.startswith("aws:elasticache/")} == {
         "aws:elasticache/replicationGroup:ReplicationGroup",
         "aws:elasticache/subnetGroup:SubnetGroup",
         "aws:elasticache/user:User",
         "aws:elasticache/userGroup:UserGroup",
     }
-    # Every taggable type is now rendered; tagging still admits no type.
-    assert HARDENED_TAGGED_TYPES == TAGGABLE_TYPES
+    # Every taggable type is rendered except the metric alarm and the
+    # EventBridge rule, which S2.4 and S2.5 move into the rendered set. Tagging
+    # still admits no type.
+    assert TAGGABLE_TYPES - HARDENED_TAGGED_TYPES == {
+        "aws:cloudwatch/metricAlarm:MetricAlarm",
+        "aws:cloudwatch/eventRule:EventRule",
+    }
+    assert HARDENED_TAGGED_TYPES <= TAGGABLE_TYPES
     assert not HARDENED_UNTAGGED_TYPES & TAGGABLE_TYPES
     assert not [kind for kind in HARDENED_TYPES if kind.startswith(SECRET_MATERIAL)]
 

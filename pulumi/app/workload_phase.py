@@ -17,7 +17,8 @@ those types, each with its own story (S1.5, S1.6, S2.1, S2.2, S2.6); its
 create-only admission is S4.9. After step 1 the XP-8 values are exported. S2.1
 adds the autoscaling plane: the scalable targets, the web target-tracking
 policies and the one-time start and stop actions (AD-10). S2.2 adds the worker
-backlog policy to that plane (FR-12).
+backlog policy to that plane (FR-12). S2.3 adds the observability plane with
+the alarm SNS topic on the runtime CMK and its publish policy (AD-11, FR-13).
 """
 
 from __future__ import annotations
@@ -60,14 +61,17 @@ from app.environment import (
 )
 from app.messaging import MessagingPlane
 from app.network import NetworkPlane
+from app.observability import ObservabilityPlane
 from app.registry import RegistryInputs
 from app.registry_phase import RegistryPhaseStack
 from app.runtime_secrets import RuntimeSecrets, RuntimeSecretsDescriptor
 
-# Closed taggable resource types used by the four installed workload planes.
+# Closed taggable resource types used by the installed workload planes.
 # SecretVersion, lifecycle policies and route associations do not accept tags.
 # This set selects what ``_tag_resource`` tags; it never admits a type to the
-# hardened graph, which ``HARDENED_TYPES`` alone decides.
+# hardened graph, which ``HARDENED_TYPES`` alone decides. S2.3 adds the
+# observability types: the alarm topic now, and the metric alarm and the
+# EventBridge rule that S2.4 and S2.5 render.
 TAGGABLE_TYPES = frozenset(
     {
         "aws:appautoscaling/target:Target",
@@ -93,8 +97,11 @@ TAGGABLE_TYPES = frozenset(
         "aws:lb/listener:Listener",
         "aws:lb/loadBalancer:LoadBalancer",
         "aws:lb/targetGroup:TargetGroup",
+        "aws:cloudwatch/eventRule:EventRule",
+        "aws:cloudwatch/metricAlarm:MetricAlarm",
         "aws:secretsmanager/secret:Secret",
         "aws:s3/bucketV2:BucketV2",
+        "aws:sns/topic:Topic",
         "aws:sqs/queue:Queue",
     }
 )
@@ -129,7 +136,8 @@ ELASTIC_DOCUMENTDB_TYPE = "aws:docdb/elasticCluster:ElasticCluster"
 # secret material or open access; the ElastiCache subnet group has no such
 # input and no check, while the Redis user group's check refuses the open
 # built-in ``default`` user (S1.4 gate F1). The autoscaling types have no
-# secret input in pulumi-aws 7.23.0, so they have no check.
+# secret input in pulumi-aws 7.23.0, so they have no check. S2.3 adds the
+# observability component, the alarm topic and its topic policy (AD-11).
 HARDENED_TAGGED_TYPES = frozenset(
     {
         "aws:appautoscaling/target:Target",
@@ -157,6 +165,7 @@ HARDENED_TAGGED_TYPES = frozenset(
         "aws:lb/targetGroup:TargetGroup",
         "aws:s3/bucketV2:BucketV2",
         "aws:secretsmanager/secret:Secret",
+        "aws:sns/topic:Topic",
         "aws:sqs/queue:Queue",
     }
 )
@@ -177,6 +186,7 @@ HARDENED_UNTAGGED_TYPES = frozenset(
         "BucketServerSideEncryptionConfigurationV2",
         "aws:s3/bucketVersioningV2:BucketVersioningV2",
         "aws:sesv2/emailIdentity:EmailIdentity",
+        "aws:sns/topicPolicy:TopicPolicy",
     }
 )
 HARDENED_COMPONENT_TYPES = frozenset(
@@ -188,6 +198,7 @@ HARDENED_COMPONENT_TYPES = frozenset(
         "user-service-infrastructure:data:Plane",
         "user-service-infrastructure:messaging:Plane",
         "user-service-infrastructure:network:Plane",
+        "user-service-infrastructure:observability:Plane",
         "user-service-infrastructure:registry:Plane",
         "user-service-infrastructure:secrets:Runtime",
         "user-service-infrastructure:stack:UserService",
@@ -619,6 +630,17 @@ def _runtime_cmk_log_group(props, sdk_path: bool, runtime_cmk=None) -> bool:
     )
 
 
+def _runtime_cmk_topic(props, sdk_path: bool, runtime_cmk=None) -> bool:
+    """Bind the alarm topic to the D-4 runtime CMK (D-8, FR-13, S2.3).
+
+    ``kmsMasterKeyId`` must equal ``runtime_cmk``, the hardened contract's
+    ``central.cmk.runtime.arn``. No key, ``alias/aws/sns`` or any other key
+    fails, and an unbound check accepts no topic.
+    """
+    key = _read(props, "kms_master_key_id", "kmsMasterKeyId", sdk_path)
+    return runtime_cmk is not None and key == runtime_cmk
+
+
 def _reviewed_secret(props, sdk_path: bool) -> bool:
     """Apply both secret rules: no inline policy and no Redis secret (S1.3, S1.4)."""
     return _no_inline_secret_policy(props, sdk_path) and _not_a_redis_secret(
@@ -637,7 +659,9 @@ def _reviewed_secret(props, sdk_path: bool) -> bool:
 # Redis user group has no secret input, but it is checked because it could
 # bind the open built-in ``default`` user (S1.4 gate F1). The log group has
 # no secret input either; it is checked because D-4 binds the DocumentDB
-# audit and profiler groups to the runtime CMK (FR-10, S1.9). Each check gets
+# audit and profiler groups to the runtime CMK (FR-10, S1.9). The SNS topic has
+# no secret input; it is checked because D-8 binds it to the runtime CMK
+# (S2.3). Each check gets
 # the props and whether they come from the SDK path (snake_case, raw inputs)
 # rather than the engine path (camelCase, deserialized).
 HARDENED_PROPERTY_CHECKS = {
@@ -651,18 +675,21 @@ HARDENED_PROPERTY_CHECKS = {
     "aws:lb/listener:Listener": _no_oidc_action,
     "aws:secretsmanager/secret:Secret": _reviewed_secret,
     "aws:sesv2/emailIdentity:EmailIdentity": _easy_dkim_only,
+    "aws:sns/topic:Topic": _runtime_cmk_topic,
 }
 
 
 # The Redis checks that compare IDs against this graph's ``redis_iam_identity``.
 REDIS_IDENTITY_CHECKS = frozenset({_iam_redis_group, _redis_user, _redis_user_group})
+# The checks that compare a key against this graph's runtime CMK (S1.9, S2.3).
+RUNTIME_CMK_CHECKS = frozenset({_runtime_cmk_log_group, _runtime_cmk_topic})
 
 
 def _bound_arguments(check, redis_identity, runtime_cmk) -> tuple[Any, ...]:
     """The graph-bound value a check compares against, if it takes one."""
     if check in REDIS_IDENTITY_CHECKS:
         return (redis_identity,)
-    if check is _runtime_cmk_log_group:
+    if check in RUNTIME_CMK_CHECKS:
         return (runtime_cmk,)
     return ()
 
@@ -693,7 +720,7 @@ def _reject_secret_material(
     group, its users and the replication group may name no other ID (S1.4 gate
     F1 and F11), and without it no readable ID passes. ``runtime_cmk`` is the
     contract's ``central.cmk.runtime.arn``; without it no DocumentDB log group
-    passes (S1.9).
+    (S1.9) and no SNS topic (S2.3) passes.
     """
     if args.type_.startswith(SECRET_MATERIAL_TYPES):
         raise ValueError("Hardened workload graph must not hold secret material")
@@ -806,7 +833,8 @@ class WorkloadPhaseStack(RegistryPhaseStack):
         Every plane is credential-free: seeded secret metadata, the network
         with the bootstrap-job SG, DocumentDB with the managed password and the
         plain MONGODB-AWS URL, Redis with IAM users and required TLS (S1.4),
-        the queues, and ECS services at zero tasks. A step-2 contract adds the
+        the queues, ECS services at zero tasks and the alarm topic on the
+        runtime CMK (S2.3). A step-2 contract adds the
         autoscaling plane (S2.1); the other step-2 stories add their resources
         in turn, and the guard refuses every step-2 type at step 1.
         """
@@ -849,6 +877,13 @@ class WorkloadPhaseStack(RegistryPhaseStack):
             registries=self.registries.outputs,
             runtime_secrets=self.runtime_secrets,
             initial_service_scale=INITIAL_SERVICE_SCALE,
+            opts=opts,
+        )
+        self.observability = ObservabilityPlane(
+            "observability",
+            settings=settings,
+            runtime_cmk_arn=secrets.runtime_cmk_arn,
+            account_id=secrets.account_id,
             opts=opts,
         )
         if secrets.workload_step == 2:

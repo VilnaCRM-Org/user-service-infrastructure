@@ -204,6 +204,13 @@ def _arn_suffix_outputs(args, values):
     return values
 
 
+def _topic_outputs(args, values):
+    """Keep the synthetic alarm topic ARN in the contract's TEST account (S2.3)."""
+    if args.typ == "aws:sns/topic:Topic":
+        values["arn"] = f"arn:aws:sns:eu-central-1:891377212104:{args.inputs['name']}"
+    return values
+
+
 def _redis_outputs(args, values):
     """Report the primary endpoint ElastiCache derives from the group ID."""
     if args.typ == "aws:elasticache/replicationGroup:ReplicationGroup":
@@ -656,6 +663,7 @@ def _probe(root, mode, mutation, coverage_path):
             str(root / "pulumi/app/compute.py"),
             str(root / "pulumi/app/access_logs.py"),
             str(root / "pulumi/app/autoscaling.py"),
+            str(root / "pulumi/app/observability.py"),
             str(root / "pulumi/app/environment.py"),
             str(root / "scripts/poc_workload_phase_entrypoint.py"),
         ],
@@ -711,7 +719,7 @@ def _probe(root, mode, mutation, coverage_path):
         def new_resource(self, args):
             resource_id, values = super().new_resource(args)
             values = _redis_outputs(args, _generated_outputs(args, values))
-            values = _arn_suffix_outputs(args, values)
+            values = _topic_outputs(args, _arn_suffix_outputs(args, values))
             resource_id = XP8_IDS.get(args.name, resource_id)
             return _workload_queue_outputs(args, resource_id, values)
 

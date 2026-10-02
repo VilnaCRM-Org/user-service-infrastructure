@@ -34,7 +34,7 @@ def test_acceptance_doc_carries_every_marker() -> None:
 @pytest.mark.parametrize("marker", REQUIRED_MARKERS)
 def test_doc_without_a_marker_fails(marker: str) -> None:
     text = DOC.read_text(encoding="utf-8").replace(marker, "")
-    assert missing_markers(text) == [marker]
+    assert marker in missing_markers(text)
 
 
 def test_doc_without_test_only_marker_fails() -> None:

@@ -105,7 +105,7 @@ safe to deploy. The main problems:
   recovery grants);
 - `user-service` (non-root image, #501, MONGODB-AWS check, the Redis IAM
   token provider, KMS signing and encryption, in-container TLS for PROD,
-  multi-arch images);
+  single-architecture `linux/amd64` images, D-18);
 - `api-gateway-infrastructure` (the API front door).
 
 **Out of scope:**

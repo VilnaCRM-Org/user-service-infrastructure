@@ -8,12 +8,15 @@ D-2 (`specs/workload-wa-hardening/decisions.md`), resolved by the user on
 2026-09-30:
 
 - **TEST:** recorded risk acceptance (this document). The ALB target group
-  uses HTTP to the task on port 8080.
+  uses HTTP to the task on the container port (80 at this base; 8080 once the
+  non-root image contract of user-service S5.9 and AD-14 lands here).
 - **PROD:** in-container TLS on port 8443 with an HTTPS target group and an
   HTTPS health check, required before gate 2 (S5.20 in user-service PR #510,
   and S3.5-A in this repository).
 
 Admission enforces this: a PROD stack with an HTTP target group is refused by admission (FR-19, AD-13).
+At this base that holds because admission accepts only the TEST stack; the
+explicit protocol check for PROD arrives with S3.5-A.
 
 ## Residual risk (A-14)
 
@@ -22,7 +25,7 @@ group supports HTTPS, the ALB does not validate target certificates, and
 in-VPC traffic is authenticated at packet level.
 
 In TEST the ALB does not use it. Traffic between the ALB and the ECS tasks
-inside the VPC is plaintext HTTP on port 8080. A-14 treats in-VPC traffic as
+inside the VPC is plaintext HTTP on the container port. A-14 treats in-VPC traffic as
 authenticated at packet level, so this is not exposure to arbitrary sniffing.
 The exposure is a compromised task or ENI in the same VPC that could read or
 alter this hop. Clients still reach the ALB over HTTPS.

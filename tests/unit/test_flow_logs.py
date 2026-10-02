@@ -9,8 +9,14 @@ PROD). Its policy denies non-TLS access and allows only
 ``s3:GetBucketAcl``, each with ``aws:SourceAccount`` and ``aws:SourceArn``.
 N: an IAM role argument, a bucket without TLS-only, a delivery statement
 without ``aws:SourceArn``, SSE-S3, SSE-KMS with another key, or
-``force_destroy=true`` fails. Every oracle is a literal from the PRD and the
-hardened TEST fixture (account 891377212104, eu-central-1).
+``force_destroy=true`` fails. The FR-15 N row "SSE-KMS without the delivery
+principal in the runtime key policy fails" has no input here: the runtime key
+policy is owned and tested by bootstrap-infrastructure S5.4 (AD-15a), and S4.6
+step 12 is the live proof (V-16). This module only pins that record in the ops
+guide. The write statement mirrors the AWS-documented flow-log statement,
+including ``s3:x-amz-acl`` = ``bucket-owner-full-control`` (V-16). Every
+oracle is a literal from the PRD, the AWS documentation and the hardened TEST
+fixture (account 891377212104, eu-central-1).
 """
 
 import json
@@ -47,6 +53,13 @@ DELIVERY_CONDITION = {
     "StringEquals": {"aws:SourceAccount": "891377212104"},
     "ArnLike": {"aws:SourceArn": "arn:aws:logs:eu-central-1:891377212104:*"},
 }
+WRITE_CONDITION = {
+    "StringEquals": {
+        "aws:SourceAccount": "891377212104",
+        "s3:x-amz-acl": "bucket-owner-full-control",
+    },
+    "ArnLike": {"aws:SourceArn": "arn:aws:logs:eu-central-1:891377212104:*"},
+}
 REVIEWED_POLICY = {
     "Version": "2012-10-17",
     "Statement": [
@@ -64,7 +77,7 @@ REVIEWED_POLICY = {
             "Principal": {"Service": "delivery.logs.amazonaws.com"},
             "Action": "s3:PutObject",
             "Resource": BUCKET_ARN + "/AWSLogs/891377212104/*",
-            "Condition": DELIVERY_CONDITION,
+            "Condition": WRITE_CONDITION,
         },
         {
             "Sid": "AWSLogDeliveryAclCheck",
@@ -138,6 +151,13 @@ def test_the_bucket_family_holds_every_fr15_control(hardened):
     assert policy == REVIEWED_POLICY
 
 
+def test_the_flow_log_waits_for_the_reviewed_bucket_policy(hardened):
+    """V-16 (c): AWS must find the reviewed policy before the flow log exists."""
+    rows = hardened["registrations"]
+    flow_log = _only(rows, FLOW_LOG)
+    assert rows["user-service-flow-logs-policy"]["urn"] in flow_log["dependencies"]
+
+
 def test_prod_records_expire_after_90_days_and_other_environments_fail():
     assert (flow_log_retention_days("test"), flow_log_retention_days("prod")) == (
         30,
@@ -166,6 +186,8 @@ def _without_condition(index, key):
         _without_condition(1, "aws:SourceArn"),
         _without_condition(2, "aws:SourceArn"),
         _without_condition(1, "aws:SourceAccount"),
+        # The AWS-documented write statement requires bucket-owner-full-control.
+        _without_condition(1, "s3:x-amz-acl"),
         {
             **REVIEWED_POLICY,
             "Statement": [
@@ -219,6 +241,21 @@ def test_the_rendered_policy_is_the_reviewed_document():
 def test_sse_s3_or_any_other_key_fails(rule):
     with pytest.raises(ValueError, match="SSE-KMS with the runtime CMK"):
         require_runtime_cmk_encryption(rule, RUNTIME_CMK)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        # A key ID can make the destination undeliverable (V-16).
+        "00000000-0000-4000-8000-000000000010",
+        "alias/pulumi-user-service-infrastructure-test-runtime",
+        "arn:aws:kms:eu-central-1:891377212104:alias/user-service-runtime",
+    ],
+)
+def test_the_encryption_rule_must_name_the_runtime_cmk_key_arn(key):
+    """V-16 (b): the bucket encryption names the key ARN, never an ID or alias."""
+    with pytest.raises(ValueError, match="runtime CMK key ARN"):
+        require_runtime_cmk_encryption(flow_log_encryption_rule(key), key)
 
 
 def test_the_runtime_cmk_rule_passes_and_an_aws_managed_key_fails():
@@ -310,9 +347,7 @@ def test_a_rendered_role_or_force_destroy_fails_the_composition(tmp_path, owner,
 
 
 def test_the_ops_guide_documents_flow_logs_and_v16():
-    text = " ".join((ROOT / "docs/sre-operations.md").read_text().split())
-    section = text[text.index("### VPC flow logs (S3.1, FR-15)") :]
-    section = section[: section.index("## CI Troubleshooting")]
+    section = _flow_log_section()
     for marker in (
         "`traffic_type` `ALL`",
         "no IAM role argument",
@@ -321,9 +356,72 @@ def test_the_ops_guide_documents_flow_logs_and_v16():
         "`force_destroy=false`",
         "30 days in TEST and 90 days in PROD",
         "`delivery.logs.amazonaws.com` `s3:PutObject` on `AWSLogs/<acct>/*`",
-        "**V-16 (first case, docs):**",
+        "Sid `AWSLogDeliveryWrite`",
+        "`s3:x-amz-acl` = `bucket-owner-full-control`",
+        "Sid `AWSLogDeliveryAclCheck`",
+        "the flow log depends on the bucket policy",
+        "by key ARN, never by key ID or alias",
         "`kms:GenerateDataKey*` and `kms:Decrypt`",
         "SSE-S3 is not a fallback",
-        "always `retain` in an abandon manifest",
     ):
         assert marker in section, marker
+
+
+def test_the_key_policy_n_row_is_recorded_as_enforced_in_bootstrap_s54():
+    """S31-F1: FR-15's key-policy N row is owned by BI S5.4, proven by S4.6."""
+    section = _flow_log_section()
+    for marker in (
+        "**Runtime key policy (enforced elsewhere):**",
+        "SSE-KMS without the delivery principal in the runtime key policy fails",
+        "has no input in this repository",
+        "`central.cmk.runtime` holds only `arn` and `alias`",
+        "`kms:GenerateDataKey*` and `kms:Decrypt`, with `aws:SourceAccount` and "
+        "`aws:SourceArn` like `arn:aws:logs:<region>:<acct>:*`",
+        "owned and tested by bootstrap-infrastructure S5.4",
+        "S4.6 step 12 (a TEST object delivered with the runtime CMK)",
+        "under the V-16 STOP rule",
+    ):
+        assert marker in section, marker
+
+
+def test_the_import_and_abandon_owners_are_recorded():
+    """S31-F2: S4.2, S4.3 and S4.10 own the N-06 artefacts (AD-16, D-11)."""
+    section = _flow_log_section()
+    for marker in (
+        'S4.2 owns the abandon-manifest schema, including "log-bucket families '
+        'always retain" and the N5 refusal of delete on the flow-log bucket',
+        "S4.3 owns `import-list.json`",
+        "S4.10 owns `delete-actions.json` and the `retainOnDelete` allowance",
+    ):
+        assert marker in section, marker
+
+
+def test_v16_is_closed_from_dated_aws_sources():
+    """S31-F3: V-16 cites the AWS pages, the date and the STOP rule."""
+    section = _flow_log_section()
+    for marker in (
+        "**V-16 (closed offline from AWS docs, verified 2026-10-02):**",
+        "<https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs-s3-permissions.html>",
+        "<https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs-s3-cmk-policy.html>",
+        "<https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/"
+        "AWS-logs-infrastructure-V2-S3.html>",
+        "<https://docs.aws.amazon.com/vpc/latest/tgw/flow-logs-s3.html>",
+        '"overwrites any existing policy"',
+        '"LogDestination undeliverable"',
+        "`kms:Encrypt`, `kms:Decrypt`, `kms:ReEncrypt*`, `kms:GenerateDataKey*` and "
+        "`kms:DescribeKey`",
+        "AD-15a stands",
+        "`logs:CreateLogDelivery` and `logs:DeleteLogDelivery`",
+        "**STOP rule:** if live delivery in S4.6 step 12 fails, STOP and widen the "
+        "runtime key policy by a reviewed bootstrap-infrastructure PR",
+        "**Auto-attach and drift check:**",
+        "compare it with the reviewed document",
+        "If the live policy differs from the reviewed document, STOP",
+    ):
+        assert marker in section, marker
+
+
+def _flow_log_section():
+    text = " ".join((ROOT / "docs/sre-operations.md").read_text().split())
+    section = text[text.index("### VPC flow logs (S3.1, FR-15)") :]
+    return section[: section.index("## CI Troubleshooting")]

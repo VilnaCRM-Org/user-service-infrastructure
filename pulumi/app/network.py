@@ -403,7 +403,8 @@ class NetworkPlane(pulumi.ComponentResource):
         AWS creates the default group with the VPC and it cannot be deleted.
         Pulumi adopts it on create and removes every ingress and egress rule;
         deleting this resource only stops managing it and leaves the group in
-        place with no rules (docs/poc-first-workload-topology.md).
+        place with no rules (docs/sre-operations.md, "Managed default security
+        group (S3.2, FR-16)").
         """
         aws.ec2.DefaultSecurityGroup(
             "user-service-default-sg",

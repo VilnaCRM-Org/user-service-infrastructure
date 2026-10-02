@@ -8,9 +8,11 @@ re-added rule in a rendered graph fails the composition (N). Boundary B: the
 adoption and destroy semantics are written down in ``docs/sre-operations.md``.
 """
 
+import re
 from pathlib import Path
 
 import pytest
+from app.network import NetworkPlane
 from app.workload_phase import _reject_secret_material
 from test_poc_workload_phase import graph
 from test_runtime_secrets import _transform_args
@@ -110,3 +112,16 @@ def test_the_ops_guide_documents_adoption_and_destroy():
         "the bridge graph does not manage the default group",
     ):
         assert marker in section, marker
+
+
+def test_the_default_sg_docstring_cites_the_ops_guide_section():
+    """S32-F1: the docstring cites the file that holds the adoption section."""
+    doc = " ".join(NetworkPlane._default_security_group.__doc__.split())
+    citation = re.search(r'\((docs/[^,)]+)(?:, "([^"]+)")?\)', doc)
+    assert citation.groups() == (
+        "docs/sre-operations.md",
+        "Managed default security group (S3.2, FR-16)",
+    )
+    assert "### Managed default security group (S3.2, FR-16)" in (
+        (ROOT / "docs/sre-operations.md").read_text()
+    )

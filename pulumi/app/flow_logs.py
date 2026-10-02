@@ -5,10 +5,12 @@ dedicated S3 bucket. The bucket uses SSE-KMS with the contract's runtime CMK
 (D-4) and a bucket key, blocks public access, enforces bucket-owner object
 ownership, keeps ``force_destroy=false`` and expires records after 30 days in
 TEST and 90 days in PROD. Its policy denies non-TLS access and lets only
-``delivery.logs.amazonaws.com`` write ``AWSLogs/<acct>/*`` and read the bucket
-ACL, each bound to ``aws:SourceAccount`` and ``aws:SourceArn``. No IAM role is
-used: S3 delivery runs as the log-delivery service. The runtime key policy
-grant for that service is governance-owned (V-16). SSE-S3 is not a fallback.
+``delivery.logs.amazonaws.com`` write ``AWSLogs/<acct>/*`` with
+``bucket-owner-full-control`` and read the bucket ACL, each bound to
+``aws:SourceAccount`` and ``aws:SourceArn``. No IAM role is used: S3 delivery
+runs as the log-delivery service. The runtime key policy grant for that
+service is owned and tested by bootstrap-infrastructure S5.4 (AD-15a, V-16),
+not here. SSE-S3 is not a fallback.
 """
 
 from __future__ import annotations
@@ -108,10 +110,12 @@ def require_roleless_flow_log(arguments: dict[str, Any]) -> dict[str, Any]:
     return arguments
 
 
-def _delivery_condition(region: str, account_id: str) -> dict[str, Any]:
+def _delivery_condition(
+    region: str, account_id: str, **string_equals: str
+) -> dict[str, Any]:
     """Bind a delivery statement to this account's log-delivery sources."""
     return {
-        "StringEquals": {"aws:SourceAccount": account_id},
+        "StringEquals": {"aws:SourceAccount": account_id, **string_equals},
         "ArnLike": {"aws:SourceArn": f"arn:aws:logs:{region}:{account_id}:*"},
     }
 
@@ -119,8 +123,16 @@ def _delivery_condition(region: str, account_id: str) -> dict[str, Any]:
 def flow_log_bucket_policy(
     bucket_arn: str, region: str, account_id: str
 ) -> dict[str, Any]:
-    """Render the TLS-only deny and the two log-delivery allows (FR-15)."""
+    """Render the TLS-only deny and the two log-delivery allows (FR-15).
+
+    The allows mirror the AWS-documented flow-log statements (Sids, actions,
+    resources and the ``bucket-owner-full-control`` ACL condition), so AWS
+    finds its statements present and has nothing to attach (V-16).
+    """
     condition = _delivery_condition(region, account_id)
+    write_condition = _delivery_condition(
+        region, account_id, **{"s3:x-amz-acl": "bucket-owner-full-control"}
+    )
     service = {"Service": FLOW_LOG_DELIVERY_SERVICE}
     return {
         "Version": "2012-10-17",
@@ -139,7 +151,7 @@ def flow_log_bucket_policy(
                 "Principal": service,
                 "Action": "s3:PutObject",
                 "Resource": f"{bucket_arn}/AWSLogs/{account_id}/*",
-                "Condition": condition,
+                "Condition": write_condition,
             },
             {
                 "Sid": "AWSLogDeliveryAclCheck",

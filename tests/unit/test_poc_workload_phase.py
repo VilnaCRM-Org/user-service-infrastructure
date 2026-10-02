@@ -558,6 +558,28 @@ def _fixture_builders(options, identity):
             name="/user-service-infrastructure/runtime/test/redis_url",
             opts=options,
         ),
+        # FR-16 N (S3.2): a default security group may hold no rule.
+        "default-sg-ingress": lambda: aws.ec2.DefaultSecurityGroup(
+            "fixture-default-sg",
+            vpc_id="vpc-fixture",
+            ingress=[{"protocol": "-1", "from_port": 0, "to_port": 0, "self": True}],
+            egress=[],
+            opts=options,
+        ),
+        "default-sg-egress": lambda: aws.ec2.DefaultSecurityGroup(
+            "fixture-default-sg",
+            vpc_id="vpc-fixture",
+            ingress=[],
+            egress=[
+                {
+                    "protocol": "-1",
+                    "from_port": 0,
+                    "to_port": 0,
+                    "cidr_blocks": ["0.0.0.0/0"],
+                }
+            ],
+            opts=options,
+        ),
         # N2: a hardened program calls no provider function.
         "random-password-invoke": lambda: aws.secretsmanager.get_random_password(
             password_length=16

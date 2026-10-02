@@ -321,6 +321,24 @@ Docs-verified cases recorded with these runbooks:
 - **Missing data:** `missing`: the metric is published only while clients authenticate with IAM, and the alarm is informational.
 - **Evidence to keep:** the call metric, the DocumentDB audit entries for `MONGODB-AWS`, and the client connection counts.
 
+## Network Hardening
+
+### Managed default security group (S3.2, FR-16)
+
+The hardened workload program declares one `aws:ec2/defaultSecurityGroup:DefaultSecurityGroup`
+(`user-service-default-sg`) on the workload VPC with empty `ingress` and empty `egress`. Nothing in the
+workload may use the default group, so it holds zero rules (Security Hub EC2.2).
+
+- **Adoption:** AWS creates the default group with the VPC, and the group cannot be deleted. Pulumi does
+  not create a new group: on the first apply it adopts the existing default group and removes every
+  ingress and egress rule it finds. No import step is needed.
+- **Drift:** a rule added outside Pulumi shows as drift and the next apply removes it. A rule added in
+  code fails the hardened guard (`Hardened workload graph holds an unreviewed property`) before any
+  preview.
+- **Destroy:** deleting the resource, or destroying the stack, only stops Pulumi managing the group.
+  The group stays in the VPC with the rules it had, which is zero rules, until AWS deletes the VPC.
+- **Pre-hardening graph:** the bridge graph does not manage the default group (AD-25).
+
 ## CI Troubleshooting
 
 Map failures back to their local commands:

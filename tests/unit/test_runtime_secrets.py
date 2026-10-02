@@ -691,12 +691,12 @@ def test_hardened_allowlist_is_exactly_the_rendered_graph(tmp_path):
     # S2.1 adds the tagged scalable target, the untagged policy and scheduled
     # action, and the autoscaling component. S2.3 adds the tagged alarm topic,
     # the untagged topic policy and the observability component. S2.4 adds the
-    # tagged metric alarm.
+    # tagged metric alarm. S3.2 adds the tagged VPC default security group.
     assert (
         len(HARDENED_TAGGED_TYPES),
         len(HARDENED_UNTAGGED_TYPES),
         len(HARDENED_COMPONENT_TYPES),
-    ) == (28, 14, 11)
+    ) == (29, 14, 11)
     assert {kind for kind in HARDENED_TYPES if kind.startswith("aws:elasticache/")} == {
         "aws:elasticache/replicationGroup:ReplicationGroup",
         "aws:elasticache/subnetGroup:SubnetGroup",

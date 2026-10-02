@@ -583,6 +583,8 @@ def test_property_checks_cover_every_secret_bearing_rendered_type():
         "aws:sns/topic:Topic",
         # S2.4 gate I1: alarm actions only to the alarm topic (FR-13).
         "aws:cloudwatch/metricAlarm:MetricAlarm",
+        # S3.2: the VPC default security group holds no rule (FR-16).
+        "aws:ec2/defaultSecurityGroup:DefaultSecurityGroup",
     }
     assert set(HARDENED_PROPERTY_CHECKS) <= HARDENED_TYPES
 

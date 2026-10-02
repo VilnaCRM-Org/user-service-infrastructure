@@ -6,16 +6,21 @@ EventBridge publish, each with ``aws:SourceAccount`` equal to the workload
 account. The subscription endpoint is XP-6, so the graph holds none.
 """
 
+import asyncio
 import json
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from app.observability import (
     ALARM_TOPIC_PUBLISHERS,
+    ObservabilityPlane,
     alarm_topic_policy,
     require_reviewed_topic_policy,
     require_runtime_cmk,
 )
 from app.workload_phase import _reject_secret_material
+from pulumi.runtime import mocks, settings, stack
 from test_poc_workload_phase import TAGS, graph
 from test_runtime_secrets import _transform_args
 from test_workload_step_one import JWT_CMK, RUNTIME_CMK, _secret, _unresolved
@@ -25,6 +30,8 @@ TOPIC_POLICY = "aws:sns/topicPolicy:TopicPolicy"
 ACCOUNT = "891377212104"
 TOPIC_NAME = "user-service-infrastructure-test-alarms"
 TOPIC_ARN = f"arn:aws:sns:eu-central-1:{ACCOUNT}:{TOPIC_NAME}"
+# FR-13 names exactly these publishers; the literal keeps the code honest.
+PUBLISHERS = {"cloudwatch.amazonaws.com", "events.amazonaws.com"}
 
 
 @pytest.fixture(scope="module")
@@ -50,6 +57,14 @@ def test_the_hardened_graph_declares_one_topic_on_the_runtime_cmk(rows):
     assert topic["parent"] == plane["urn"]
     # XP-6: the subscription endpoint is not known, so none is declared.
     assert not [row for row in rows if row["type"].startswith("aws:sns/topicSub")]
+    # An inline topic ``policy`` would bypass the reviewed TopicPolicy.
+    assert "policy" not in topic["inputs"]
+
+
+def test_the_publisher_constant_names_exactly_the_reviewed_publishers():
+    """FR-13: a third publisher in the constant fails the suite."""
+    assert set(ALARM_TOPIC_PUBLISHERS) == PUBLISHERS
+    assert len(ALARM_TOPIC_PUBLISHERS) == 2
 
 
 def test_the_topic_policy_allows_only_the_two_publishers_in_the_account(rows):
@@ -58,9 +73,8 @@ def test_the_topic_policy_allows_only_the_two_publishers_in_the_account(rows):
     assert policy["arn"] == TOPIC_ARN
     document = json.loads(policy["policy"])
     statements = document["Statement"]
-    assert sorted(s["Principal"]["Service"] for s in statements) == sorted(
-        ALARM_TOPIC_PUBLISHERS
-    )
+    assert len(statements) == 2
+    assert {s["Principal"]["Service"] for s in statements} == PUBLISHERS
     for statement in statements:
         assert statement["Effect"] == "Allow"
         assert statement["Action"] == "sns:Publish"
@@ -68,7 +82,7 @@ def test_the_topic_policy_allows_only_the_two_publishers_in_the_account(rows):
         assert statement["Condition"] == {
             "StringEquals": {"aws:SourceAccount": ACCOUNT}
         }
-    assert require_reviewed_topic_policy(document, ACCOUNT) == document
+    assert require_reviewed_topic_policy(document, ACCOUNT, TOPIC_ARN) == document
 
 
 def _statement(index=0, **changes):
@@ -97,6 +111,13 @@ def _without_condition():
         _statement(Principal={"Service": "*"}),
         _statement(Principal={"Service": "sns.amazonaws.com"}),
         _statement(Principal={"Service": "events.amazonaws.com", "AWS": "*"}),
+        # The same publisher with an extra principal key fails on its own.
+        _statement(Principal={"Service": "cloudwatch.amazonaws.com", "AWS": "*"}),
+        _statement(Principal=None),
+        _statement(Principal=7),
+        # Another or a wildcard resource.
+        _statement(Resource="*"),
+        _statement(Resource=f"{TOPIC_ARN}-other"),
         # Another action, a deny, an extra key or a repeated publisher.
         _statement(Action="sns:*"),
         _statement(Effect="Deny"),
@@ -116,7 +137,18 @@ def _without_condition():
 def test_an_unreviewed_topic_policy_fails_closed(policy):
     """FR-13 N: the suite detects every policy that is not the reviewed one."""
     with pytest.raises(ValueError, match="Alarm topic policy"):
-        require_reviewed_topic_policy(policy, ACCOUNT)
+        require_reviewed_topic_policy(policy, ACCOUNT, TOPIC_ARN)
+
+
+@pytest.mark.parametrize(
+    "topic_arn",
+    [None, "*", "", f"arn:aws:sns:eu-central-1:000000000000:{TOPIC_NAME}"],
+)
+def test_the_reviewed_policy_requires_the_topic_arn_in_the_account(topic_arn):
+    """FR-13 N: a policy reviewed against no topic or another account fails."""
+    policy = alarm_topic_policy(topic_arn, ACCOUNT)
+    with pytest.raises(ValueError, match="Alarm topic"):
+        require_reviewed_topic_policy(policy, ACCOUNT, topic_arn)
 
 
 @pytest.mark.parametrize("account", [None, "", "12345678901", "*", 891377212104])
@@ -124,7 +156,9 @@ def test_the_topic_policy_requires_the_workload_account(account):
     with pytest.raises(ValueError, match="workload account ID"):
         alarm_topic_policy(TOPIC_ARN, account)
     with pytest.raises(ValueError, match="workload account ID"):
-        require_reviewed_topic_policy(alarm_topic_policy(TOPIC_ARN, ACCOUNT), account)
+        require_reviewed_topic_policy(
+            alarm_topic_policy(TOPIC_ARN, ACCOUNT), account, TOPIC_ARN
+        )
 
 
 def test_the_runtime_cmk_key_arn_is_accepted():
@@ -180,6 +214,15 @@ def test_a_topic_off_the_runtime_cmk_fails_the_guard(engine_path, key):
 
 
 @pytest.mark.parametrize("engine_path", [False, True])
+@pytest.mark.parametrize("policy", ["{}", alarm_topic_policy(TOPIC_ARN, ACCOUNT)])
+def test_a_topic_with_an_inline_policy_fails_the_guard(engine_path, policy):
+    """M2: an inline ``policy`` would bypass the reviewed TopicPolicy."""
+    args = _topic(engine_path, RUNTIME_CMK, policy=policy)
+    with pytest.raises(ValueError, match="unreviewed property"):
+        _reject_secret_material(args, runtime_cmk=RUNTIME_CMK)
+
+
+@pytest.mark.parametrize("engine_path", [False, True])
 def test_an_unbound_or_opaque_topic_key_fails_closed(engine_path):
     for args, bound in (
         (_topic(engine_path, RUNTIME_CMK), None),
@@ -196,3 +239,70 @@ def test_an_unbound_or_opaque_topic_key_fails_closed(engine_path):
     ):
         with pytest.raises(ValueError, match="unreviewed property"):
             _reject_secret_material(args, runtime_cmk=bound)
+
+
+class PreviewMocks(mocks.Mocks):
+    """Echo inputs and leave every provider output unknown, as in a preview."""
+
+    def new_resource(self, args):
+        return f"{args.name}-id", dict(args.inputs)
+
+    def call(self, args):
+        return args.inputs
+
+
+def _run_preview(program):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        mocks.set_mocks(
+            PreviewMocks(),
+            project="user-service-infrastructure",
+            stack="test",
+            preview=True,
+            monitor=mocks.MockMonitor(PreviewMocks()),
+        )
+        loop.run_until_complete(stack.run_pulumi_func(program))
+        loop.run_until_complete(asyncio.sleep(0))
+    finally:
+        settings.reset_options(project=None, stack=None)
+        loop.close()
+        asyncio.set_event_loop(None)
+
+
+STACK = SimpleNamespace(
+    stack_tag="user-service-infrastructure-test", region="eu-central-1"
+)
+
+
+def _plane(key=RUNTIME_CMK):
+    return ObservabilityPlane(
+        "observability", settings=STACK, runtime_cmk_arn=key, account_id=ACCOUNT
+    )
+
+
+def test_the_topic_policy_document_is_known_at_preview():
+    """L4: the reviewed document never waits on the unknown topic ARN."""
+    policies = []
+
+    def capture(*args, **kwargs):
+        policies.append(kwargs["policy"])
+
+    with patch("app.observability.aws.sns.TopicPolicy", side_effect=capture):
+        _run_preview(_plane)
+    assert len(policies) == 1
+    assert type(policies[0]) is str
+    document = json.loads(policies[0])
+    assert require_reviewed_topic_policy(document, ACCOUNT, TOPIC_ARN) == document
+
+
+@pytest.mark.parametrize("key", [None, "alias/aws/sns", "alias/synthetic-poc-runtime"])
+def test_the_plane_refuses_a_key_that_is_not_the_runtime_cmk(key):
+    """S2.3 N: the plane fails closed before it declares any resource."""
+    topics = []
+    with (
+        patch("app.observability.aws.sns.Topic", side_effect=topics.append),
+        pytest.raises(ValueError, match="Alarm topic"),
+    ):
+        _run_preview(lambda: _plane(key))
+    assert topics == []

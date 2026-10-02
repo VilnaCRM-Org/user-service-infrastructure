@@ -635,10 +635,13 @@ def _runtime_cmk_topic(props, sdk_path: bool, runtime_cmk=None) -> bool:
 
     ``kmsMasterKeyId`` must equal ``runtime_cmk``, the hardened contract's
     ``central.cmk.runtime.arn``. No key, ``alias/aws/sns`` or any other key
-    fails, and an unbound check accepts no topic.
+    fails, and an unbound check accepts no topic. An inline ``policy`` fails
+    too: the publish policy joins only as the reviewed ``TopicPolicy``.
     """
     key = _read(props, "kms_master_key_id", "kmsMasterKeyId", sdk_path)
-    return runtime_cmk is not None and key == runtime_cmk
+    return (
+        runtime_cmk is not None and key == runtime_cmk and props.get("policy") is None
+    )
 
 
 def _reviewed_secret(props, sdk_path: bool) -> bool:

@@ -16,11 +16,12 @@ from typing import Any, Optional
 import pulumi_aws as aws
 
 import pulumi
-from app.environment import StackSettings
+from app.environment import StackSettings, build_resource_name
 
 __all__ = [
     "ALARM_TOPIC_PUBLISHERS",
     "ObservabilityPlane",
+    "alarm_topic_arn",
     "alarm_topic_policy",
     "require_reviewed_topic_policy",
     "require_runtime_cmk",
@@ -33,6 +34,7 @@ ALARM_TOPIC_ACTION = "sns:Publish"
 AWS_MANAGED_KEY_PREFIX = "alias/aws/"
 _KMS_KEY_ARN = re.compile(r"arn:aws:kms:[a-z0-9-]+:[0-9]{12}:key/[A-Za-z0-9-]+")
 _ACCOUNT_ID = re.compile(r"[0-9]{12}")
+_TOPIC_ARN = r"arn:aws:sns:[a-z0-9-]+:{account}:[A-Za-z0-9_-]{{1,256}}"
 
 
 def require_runtime_cmk(key: Any) -> str:
@@ -56,6 +58,19 @@ def _require_account(account_id: Any) -> str:
     return account_id
 
 
+def alarm_topic_arn(region: str, account_id: str, name: str) -> str:
+    """Build the topic ARN from its parts, so the policy is known at preview."""
+    return f"arn:aws:sns:{region}:{_require_account(account_id)}:{name}"
+
+
+def _require_topic_arn(topic_arn: Any, account_id: str) -> str:
+    """Accept only an SNS topic ARN in the workload account."""
+    pattern = _TOPIC_ARN.format(account=account_id)
+    if type(topic_arn) is not str or not re.fullmatch(pattern, topic_arn):
+        raise ValueError("Alarm topic policy requires the topic ARN in the account")
+    return topic_arn
+
+
 def alarm_topic_policy(topic_arn: str, account_id: str) -> dict[str, Any]:
     """Render one ``sns:Publish`` allow per publisher, bound to the account."""
     _require_account(account_id)
@@ -75,12 +90,12 @@ def alarm_topic_policy(topic_arn: str, account_id: str) -> dict[str, Any]:
     }
 
 
-def _reviewed_statement(statement: Any, account_id: str) -> str | None:
+def _reviewed_statement(statement: Any, account_id: str, topic_arn: str) -> str | None:
     """Return the publisher of one reviewed statement, or ``None``.
 
     The statement must hold exactly the reviewed keys: an ``Allow`` of
-    ``sns:Publish`` for one service principal, conditioned only on
-    ``aws:SourceAccount`` equal to the workload account.
+    ``sns:Publish`` on the topic ARN for one service principal, conditioned
+    only on ``aws:SourceAccount`` equal to the workload account.
     """
     if type(statement) is not dict or set(statement) != {
         "Sid",
@@ -92,11 +107,13 @@ def _reviewed_statement(statement: Any, account_id: str) -> str | None:
     }:
         return None
     principal = statement["Principal"]
-    publisher = principal.get("Service") if type(principal) is dict else None
+    if type(principal) is not dict or set(principal) != {"Service"}:
+        return None
+    publisher = principal["Service"]
     reviewed = (
         statement["Effect"] == "Allow"
         and statement["Action"] == ALARM_TOPIC_ACTION
-        and set(principal) == {"Service"}
+        and statement["Resource"] == topic_arn
         and publisher in ALARM_TOPIC_PUBLISHERS
         and statement["Condition"]
         == {"StringEquals": {"aws:SourceAccount": account_id}}
@@ -104,18 +121,24 @@ def _reviewed_statement(statement: Any, account_id: str) -> str | None:
     return publisher if reviewed else None
 
 
-def require_reviewed_topic_policy(policy: Any, account_id: str) -> dict[str, Any]:
+def require_reviewed_topic_policy(
+    policy: Any, account_id: str, topic_arn: str
+) -> dict[str, Any]:
     """Fail closed unless the policy allows exactly the two publishers (FR-13).
 
-    Every statement must be a reviewed allow with the ``aws:SourceAccount``
-    condition; a missing condition, another principal, a wildcard principal,
-    another action or a repeated publisher fails.
+    Every statement must be a reviewed allow on ``topic_arn`` with the
+    ``aws:SourceAccount`` condition; a missing condition, another principal, a
+    wildcard principal or resource, another action or a repeated publisher
+    fails.
     """
     _require_account(account_id)
+    _require_topic_arn(topic_arn, account_id)
     statements = policy.get("Statement") if type(policy) is dict else None
     if type(statements) is not list:
         raise ValueError("Alarm topic policy is not a statement list")
-    publishers = [_reviewed_statement(entry, account_id) for entry in statements]
+    publishers = [
+        _reviewed_statement(entry, account_id, topic_arn) for entry in statements
+    ]
     if sorted(map(str, publishers)) != sorted(ALARM_TOPIC_PUBLISHERS):
         raise ValueError("Alarm topic policy grants an unreviewed publisher")
     return policy
@@ -135,28 +158,30 @@ class ObservabilityPlane(pulumi.ComponentResource):
         account_id: str,
         opts: Optional[pulumi.ResourceOptions] = None,
     ) -> None:
-        """Validate the key and account, then declare the topic and its policy."""
+        """Validate the key and account, then declare the topic and its policy.
+
+        The policy document names the topic ARN built from the region, the
+        account and the topic name, so it is a plain string at preview.
+        """
         key = require_runtime_cmk(runtime_cmk_arn)
-        _require_account(account_id)
+        topic_name = build_resource_name(settings.stack_tag, "alarms")
+        topic_arn = alarm_topic_arn(settings.region, account_id, topic_name)
+        policy = require_reviewed_topic_policy(
+            alarm_topic_policy(topic_arn, account_id), account_id, topic_arn
+        )
         super().__init__(
             "user-service-infrastructure:observability:Plane", name, None, opts
         )
         topic = aws.sns.Topic(
             "user-service-alarms",
-            name=f"{settings.stack_tag}-alarms",
+            name=topic_name,
             kms_master_key_id=key,
             opts=pulumi.ResourceOptions(parent=self),
         )
         aws.sns.TopicPolicy(
             "user-service-alarms-policy",
             arn=topic.arn,
-            policy=topic.arn.apply(
-                lambda arn: json.dumps(
-                    require_reviewed_topic_policy(
-                        alarm_topic_policy(arn, account_id), account_id
-                    )
-                )
-            ),
+            policy=json.dumps(policy),
             opts=pulumi.ResourceOptions(parent=self),
         )
         self.topic_arn = topic.arn

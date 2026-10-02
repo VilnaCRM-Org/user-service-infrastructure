@@ -580,6 +580,7 @@ def test_property_checks_cover_every_secret_bearing_rendered_type():
         SECRET,
         SERVICE,
         "aws:sesv2/emailIdentity:EmailIdentity",
+        "aws:sns/topic:Topic",
     }
     assert set(HARDENED_PROPERTY_CHECKS) <= HARDENED_TYPES
 

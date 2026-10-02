@@ -68,3 +68,50 @@ def test_fr14_release_platform_refusal_is_traced_to_tests_that_refuse_it():
     assert FR14_PLATFORM_TESTS <= named
     for name in named:
         assert (ROOT / "tests/unit" / name).is_file(), name
+
+
+def _flat(text):
+    return " ".join(text.split())
+
+
+def _rows(text, row_id):
+    return [line for line in text.splitlines() if line.startswith(f"| {row_id} |")]
+
+
+def _story(text, heading):
+    start = text.index(heading)
+    return text[start : text.index("\n### ", start + len(heading))]
+
+
+def test_nfr08_is_measured_from_the_alarm_history_alarm_transition():
+    prd = (BUNDLE / "prd.md").read_text()
+    requirement, verification = _rows(prd, "NFR-08")
+    epics = (BUNDLE / "epics-stories.md").read_text()
+    start, end = epics.index("  11. **Alarms:**"), epics.index("  12. **Scaling")
+    step = _flat(epics[start:end])
+    for text in (requirement, step):
+        assert "the newest ALARM item after the exercise start" in text
+        assert "`DescribeAlarmHistory`, `HistoryItemType` `StateUpdate`" in text
+        assert "to the SNS delivery record" in text
+        assert "≤ 300 s" in text
+        assert "evidence only, next to the alarm's documented evaluation window" in text
+        assert "from the induced condition to the SNS" not in text
+    assert "planning correction" in requirement
+    assert "301 s after the ALARM transition fails" in verification
+
+
+def test_dlq_alarm_exercise_removes_only_its_own_marker():
+    epics = (BUNDLE / "epics-stories.md").read_text()
+    exercise = _flat(_story(epics, "### S4.16 (USI): TEST exercise workflow"))
+    assert "a unique exercise-run message attribute" in exercise
+    assert (
+        "removes only that marker (`ReceiveMessage`, match the attribute, "
+        "`DeleteMessage` by receipt handle)" in exercise
+    )
+    assert "never `PurgeQueue` and never redrive" in exercise
+    grants = _rows(epics, "S5.23")[0]
+    assert (
+        "`sqs:SendMessage`, `sqs:ReceiveMessage` and `sqs:DeleteMessage` "
+        "on the three DLQs only" in grants
+    )
+    assert "`cloudwatch:DescribeAlarmHistory`" in grants

@@ -397,6 +397,25 @@ This file is the execution ledger. It is not a planning input.
   ordered-list notes, the "ARM64 before S4.14" residual and the
   revision-10 audit finding 2 and its residual). The manifest below hashes both changed files.
 
+- **NFR-08 measure (planning correction of S2.4 gate finding F5, not a
+  user decision; 2026-10-02).** The DLQ alarm's own §3.1 window plus SQS
+  metric latency exceeds 300 s, so a measure from the induced condition
+  could never pass. NFR-08 (PRD row and verification row, S4.6 step 11)
+  is now measured from the alarm's ALARM transition, the newest ALARM
+  `StateUpdate` item of `DescribeAlarmHistory` after the exercise start,
+  to the SNS delivery record (≤ 300 s); the induced-condition-to-ALARM
+  time is evidence only, beside the alarm's documented evaluation window.
+  The S4.16 `alarm` exercise sends a marker with a unique exercise-run
+  message attribute and removes only that marker (`ReceiveMessage`,
+  attribute match, `DeleteMessage` by receipt handle; never `PurgeQueue`,
+  never redrive); S5.23 adds `sqs:ReceiveMessage` and `sqs:DeleteMessage`
+  on the three DLQs only and `cloudwatch:DescribeAlarmHistory` on the
+  exercised alarms (one aws-knowledge MCP lookup confirmed that a grant
+  narrower than `*` serves metric alarms read by name). No wait, query
+  or other mechanism was added.
+  `tests/unit/test_workload_hardening_bundle.py` pins both. The manifest
+  below hashes `prd.md` and `epics-stories.md` after this change.
+
 ## Artifacts (sha256, revision 14)
 
 `run-summary.md` is not hashed here, because it contains the hashes. `decisions.md` is a planning input and is hashed. Commit `68584e1` added its D-14 row after revision 5; revision 6 changed only that row's label (a user decision, not a planning default); revisions 7, 8 and 9 do not change it; revision 10 adds the D-15 row (a user decision of 2026-09-30); revision 11 changes only D-15's note text (R11-n3); revisions 12, 13 and 14 do not change it; later amendments add the D-16, D-17 and D-18 rows. `research.md` is unchanged since revision 4; `brief.md` changed in revision 10 (front matter and AS-4, D-15) and last in the D-18 amendment of 2026-10-02 (the front-matter revision note and the user-service scope line, line 108).
@@ -405,9 +424,9 @@ Check with `sha256sum -c` over the block below, from `specs/workload-wa-hardenin
 ```
 beca16ba9ab95d76cd28ed47ac8e806549b94805ddca9a2d138a790ee0f0ca59  research.md
 1712de950689f5c87b62a0e420a298bd4582e4e42b74f943a0a99a4e836299b4  brief.md
-cfe84f75fbca85aa182a7c0c4ba40e36e24344a4903a87879372aee2a9291e28  prd.md
+e14836fbd12df23a2671b7645a4212ae225b02d0775619f4be440521f652f944  prd.md
 3fb504585224bc4a3d17e7b5d2fe7c8a90f7dc19bcafaa0a6d1343d6f30a2514  architecture.md
-3da2c9add16ac7d81497b008382c424533de3392be207a8be82a79b2c0bb4a37  epics-stories.md
+3cc160c591f764373085d52993e32d487dbf42bc1067a3a95db56b91259febbd  epics-stories.md
 d141bad2c3a9e56c5503c4a16c4e9c1506afcd1ee4773696c4977a871ec15633  decisions.md
 e0eabebc0a64c9838c9c3ffabad683707fc0f680cc873a57aef63f4d5743937a  readiness.md
 ```

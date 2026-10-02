@@ -501,7 +501,10 @@ the pre-commit audit are cited as "audit <n>".
 
 **Ordered list (re-verified in revision 10).** Still 53 rows (0-52); no
 row is added or moved. Row 0 lists D-15. Row 39 (S4.14) adds the D-15
-code change and the publisher request's release platform (FR-14 (a)). Row 42 now carries XP-11's BI identity change and TEST seed
+code change and the publisher request's release platform (FR-14 (a)). Superseded by D-18 (2026-10-02):
+FR-14 (a) ARM64 is declined, so row 39 (S4.14) keeps the publisher request literal
+`"platform": "linux/amd64"` (`scripts/poc_publisher_dispatch.py` line 170) pinned by a test and
+narrows the enums to `linux/amd64`. Row 42 now carries XP-11's BI identity change and TEST seed
 amendment after S5.18a, before S4.6 (row 43), which checks it. Row 48's
 XP-14 PROD versioning addition is a PROD seed amendment before S5.24a's
 (row 50). Row 49 is the issued PROD certificate with its supplied ARN

@@ -393,9 +393,9 @@ This file is the execution ledger. It is not a planning input.
   `readiness.md` keeps its round text unchanged; a one-sentence
   "Superseded by D-18 (2026-10-02)" note now follows each statement that
   read as a live arm64, multi-arch or `publish_platform` promise (the
-  R11-m3, R11-m4 and R10-n6 rows, the revision-11 ordered-list note, the
-  "ARM64 before S4.14" residual and the revision-10 audit finding 2 and
-  its residual). The manifest below hashes both changed files.
+  R11-m3, R11-m4 and R10-n6 rows, the revision-10 and revision-11
+  ordered-list notes, the "ARM64 before S4.14" residual and the
+  revision-10 audit finding 2 and its residual). The manifest below hashes both changed files.
 
 ## Artifacts (sha256, revision 14)
 
@@ -409,7 +409,7 @@ cfe84f75fbca85aa182a7c0c4ba40e36e24344a4903a87879372aee2a9291e28  prd.md
 3fb504585224bc4a3d17e7b5d2fe7c8a90f7dc19bcafaa0a6d1343d6f30a2514  architecture.md
 3da2c9add16ac7d81497b008382c424533de3392be207a8be82a79b2c0bb4a37  epics-stories.md
 d141bad2c3a9e56c5503c4a16c4e9c1506afcd1ee4773696c4977a871ec15633  decisions.md
-91d45f751e3a649e3b7236e6487c8b0c275fe7e923d5610597b0e01658a99683  readiness.md
+e0eabebc0a64c9838c9c3ffabad683707fc0f680cc873a57aef63f4d5743937a  readiness.md
 ```
 
 ## Gates

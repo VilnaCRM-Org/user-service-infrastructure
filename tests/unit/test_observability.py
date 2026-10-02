@@ -11,9 +11,11 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pulumi_aws as aws
 import pytest
 from app.observability import (
     ALARM_TOPIC_PUBLISHERS,
+    AlarmTargets,
     ObservabilityPlane,
     alarm_topic_policy,
     require_reviewed_topic_policy,
@@ -275,18 +277,37 @@ STACK = SimpleNamespace(
 )
 
 
+TARGETS = AlarmTargets(
+    failed_queue_names=("failed-a", "failed-b", "failed-c"),
+    request_count_label="app/alb/1/targetgroup/tg/2",
+    cluster_name="cluster",
+    service_names={"web": "web", "worker": "worker"},
+    documentdb_cluster_identifier="docdb",
+    documentdb_instance_identifiers=("docdb-1",),
+    documentdb_instance_class="db.t4g.medium",
+    redis_cache_cluster_ids=("redis-001",),
+)
+
+
 def _plane(key=RUNTIME_CMK):
     return ObservabilityPlane(
-        "observability", settings=STACK, runtime_cmk_arn=key, account_id=ACCOUNT
+        "observability",
+        settings=STACK,
+        runtime_cmk_arn=key,
+        account_id=ACCOUNT,
+        targets=TARGETS,
     )
 
 
 def test_the_topic_policy_document_is_known_at_preview():
     """L4: the reviewed document never waits on the unknown topic ARN."""
     policies = []
+    declare = aws.sns.TopicPolicy
 
     def capture(*args, **kwargs):
         policies.append(kwargs["policy"])
+        # The alarms wait on the policy, so it stays a real resource.
+        return declare(*args, **kwargs)
 
     with patch("app.observability.aws.sns.TopicPolicy", side_effect=capture):
         _run_preview(_plane)
@@ -294,6 +315,21 @@ def test_the_topic_policy_document_is_known_at_preview():
     assert type(policies[0]) is str
     document = json.loads(policies[0])
     assert require_reviewed_topic_policy(document, ACCOUNT, TOPIC_ARN) == document
+
+
+def test_every_alarm_action_is_the_plain_topic_arn_at_preview():
+    """S2.4: the alarm actions never wait on the unknown topic ARN."""
+    alarms = []
+
+    def capture(*args, **kwargs):
+        alarms.append(kwargs)
+
+    with patch("app.observability.aws.cloudwatch.MetricAlarm", side_effect=capture):
+        _run_preview(_plane)
+    assert len(alarms) == 14
+    for alarm in alarms:
+        assert alarm["alarm_actions"] == [TOPIC_ARN]
+        assert alarm["ok_actions"] in ([], [TOPIC_ARN])
 
 
 @pytest.mark.parametrize("key", [None, "alias/aws/sns", "alias/synthetic-poc-runtime"])

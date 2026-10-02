@@ -123,6 +123,204 @@ When something looks wrong:
 6. if a change is intentionally destructive, document the reason and add the
    `allow-destructive-infra-change` label instead of bypassing the workflow
 
+## Alarm Runbooks
+
+Every CloudWatch metric alarm of the PRD §3.1 catalogue (FR-13) is declared in
+`pulumi/app/observability.py`. Each alarm is named
+`<stack tag>-<suffix>`, for example `user-service-infrastructure-test-dlq-failed-send-email`,
+and sends its alarm action and its OK action only to the service-owned SNS
+topic `<stack tag>-alarms` on the runtime CMK (S2.3); no alarm has an
+insufficient-data action. The hardened guard refuses any other action list.
+The topic subscription endpoint is XP-6. Each heading below is the alarm
+suffix; `tests/unit/test_alarm_runbooks.py` fails when a declared alarm has no
+entry, when an entry lacks a severity, first responder, escalation,
+containment, missing-data or evidence line, or when the missing-data line
+differs from the declared alarm.
+
+Rules for every entry:
+
+- The first responder is the service owner on call.
+- Any §3.2a secret, IAM or KMS event escalates to Kravalg.
+- A containment that stops PROD (the `rollback-zero` stop plan) records the
+  incident reason in the stop PR (AD-10).
+- A containment names only actions that admission accepts. A `policy-update`
+  plan changes only the managed-secret `SecretPolicy` or a `VpcEndpoint`
+  policy, with `policy` as the only changed input (FR-07). A security-group,
+  role or IAM change goes through a reviewed PR, a BI role change or a Kravalg
+  escalation, never a `policy-update` plan.
+- The missing-data line records the alarm's `treatMissingData` mode and why:
+  `notBreaching` where a quiet metric is no failure, `breaching` where an
+  always-published metric bound to the data plane is absent only when the
+  dimension is wrong or the instance is gone, and `missing` where the alarm
+  keeps its state (no insufficient-data action pages anyone).
+- Never copy secret values, tokens or decrypted outputs into the evidence.
+
+Severities: **SEV-1** is customer-facing loss of service, **SEV-2** is loss of
+work or degraded capacity, **SEV-3** is a risk that needs action within one
+working day, and **informational** needs no immediate action.
+
+Docs-verified cases recorded with these runbooks:
+
+- **V-11:** DocumentDB publishes `StsGetCallerIdentityCalls` for IAM
+  (`MONGODB-AWS`) authentication (`iam-identity-auth.html`, verified
+  2026-09-30). The live TEST check must confirm data at the alarm's own
+  `DBClusterIdentifier` dimension (the data plane's cluster identifier, for
+  example `user-service-infrastructure-test-docdb`), not only at some other
+  dimension. The fallback, if it shows no data there, is to drop the
+  informational `docdb-sts-calls` alarm by a reviewed PR and record it.
+- **V-25:** the ECS `awslogs` driver writes to the runtime-CMK log groups
+  without a KMS statement for the execution role (A-28). If a live check shows
+  `AccessDeniedException` on `PutLogEvents`, the fallback is the reviewed
+  AD-15a execution-role row (`kms:GenerateDataKey` with
+  `kms:ViaService=logs.<region>.amazonaws.com`) with both of its parts
+  (R14-n1): (1) an ECS runtime stack amendment (AD-26 layer 6) with `Modify`
+  rows on the execution role's policy and on its `-Boundary` and `-Guard`
+  policies (the guard's `NotResource` deny and the boundary allow), run by the
+  XP-17 installer; and (2) S5.4's runtime-CMK key-policy statement naming the
+  execution role (no root `kms:*`). Both parts run in the one conditional
+  row-43 serialization slot (R13-n5), after step 7's STOP and before step 18;
+  then step 7 is re-run.
+
+### `dlq-failed-send-email`
+
+- **Alarm:** `ApproximateNumberOfMessagesVisible` ≥ 1 on `failed-send-email` for 5 min.
+- **Severity:** SEV-2 (outbound mail was lost after its retries).
+- **First responder:** the service owner on call.
+- **Escalation:** the service owner lead; Kravalg if the cause is a §3.2a secret, IAM or KMS event (for example an SES or KMS `AccessDenied`).
+- **Containment:** stop the redrive, fix the cause by a reviewed PR (a `policy-update` plan only when the permission is in a `VpcEndpoint` policy), then redrive the queue to `send-email`.
+- **Missing data:** `notBreaching`: SQS stops publishing the metric for a queue idle for six hours, and an idle DLQ is the healthy state.
+- **Evidence to keep:** the message count and age, one sample message ID with its attributes, the worker log lines for that ID, and the fix PR.
+
+### `dlq-failed-domain-events`
+
+- **Alarm:** `ApproximateNumberOfMessagesVisible` ≥ 1 on `failed-domain-events` for 5 min.
+- **Severity:** SEV-2 (domain events were not processed).
+- **First responder:** the service owner on call.
+- **Escalation:** the service owner lead; Kravalg if the cause is a §3.2a secret, IAM or KMS event.
+- **Containment:** pause the redrive, fix the consumer or permission by a reviewed PR, then redrive to `domain-events`.
+- **Missing data:** `notBreaching`: SQS stops publishing the metric for a queue idle for six hours, and an idle DLQ is the healthy state.
+- **Evidence to keep:** the message count and age, sample message IDs, the worker log lines, and the fix PR.
+
+### `dlq-failed-insert-user-batch`
+
+- **Alarm:** `ApproximateNumberOfMessagesVisible` ≥ 1 on `failed-insert-user-batch` for 5 min.
+- **Severity:** SEV-2 (user batch inserts were not written).
+- **First responder:** the service owner on call.
+- **Escalation:** the service owner lead; Kravalg if the cause is a §3.2a secret, IAM or KMS event (for example a DocumentDB IAM authentication failure).
+- **Containment:** fix the cause by a reviewed PR, confirm DocumentDB health, then redrive to `insert-user-batch`.
+- **Missing data:** `notBreaching`: SQS stops publishing the metric for a queue idle for six hours, and an idle DLQ is the healthy state.
+- **Evidence to keep:** the message count and age, sample message IDs, the worker and DocumentDB log lines, and the fix PR.
+
+### `alb-target-5xx`
+
+- **Alarm:** `HTTPCode_Target_5XX_Count` > 5 per minute for 3 of 5 min.
+- **Severity:** SEV-1 (API requests fail).
+- **First responder:** the service owner on call.
+- **Escalation:** the service owner lead; Kravalg if the errors come from a §3.2a secret, IAM or KMS event.
+- **Containment:** roll back to the last good image by a reviewed PR; in PROD, if errors persist, apply the `rollback-zero` stop plan and record the incident reason (AD-10).
+- **Missing data:** `notBreaching`: the ALB publishes no 5xx count while no request fails.
+- **Evidence to keep:** the ALB access-log objects for the window, the web task log lines, the deployed image tag, and the rollback PR.
+
+### `alb-elb-5xx`
+
+- **Alarm:** `HTTPCode_ELB_5XX_Count` > 5 per minute for 3 of 5 min.
+- **Severity:** SEV-1 (the load balancer cannot reach a healthy target).
+- **First responder:** the service owner on call.
+- **Escalation:** the service owner lead; Kravalg if a listener certificate, IAM or KMS change caused it.
+- **Containment:** restore healthy targets (roll back the image or the task definition by a reviewed PR); in PROD, a `rollback-zero` stop records the incident reason (AD-10).
+- **Missing data:** `notBreaching`: the ALB publishes no 5xx count while no request fails.
+- **Evidence to keep:** the ALB access-log objects with the `elb_status_code`, the target health history, and the ECS service events.
+
+### `alb-unhealthy-targets`
+
+- **Alarm:** `UnHealthyHostCount` ≥ 1 for 3 min.
+- **Severity:** SEV-2 (capacity is degraded; SEV-1 when no target is healthy).
+- **First responder:** the service owner on call.
+- **Escalation:** the service owner lead; Kravalg if the health check fails on a §3.2a secret, IAM or KMS event.
+- **Containment:** let ECS replace the task; if the new tasks fail too, roll back the image by a reviewed PR.
+- **Missing data:** `notBreaching`: with no registered target (services at 0 tasks) nothing is unhealthy.
+- **Evidence to keep:** the target health reason codes, the stopped-task reasons, and the web task log lines.
+
+### `ecs-web-below-desired`
+
+- **Alarm:** Container Insights `RunningTaskCount` < `DesiredTaskCount` for the web service for 10 min (`IF(desired > 0, desired - FILL(running, 0), 0)`: a missing `RunningTaskCount` counts as 0 running tasks); suppressed while the desired count is 0 (TEST night or weekend stop, PROD `rollback-zero` stop).
+- **Severity:** SEV-2 (web capacity is below its target).
+- **First responder:** the service owner on call.
+- **Escalation:** the service owner lead; Kravalg if tasks stop on a secret, IAM or KMS error (for example `ResourceInitializationError` on a secret).
+- **Containment:** fix the task start failure by a reviewed PR; in PROD, a `rollback-zero` stop plan records the incident reason (AD-10).
+- **Missing data:** `notBreaching`: `FILL` already turns a missing running count into 0; with no desired count the service is stopped.
+- **Evidence to keep:** the ECS service events, the stopped-task reasons, and the web task log lines.
+
+### `ecs-worker-below-desired`
+
+- **Alarm:** Container Insights `RunningTaskCount` < `DesiredTaskCount` for the worker service for 10 min (`IF(desired > 0, desired - FILL(running, 0), 0)`: a missing `RunningTaskCount` counts as 0 running tasks); suppressed while the desired count is 0.
+- **Severity:** SEV-2 (queue processing is below its target).
+- **First responder:** the service owner on call.
+- **Escalation:** the service owner lead; Kravalg if tasks stop on a secret, IAM or KMS error.
+- **Containment:** fix the task start failure by a reviewed PR and watch the DLQ alarms; in PROD, a `rollback-zero` stop plan records the incident reason (AD-10).
+- **Missing data:** `notBreaching`: `FILL` already turns a missing running count into 0; with no desired count the service is stopped.
+- **Evidence to keep:** the ECS service events, the stopped-task reasons, the worker task log lines, and the queue depths.
+
+### `docdb-cpu`
+
+- **Alarm:** DocumentDB `CPUUtilization` > 80% for 15 min on the busiest instance: `MAX` over the per-`DBInstanceIdentifier` averages of the data plane's instances, so a hot writer alarms even when a quiet reader keeps the cluster average low.
+- **Severity:** SEV-3 (SEV-2 when API latency or errors rise with it).
+- **First responder:** the service owner on call.
+- **Escalation:** the service owner lead.
+- **Containment:** find the slow queries in the profiler log group, reduce the load (scale the worker down by a reviewed PR), and plan an index or instance-class change by a reviewed PR.
+- **Missing data:** `breaching`: every instance publishes CPU each period and the alarm names the data plane's instance outputs, so no data means a wrong dimension or a lost instance.
+- **Evidence to keep:** the profiler log entries, the Performance Insights top queries, and the change PR.
+
+### `docdb-freeable-memory`
+
+- **Alarm:** DocumentDB `FreeableMemory` below 10% of the instance class memory for 15 min.
+- **Severity:** SEV-3 (SEV-2 when swap or latency rises with it).
+- **First responder:** the service owner on call.
+- **Escalation:** the service owner lead.
+- **Containment:** reduce the working set or connections, then plan an instance-class change by a reviewed PR.
+- **Missing data:** `breaching`: the cluster publishes memory each period and the alarm names the data plane's cluster output, so no data means a wrong dimension.
+- **Evidence to keep:** the memory and connection metrics, the profiler log entries, and the change PR.
+
+### `redis-memory`
+
+- **Alarm:** Redis `DatabaseMemoryUsagePercentage` > 80% on any member for 15 min.
+- **Severity:** SEV-3.
+- **First responder:** the service owner on call.
+- **Escalation:** the service owner lead.
+- **Containment:** check the key TTLs and the largest keys, then plan a node-type change by a reviewed PR.
+- **Missing data:** `missing`: the member IDs are derived names, not outputs, so the alarm can exist before the group; it keeps its state, and the console shows `INSUFFICIENT_DATA` if a dimension is wrong.
+- **Evidence to keep:** the memory and key-count metrics per member, and the change PR.
+
+### `redis-evictions`
+
+- **Alarm:** Redis `Evictions` > 0 across the group in 5 min.
+- **Severity:** SEV-3 (SEV-2 when lockout or session keys are evicted).
+- **First responder:** the service owner on call.
+- **Escalation:** the service owner lead.
+- **Containment:** follow `redis-memory`; reduce the cached data or raise the node type by a reviewed PR.
+- **Missing data:** `notBreaching`: no eviction is the healthy state.
+- **Evidence to keep:** the eviction and memory metrics per member, and the change PR.
+
+### `redis-auth-failures`
+
+- **Alarm:** ElastiCache `AuthenticationFailures` > 0 across the group in 5 min. The IAM-auth metrics named by V-9 join this alarm only if a live check shows they are published.
+- **Severity:** SEV-2 (a client fails Redis IAM authentication; it can be an attack).
+- **First responder:** the service owner on call.
+- **Escalation:** Kravalg (a §3.2a IAM event).
+- **Containment:** confirm the caller from the task logs; a broken app role is fixed by a BI role change in a reviewed PR; for an unknown caller, escalate to Kravalg at once and remove its network or IAM path by a reviewed PR (a BI role or IAM change, or a security-group change); in PROD, if the failures continue, apply the `rollback-zero` stop plan and record the incident reason (AD-10).
+- **Missing data:** `notBreaching`: no failed authentication is the healthy state.
+- **Evidence to keep:** the failure count per member, the task log lines with the IAM user ID, the CloudTrail events for the role, and the fix PR.
+
+### `docdb-sts-calls`
+
+- **Alarm:** DocumentDB `StsGetCallerIdentityCalls` above its anomaly-detection band (2 deviations) for 15 min (V-11).
+- **Severity:** informational (IAM authentication pressure, for example a reconnect storm).
+- **First responder:** the service owner on call.
+- **Escalation:** Kravalg when the calls come with authentication failures (a §3.2a IAM event).
+- **Containment:** none by default; check the client connection pooling, and open a reviewed PR if a client reconnects in a loop.
+- **Missing data:** `missing`: the metric is published only while clients authenticate with IAM, and the alarm is informational.
+- **Evidence to keep:** the call metric, the DocumentDB audit entries for `MONGODB-AWS`, and the client connection counts.
+
 ## CI Troubleshooting
 
 Map failures back to their local commands:

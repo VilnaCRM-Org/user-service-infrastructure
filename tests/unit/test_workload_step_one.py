@@ -581,6 +581,8 @@ def test_property_checks_cover_every_secret_bearing_rendered_type():
         SERVICE,
         "aws:sesv2/emailIdentity:EmailIdentity",
         "aws:sns/topic:Topic",
+        # S2.4 gate I1: alarm actions only to the alarm topic (FR-13).
+        "aws:cloudwatch/metricAlarm:MetricAlarm",
     }
     assert set(HARDENED_PROPERTY_CHECKS) <= HARDENED_TYPES
 

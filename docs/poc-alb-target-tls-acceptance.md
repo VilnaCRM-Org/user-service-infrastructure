@@ -22,17 +22,28 @@ group supports HTTPS, the ALB does not validate target certificates, and
 in-VPC traffic is authenticated at packet level.
 
 In TEST the ALB does not use it. Traffic between the ALB and the ECS tasks
-inside the VPC is plaintext HTTP on port 8080. It is not encrypted on that
-hop, so anyone with a network position inside the VPC (a compromised task or
-host in the same subnets, or a principal able to mirror or capture ENI
-traffic) could read or alter it. Clients still reach the ALB over HTTPS.
+inside the VPC is plaintext HTTP on port 8080. A-14 treats in-VPC traffic as
+authenticated at packet level, so this is not exposure to arbitrary sniffing.
+The exposure is a compromised task or ENI in the same VPC that could read or
+alter this hop. Clients still reach the ALB over HTTPS.
 
 ## Compensating controls
 
-- Tasks run in private subnets with no public addresses.
-- Task security groups admit the ALB security group only.
-- VPC flow logs are enabled (S3.1).
-- TEST holds no PROD data.
+In place at the base commit 0721d93:
+
+- Tasks run in the private app subnets with `assign_public_ip=False`
+  (`pulumi/app/network.py`, `pulumi/app/compute.py`).
+- The service security group admits the container port from the ALB security
+  group only (`pulumi/app/network.py`).
+
+Planned, not in place at this base:
+
+- VPC flow logs to S3 (planned, S3.1).
+
+## Acceptance conditions (attested by the owner)
+
+- TEST holds no PROD data. This is an assumption the owner attests, not a
+  technical control.
 
 ## Owner and review trigger
 

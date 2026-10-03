@@ -165,9 +165,43 @@ observer/publisher helpers are not yet installed.
 The TEST-only source prerequisite still blocks PROD promotion. The committed
 contract phase stays `registry` (see the hard stop in `specs/poc/README.md`), and
 the hard stop is a merge gate only: the phase is read from the PR-head contract
-and admission checks review, not CI, so it is not a runtime block. A runtime guard
-that refuses workload apply independent of the PR-head phase is tracked in
-issue #57. Network-disabled Docker tests prove the local
+and admission checks review, not CI, so it is not a runtime block. The runtime
+guard (issue #57, FR-23) is the runtime block: before any observation, the
+protected workload runner (`scripts/poc_workload_runner.py`) reads
+`admission.test` from `specs/poc/poc-test.json` at the authenticated installed
+`main` commit, never the PR head, and refuses `plan` and `up-plan` with
+`workload-runtime-admission` unless that value is `true`. A missing contract, an
+unreadable document or any other value refuses. For the future `prod` stack,
+`admission.prod: "preview"` admits only `plan` and `true` admits both.
+
+Measured first-create timing (FR-24, N-04): after a successful first-create
+`up-plan` and its result observation, the workload runner prints one job-log
+line, `Trusted worker timing: {"kind":"poc-workload-timing/v1",
+"observation_ended_at":...,"oidc_issued_at":...,"runner_started_at":...}`, with
+UTC second timestamps. `oidc_issued_at` is read by the runner itself, before
+any mutation: `_oidc_issued_at` in `scripts/poc_workload_runner.py` queries
+this run attempt's own Jobs API
+(`GET .../actions/runs/{id}/attempts/{n}/jobs`, the same paginated
+`gh api --paginate --slurp` idiom `poc_workload_admission._publisher_jobs`
+uses for the publisher run), using the `GH_TOKEN`, `GITHUB_RUN_ID` and
+`GITHUB_RUN_ATTEMPT` the host already forwards into the worker. It requires
+the `Test Apply` job to appear exactly once in a complete listing and its
+`Configure AWS apply credentials via OIDC` step (self-deploy.yml) to appear
+exactly once, completed successfully, and takes that step's own `started_at`
+(a conservative lower bound, never `completed_at`) as the issuance time. An
+API failure, incomplete pagination, a missing or ambiguous job or step, an
+unfinished step or an unparseable timestamp refuses with
+`timing-oidc-issuance` before the saved-plan dispatch runs. `timing_within_budget`
+in `scripts/poc_workload_runner.py` (tested in
+`tests/unit/test_apply_timeout_budget.py` and
+`tests/unit/test_poc_workload_runner.py`) then requires a process time
+(runner start to result observation) of at most 3000 s (3300 s apply bound
+minus the 300 s margin) and a credential window (OIDC issuance to result
+observation) of at most 3300 s (3600 s session minus the margin). A step over
+either bound blocks gate 2 until the BI `MaxSessionDuration` increase and
+`role-duration-seconds` (S5.6) land.
+
+Network-disabled Docker tests prove the local
 UID/filesystem/process boundary with synthetic state; they do not establish
 hosted OIDC, cloud deployment or workload acceptance. Installation and current-head
 TEST registry evidence remain required before this route is accepted; issue 185

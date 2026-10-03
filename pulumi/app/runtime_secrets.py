@@ -3,12 +3,32 @@
 A hardened (``workload_step``) projection declares seeded secret identities only:
 no Random or TLS generator and no ``SecretVersion`` (AD-25 transition rule). The
 pre-hardening projection keeps generating values in state until S4.10 removes it.
+
+Step 2 (S1.6, FR-05, AD-06) adds, per rotated secret, the seed
+``aws.lambda.Invocation`` of the reviewed BI function with the immutable input
+``{secret_arn, purpose}`` and, after it, the ``SecretRotation`` on the D-5
+90-day schedule with ``rotate_immediately=False``. Rotation configuration runs
+``testSecret``, which needs the ``AWSCURRENT`` version the seed writes. The
+seed is idempotent: on a secret that already has ``AWSCURRENT`` it returns
+``noop`` and writes nothing. ``OAUTH_PASSPHRASE`` is never rotated (D-5).
+
+Step 2 (S1.5, FR-07, AD-08) also gives every declared secret a
+``SecretPolicy(block_public_policy=True)`` that denies ``GetSecretValue``
+unless the execution or app-rotation role, and the writes unless the
+app-rotation role. The DocumentDB-managed secret gets a ``SecretPolicy``
+rendering the document of its contract state ``documentdb_secret_policy``.
+
+S1.8 (FR-06, AD-03) retires the PEM, passphrase and 2FA purposes from the
+hardened shape: it declares only ``app_secret`` and ``oauth_encryption_key``,
+and the app reaches its JWT and 2FA KMS keys through ``kms_environment``.
 """
 
 from __future__ import annotations
 
 import copy
+import json
 import re
+from collections.abc import Mapping
 from typing import Any
 
 import pulumi_aws as aws
@@ -31,6 +51,182 @@ ENVIRONMENT_NAMES = {
     "oauth_private_key": "OAUTH_PRIVATE_KEY_PEM",
     "oauth_public_key": "OAUTH_PUBLIC_KEY_PEM",
 }
+
+
+# D-5 (decided 2026-09-30): only these purposes rotate, every 90 days.
+ROTATED_PURPOSES = frozenset({"app_secret", "oauth_encryption_key"})
+ROTATION_SCHEDULE_DAYS = 90
+# AD-06: the seed input and output are closed. ``CREATE_ONLY`` invokes the
+# function only on create or replace, and a delete makes no call (V-18).
+SEED_INPUT_KEYS = frozenset({"secret_arn", "purpose"})
+SEED_OUTPUT_KEYS = frozenset({"secret_arn", "version_id", "status"})
+SEED_STATUSES = frozenset({"seeded", "noop"})
+SEED_LIFECYCLE_SCOPE = "CREATE_ONLY"
+
+
+def rotation_schedule(purpose: str, rotation: Any) -> int:
+    """Return the D-5 schedule of a rotated purpose; refuse any other rotation."""
+    if purpose not in ROTATED_PURPOSES:
+        raise ValueError("Only APP_SECRET and OAUTH_ENCRYPTION_KEY rotate (D-5)")
+    if (
+        type(rotation) is not dict
+        or type(rotation.get("schedule_days")) is not int
+        or rotation["schedule_days"] != ROTATION_SCHEDULE_DAYS
+    ):
+        raise ValueError("Secret rotation must run every 90 days (D-5)")
+    return ROTATION_SCHEDULE_DAYS
+
+
+def seed_input(contract: dict[str, Any], secret_arn: Any, purpose: str) -> str:
+    """Serialize the immutable seed input, exactly ``{secret_arn, purpose}``.
+
+    ``validate_seed_input`` binds the purpose to a rotated declaration and the
+    ARN to its declared name, account and region (FR-09).
+    """
+    from poc_secret_observation import validate_seed_input
+
+    seed = {"secret_arn": secret_arn, "purpose": purpose}
+    validate_seed_input(contract, seed)
+    return json.dumps(seed, sort_keys=True)
+
+
+def _seed_document(result: Any) -> Any:
+    """Parse one seed result; anything but a JSON string parses to ``None``."""
+    try:
+        return json.loads(result) if type(result) is str else None
+    except ValueError:
+        return None
+
+
+def _closed_seed(document: Any, secret_arn: str) -> bool:
+    """Report whether a parsed result is exactly the AD-06 output schema."""
+    return (
+        isinstance(document, Mapping)
+        and set(document) == SEED_OUTPUT_KEYS
+        and all(type(value) is str and value for value in document.values())
+        and document["status"] in SEED_STATUSES
+        and document["secret_arn"] == secret_arn
+    )
+
+
+def seed_result(
+    result: Any, *, secret_arn: str, current_version_id: str | None = None
+) -> dict[str, str]:
+    """Check one seed result against the closed AD-06 output schema.
+
+    The output is exactly ``{secret_arn, version_id, status}``, for the seeded
+    secret, with ``status`` ``seeded`` or ``noop``. When the secret already had
+    an ``AWSCURRENT`` version (``current_version_id``), the seed must return
+    ``noop`` with that version: it writes nothing.
+    """
+    document = _seed_document(result)
+    if not _closed_seed(document, secret_arn):
+        raise ValueError("Seed result differs from {secret_arn, version_id, status}")
+    if current_version_id is not None and (
+        document["status"] != "noop" or document["version_id"] != current_version_id
+    ):
+        raise ValueError("Seed on a secret with AWSCURRENT must return noop")
+    return dict(document)
+
+
+# S1.5 (FR-07, AD-08): the resource policies only deny. Each allow-list is a
+# list of exact role ARNs; a wildcard anywhere fails.
+_ROLE_ARN = re.compile(r"arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+")
+READ_ACTIONS = ("secretsmanager:GetSecretValue",)
+WRITE_ACTIONS = (
+    "secretsmanager:PutSecretValue",
+    "secretsmanager:UpdateSecretVersionStage",
+)
+DOCUMENTDB_SECRET_POLICY_STATES = (
+    "deny-other-readers",
+    "allow-rotation",
+    "tls-only",
+)
+
+
+def _allow_list(roles: Any) -> list[str]:
+    """Return a non-empty list of exact role ARNs; refuse ``*`` and empty."""
+    if (
+        type(roles) is not list
+        or not roles
+        or not all(type(role) is str and _ROLE_ARN.fullmatch(role) for role in roles)
+    ):
+        raise ValueError("A secret policy allow-list must name exact role ARNs")
+    return [str(role) for role in roles]
+
+
+def _deny(sid: str, actions: tuple[str, ...], condition: dict[str, Any]) -> dict:
+    """Build one ``Deny`` statement for every principal (AD-08)."""
+    return {
+        "Sid": sid,
+        "Effect": "Deny",
+        "Principal": "*",
+        "Action": list(actions),
+        "Resource": "*",
+        "Condition": condition,
+    }
+
+
+def _document(*statements: dict[str, Any]) -> str:
+    """Serialize a resource policy document deterministically."""
+    return json.dumps(
+        {"Version": "2012-10-17", "Statement": list(statements)}, sort_keys=True
+    )
+
+
+def declared_secret_policy(
+    read_allow: Any, write_allow: Any, *, execution_role_arn: str
+) -> str:
+    """Render the FR-07 policy of one USI-declared secret.
+
+    Reads are denied unless ``aws:PrincipalArn`` is on ``read_allow`` (the
+    execution and app-rotation roles); writes are denied unless it is on
+    ``write_allow``, which must not hold the execution role.
+    """
+    readers = _allow_list(read_allow)
+    writers = _allow_list(write_allow)
+    if execution_role_arn in writers:
+        raise ValueError("The write-deny allow-list must not hold the execution role")
+    return _document(
+        _deny(
+            "DenyReadUnlessReviewedReader",
+            READ_ACTIONS,
+            {"StringNotEquals": {"aws:PrincipalArn": readers}},
+        ),
+        _deny(
+            "DenyWriteUnlessAppRotation",
+            WRITE_ACTIONS,
+            {"StringNotEquals": {"aws:PrincipalArn": writers}},
+        ),
+    )
+
+
+def managed_secret_policy(state: Any, *, bootstrap_job_role_arn: str) -> str:
+    """Render the managed-secret document of one ``documentdb_secret_policy``.
+
+    ``deny-other-readers`` denies reads unless the bootstrap-job role;
+    ``allow-rotation`` keeps that deny but exempts AWS service principals, the
+    managed rotation (V-3 docs); ``tls-only`` only denies reads without TLS.
+    """
+    readers = {"aws:PrincipalArn": _allow_list([bootstrap_job_role_arn])}
+    if state == "deny-other-readers":
+        condition: dict[str, Any] = {"StringNotEquals": readers}
+    elif state == "allow-rotation":
+        condition = {
+            "StringNotEquals": readers,
+            "Bool": {"aws:PrincipalIsAWSService": "false"},
+        }
+    elif state == "tls-only":
+        return _document(
+            _deny(
+                "DenyReadWithoutTls",
+                READ_ACTIONS,
+                {"Bool": {"aws:SecureTransport": "false"}},
+            )
+        )
+    else:
+        raise ValueError("Unknown documentdb_secret_policy state")
+    return _document(_deny("DenyReadUnlessBootstrapJob", READ_ACTIONS, condition))
 
 
 # A secret ARN, optionally selecting a JSON key (`arn:key::`). Any version ID or
@@ -101,6 +297,39 @@ class RuntimeSecretsDescriptor:
         if not self.hardened:
             raise ValueError("The runtime CMK exists only on the hardened shape")
         return self._contract["workload"]["central"]["cmk"]["runtime"]["arn"]
+
+    @property
+    def rotation_function_arns(self) -> dict[str, str]:
+        """Return the reviewed BI rotation function ARNs (S5.3, AD-05)."""
+        return dict(self._contract["workload"]["central"]["rotation_function_arns"])
+
+    @property
+    def kms_environment(self) -> list[dict[str, str]]:
+        """Return the AD-15 KMS key environment values (S1.8, FR-06).
+
+        The app signs JWTs with the current key and verifies with both it and
+        the optional verify-only ``cmk.jwt_previous`` key (D-17; empty when no
+        key change is open). 2FA uses the symmetric 2FA key. Only key ARNs
+        leave the contract, never key material. ``AWS_REGION``, the fourth
+        AD-15 value, is already a hardened plain value (S1.4 Redis IAM).
+        """
+        cmk = self._contract["workload"]["central"]["cmk"]
+        previous = cmk.get("jwt_previous", {}).get("arn", "")
+        return [
+            {"name": "JWT_KMS_KEY_ID", "value": cmk["jwt"]["arn"]},
+            {"name": "JWT_KMS_PREVIOUS_KEY_ID", "value": previous},
+            {"name": "TWO_FACTOR_KMS_KEY_ID", "value": cmk["two_factor"]["arn"]},
+        ]
+
+    @property
+    def documentdb_secret_policy(self) -> str:
+        """Return the managed-secret policy state (FR-07, AD-08)."""
+        return self._contract["documentdb_secret_policy"]
+
+    @property
+    def central(self) -> dict[str, Any]:
+        """Return a detached copy of the reviewed central metadata."""
+        return copy.deepcopy(self._contract["workload"]["central"])
 
     @property
     def scaling(self) -> dict[str, Any]:
@@ -200,6 +429,9 @@ class RuntimeSecrets(pulumi.ComponentResource):
         self.references = self.descriptor.references
         self.secret_arns: dict[str, pulumi.Output[str]] = {}
         self.version_ids: dict[str, pulumi.Output[str]] = {}
+        self.seed_results: dict[str, pulumi.Output[dict[str, str]]] = {}
+        self.rotations: list[aws.secretsmanager.SecretRotation] = []
+        self.policies: list[aws.secretsmanager.SecretPolicy] = []
         super().__init__(
             "user-service-infrastructure:secrets:Runtime", name, None, opts
         )
@@ -208,7 +440,15 @@ class RuntimeSecrets(pulumi.ComponentResource):
             # Values arrive from the reviewed seed outside Pulumi state.
             self.values = {}
             for purpose in self.references:
-                self._declare(purpose)
+                secret = self._declare(purpose)
+                if self.descriptor.workload_step != 2:
+                    continue
+                self._restrict(purpose, secret)
+                # S1.8 left only rotated purposes; ``rotation_schedule``
+                # refuses any other rotation entry (D-5).
+                self._rotate(purpose, secret)
+            if self.descriptor.workload_step == 2:
+                self._restrict_managed()
         else:
             self.values = self._generate()
             for purpose, value in self.values.items():
@@ -283,6 +523,76 @@ class RuntimeSecrets(pulumi.ComponentResource):
         )
         self.secret_arns[purpose] = secret.arn
         return secret
+
+    def _restrict(self, purpose: str, secret: aws.secretsmanager.Secret) -> None:
+        """Attach the FR-07 deny-only policy to one declared secret (AD-08)."""
+        central = self.descriptor.central
+        self.policies.append(
+            aws.secretsmanager.SecretPolicy(
+                f"runtime-{purpose}-policy",
+                secret_arn=secret.arn,
+                block_public_policy=True,
+                policy=declared_secret_policy(
+                    [central["execution_role_arn"], central["app_rotation_role_arn"]],
+                    [central["app_rotation_role_arn"]],
+                    execution_role_arn=central["execution_role_arn"],
+                ),
+                opts=pulumi.ResourceOptions(parent=self),
+            )
+        )
+
+    def _restrict_managed(self) -> None:
+        """Attach the managed-secret policy of the contract state (AD-08).
+
+        The ARN arrives through XP-8 after step 1. ``protect`` keeps every
+        apply mode from deleting it; only the TEST abandon removes it.
+        """
+        central = self.descriptor.central
+        self.policies.append(
+            aws.secretsmanager.SecretPolicy(
+                "documentdb-managed-secret-policy",
+                secret_arn=central["documentdb_managed_secret_arn"],
+                block_public_policy=True,
+                policy=managed_secret_policy(
+                    self.descriptor.documentdb_secret_policy,
+                    bootstrap_job_role_arn=central["bootstrap_job_role_arn"],
+                ),
+                opts=pulumi.ResourceOptions(parent=self, protect=True),
+            )
+        )
+
+    def _rotate(self, purpose: str, secret: aws.secretsmanager.Secret) -> None:
+        """Seed one rotated secret, then enable its rotation (AD-06 step 2).
+
+        The seed input is exactly ``{secret_arn, purpose}``; its result must
+        match the closed output schema. The rotation waits for the seed,
+        because rotation configuration runs ``testSecret`` (AD-06).
+        """
+        rotation = self.references[purpose]["rotation"]
+        days = rotation_schedule(purpose, rotation)
+        function_arn = self.descriptor.rotation_function_arns[rotation["function_ref"]]
+        seed = aws.lambda_.Invocation(
+            f"runtime-{purpose}-seed",
+            function_name=function_arn,
+            input=secret.arn.apply(
+                lambda arn: seed_input(self.descriptor._contract, arn, purpose)
+            ),
+            lifecycle_scope=SEED_LIFECYCLE_SCOPE,
+            opts=pulumi.ResourceOptions(parent=self),
+        )
+        self.seed_results[purpose] = pulumi.Output.all(seed.result, secret.arn).apply(
+            lambda values: seed_result(values[0], secret_arn=values[1])
+        )
+        self.rotations.append(
+            aws.secretsmanager.SecretRotation(
+                f"runtime-{purpose}-rotation",
+                secret_id=secret.id,
+                rotation_lambda_arn=function_arn,
+                rotation_rules={"automatically_after_days": days},
+                rotate_immediately=False,
+                opts=pulumi.ResourceOptions(parent=self, depends_on=[seed]),
+            )
+        )
 
     def _persist(self, purpose: str, value: pulumi.Input[str]) -> pulumi.Output[str]:
         """Persist one named secret/version without exporting its material."""
@@ -372,6 +682,11 @@ class RuntimeSecrets(pulumi.ComponentResource):
         """Export only metadata; the pre-hardening shape needs both derived secrets."""
         if not self._hardened:
             self.ecs_secrets()
-        self.register_outputs(
-            {"secretArns": self.secret_arns, "versionIds": self.version_ids}
-        )
+        outputs: dict[str, Any] = {
+            "secretArns": self.secret_arns,
+            "versionIds": self.version_ids,
+        }
+        if self.seed_results:
+            # Only a step-2 graph seeds; metadata only, never a value (NFR-01).
+            outputs["seedResults"] = self.seed_results
+        self.register_outputs(outputs)

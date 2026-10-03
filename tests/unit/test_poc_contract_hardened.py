@@ -76,7 +76,7 @@ def test_hardened_projection_declares_only_seeded_purposes():
 )
 def test_removed_and_redis_purposes_are_rejected_by_the_schema(purpose):
     contract = hardened()
-    declared = copy.deepcopy(references(contract)["oauth_passphrase"])
+    declared = copy.deepcopy(references(contract)["oauth_encryption_key"])
     declared["name"] = f"/user-service-infrastructure/runtime/test/synthetic-{purpose}"
     references(contract)[purpose] = declared
     with pytest.raises(ValueError, match="poc-test-v1 schema"):
@@ -171,9 +171,22 @@ def test_step_two_requires_the_xp8_central_values(key):
             "workload.secret_lifecycle.references.app_secret.rotation",
             {"function_ref": "app_rotation", "schedule_days": 30},
         ),
+        # S1.8 (D-5): OAUTH_PASSPHRASE is retired, so even a rotated entry fails.
         (
-            "workload.secret_lifecycle.references.oauth_passphrase.rotation",
-            {"function_ref": "app_rotation", "schedule_days": 90},
+            "workload.secret_lifecycle.references.oauth_passphrase",
+            {
+                "name": (
+                    "/user-service-infrastructure/runtime/test/"
+                    "synthetic-oauth_passphrase"
+                ),
+                "kms_key_arn": (
+                    "arn:aws:kms:eu-central-1:891377212104:key/"
+                    "00000000-0000-4000-8000-000000000010"
+                ),
+                "owner": "service-seeded",
+                "value_kind": "hex-256",
+                "rotation": {"function_ref": "app_rotation", "schedule_days": 90},
+            },
         ),
         ("workload.secret_lifecycle.references.app_secret.value_kind", "base64-256"),
         ("workload.secret_lifecycle.references.app_secret.owner", "service-generated"),
@@ -290,11 +303,10 @@ def test_generation_model_and_seeded_declarations_are_immutable():
             validate(contract, previous=previous)
     renamed = hardened()
     references(renamed)["app_secret"]["name"] += "-renamed"
-    retired = hardened()
-    del references(retired)["oauth_passphrase"]
-    for contract in (renamed, retired):
-        with pytest.raises(ValueError, match="separate contract"):
-            validate(contract, previous=seeded)
+    # S1.8 left only the two required purposes, so the schema refuses any
+    # retirement before the transition check; a rename still needs a new one.
+    with pytest.raises(ValueError, match="separate contract"):
+        validate(renamed, previous=seeded)
 
 
 @pytest.mark.parametrize("missing", ["rotation_function_arns", "cmk"])
@@ -335,7 +347,7 @@ SAME_ACCOUNT_KEY = (
         SAME_ACCOUNT_KEY,
     ],
 )
-@pytest.mark.parametrize("purpose", ["app_secret", "oauth_passphrase"])
+@pytest.mark.parametrize("purpose", ["app_secret", "oauth_encryption_key"])
 def test_hardened_secret_must_use_the_runtime_cmk(key, purpose):
     """D-4 (F2): every declared secret is encrypted by the runtime CMK."""
     contract = hardened()
@@ -435,7 +447,7 @@ def test_hardened_cmk_aliases_are_pairwise_distinct(first, second):
         _validate_document(contract)
 
 
-@pytest.mark.parametrize("purpose", ["app_secret", "oauth_passphrase"])
+@pytest.mark.parametrize("purpose", ["app_secret", "oauth_encryption_key"])
 def test_a_secret_on_the_previous_jwt_key_is_refused(purpose):
     """D-4: the previous JWT key is not the runtime CMK either."""
     contract = windowed()
@@ -501,10 +513,6 @@ def _append_newline(contract, path):
             for purpose in (
                 "app_secret",
                 "oauth_encryption_key",
-                "oauth_passphrase",
-                "two_factor_encryption_key",
-                "oauth_private_key",
-                "oauth_public_key",
             )
         ),
         "step2:workload.central.lambda_network.subnet_ids.0",

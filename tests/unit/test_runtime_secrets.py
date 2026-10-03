@@ -361,14 +361,8 @@ def test_hardened_descriptor_reports_only_seeded_declarations(contract):
     assert module.RuntimeSecretsDescriptor(contract).hardened is False
     descriptor = module.RuntimeSecretsDescriptor(_hardened_contract())
     assert descriptor.hardened is True
-    assert set(descriptor.references) == {
-        "app_secret",
-        "oauth_encryption_key",
-        "oauth_passphrase",
-        "two_factor_encryption_key",
-        "oauth_private_key",
-        "oauth_public_key",
-    }
+    # S1.8 (AD-03) retired the PEM, passphrase and 2FA purposes.
+    assert set(descriptor.references) == {"app_secret", "oauth_encryption_key"}
 
 
 def test_hardened_descriptor_reports_the_runtime_cmk(contract):
@@ -561,7 +555,7 @@ def test_hardened_ecs_secret_accepts_a_declared_json_key_selection():
 FOREIGN_ARNS = {
     "foreign_account": lambda arn: arn.replace("891377212104", "123456789012"),
     "foreign_region": lambda arn: arn.replace("eu-central-1", "us-east-1"),
-    "other_declared_name": lambda arn: _declared_arn("oauth_passphrase"),
+    "other_declared_name": lambda arn: _declared_arn("oauth_encryption_key"),
     "partial_arn_without_suffix": lambda arn: arn.removesuffix("-AbCdEf"),
     "trailing_newline": lambda arn: arn + "\n",
     "unicode_digits": lambda arn: arn.replace("891377212104", "\u0668" * 12),
@@ -692,12 +686,14 @@ def test_hardened_allowlist_is_exactly_the_rendered_graph(tmp_path):
     # action, and the autoscaling component. S2.3 adds the tagged alarm topic,
     # the untagged topic policy and the observability component. S2.4 adds the
     # tagged metric alarm. S3.2 adds the tagged VPC default security group.
-    # S3.1 adds the tagged flow log and the flow-log component.
+    # S3.1 adds the tagged flow log and the flow-log component. S1.6 adds the
+    # untagged seed Invocation and SecretRotation. S1.5 adds the untagged
+    # SecretPolicy.
     assert (
         len(HARDENED_TAGGED_TYPES),
         len(HARDENED_UNTAGGED_TYPES),
         len(HARDENED_COMPONENT_TYPES),
-    ) == (30, 14, 12)
+    ) == (30, 17, 12)
     assert {kind for kind in HARDENED_TYPES if kind.startswith("aws:elasticache/")} == {
         "aws:elasticache/replicationGroup:ReplicationGroup",
         "aws:elasticache/subnetGroup:SubnetGroup",

@@ -207,15 +207,11 @@
     "secret_metadata": {
       "type": "object",
       "minProperties": 1,
-      "maxProperties": 7,
+      "maxProperties": 3,
       "propertyNames": {
         "enum": [
           "app_secret",
           "oauth_encryption_key",
-          "oauth_passphrase",
-          "two_factor_encryption_key",
-          "oauth_private_key",
-          "oauth_public_key",
           "documentdb_primary"
         ]
       },

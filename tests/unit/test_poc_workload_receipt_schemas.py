@@ -330,6 +330,18 @@ def _failed(value, **changes):
         lambda v: v["secret_metadata"].update(
             synthetic_value=dict(v["secret_metadata"]["app_secret"])
         ),
+        # S1.8 F1: the purposes S1.8 retired are not receipt keys.
+        *(
+            lambda v, retired=retired: v["secret_metadata"].update(
+                {retired: dict(v["secret_metadata"]["app_secret"])}
+            )
+            for retired in (
+                "oauth_passphrase",
+                "two_factor_encryption_key",
+                "oauth_private_key",
+                "oauth_public_key",
+            )
+        ),
         # F8: a closed certificate observation takes no extra key.
         lambda v: v["projection_inputs"].update(
             certificate={**CERTIFICATE, "value": "synthetic"}
@@ -611,10 +623,6 @@ def test_every_nested_object_is_closed_except_the_intended_maps():
         "enum": [
             "app_secret",
             "oauth_encryption_key",
-            "oauth_passphrase",
-            "two_factor_encryption_key",
-            "oauth_private_key",
-            "oauth_public_key",
             "documentdb_primary",
         ]
     }

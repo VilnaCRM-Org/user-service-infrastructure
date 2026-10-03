@@ -291,7 +291,8 @@ def test_native_hardened_workload_renders_no_secret_material(native_stack):
     for urn, row in baseline.items():
         assert vars(actual[urn].new) == vars(row.new)
     types = [row.type for row in actual.values()]
-    assert types.count("aws:secretsmanager/secret:Secret") == 6
+    # S1.8 (AD-03): only app_secret and oauth_encryption_key are declared.
+    assert types.count("aws:secretsmanager/secret:Secret") == 2
     assert not [kind for kind in types if kind.startswith(SECRET_MATERIAL)]
     assert not [kind for kind in types if kind.startswith("aws:iam/")]
     assert not [kind for kind in types if kind.startswith(STEP_TWO)]

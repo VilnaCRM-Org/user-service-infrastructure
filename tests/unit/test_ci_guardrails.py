@@ -785,3 +785,41 @@ def test_destructive_gate_cli_accepts_safe_preview(
     )
     assert guardrails_module.cli(["destructive-gate", str(preview_path)]) == 0
     assert capsys.readouterr().err == ""
+
+
+# S1.6 (AD-06, FR-05): a seed Invocation, a DocumentDB cluster and a BucketV2
+# are critical. The types are the literal Pulumi tokens of pulumi-aws 7.23.0.
+S16_CRITICAL_TYPES = (
+    "aws:lambda/invocation:Invocation",
+    "aws:docdb/cluster:Cluster",
+    "aws:s3/bucketV2:BucketV2",
+)
+
+
+@pytest.mark.parametrize("resource_type", S16_CRITICAL_TYPES)
+@pytest.mark.parametrize("op", ["replace", "delete", "delete-replaced"])
+def test_s16_destructive_steps_on_new_critical_types_are_refused(
+    guardrails_module, tmp_path: Path, op: str, resource_type: str
+) -> None:
+    """N2 and N3: replace or delete of these types is critical and refused."""
+    state = "oldState" if op in {"delete", "delete-replaced"} else "newState"
+    step = {
+        "op": op,
+        "urn": f"urn:pulumi:test::user-service-infrastructure::{resource_type}::x",
+        state: {"type": resource_type},
+    }
+    assert guardrails_module.find_destructive_steps([step]) == [step]
+    preview_path = _write_preview(
+        tmp_path / "preview.json", steps=[step], summary={op: 1}
+    )
+    assert guardrails_module.cli(["destructive-gate", str(preview_path)]) == 1
+
+
+@pytest.mark.parametrize("resource_type", S16_CRITICAL_TYPES)
+@pytest.mark.parametrize("op", ["create", "update", "same"])
+def test_s16_non_destructive_steps_on_new_critical_types_pass(
+    guardrails_module, op: str, resource_type: str
+) -> None:
+    """A create, update or same step on these types is not destructive."""
+    step = {"op": op, "newState": {"type": resource_type}}
+    assert guardrails_module.find_destructive_steps([step]) == []

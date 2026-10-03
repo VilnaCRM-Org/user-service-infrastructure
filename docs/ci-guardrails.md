@@ -65,8 +65,11 @@ replacements against critical resource families such as:
 - VPC and networking primitives
 - IAM roles and policies
 - KMS keys
-- S3 buckets
-- RDS and other database resources
+- S3 buckets, including `aws:s3/bucketV2:BucketV2` (the access-log and
+  flow-log buckets)
+- RDS and DocumentDB (`aws:docdb/`) database resources
+- the seed `aws:lambda/invocation:Invocation` of each rotated runtime secret
+  (AD-06): a replace re-invokes the seed and a delete drops its record
 - Secrets Manager resources
 - Route53 records
 - EKS resources

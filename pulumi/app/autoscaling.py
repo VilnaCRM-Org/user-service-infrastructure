@@ -24,10 +24,14 @@ policy (S2.2). Every value comes from the reviewed contract (D-16).
   planning choice). If any input has no datapoint, the returned series has
   none and the policy stays in INSUFFICIENT_DATA; it never divides by zero.
   No dead-letter or health-check queue enters the math.
+- Every target and policy ``depends_on`` the ``SecretRotation``s (AD-06 step-2
+  order, S1.6) and the ``SecretPolicy``s (S1.5), so tasks never scale before
+  the seed, rotation and resource policies exist.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Optional
 
 import pulumi_aws as aws
@@ -159,6 +163,7 @@ class AutoscalingPlane(pulumi.ComponentResource):
         settings: StackSettings,
         services: ScalableServices,
         scaling: dict[str, Any],
+        secret_gates: Sequence[pulumi.Resource],
         opts: Optional[pulumi.ResourceOptions] = None,
     ) -> None:
         # Refuse a non-work queue before any resource registers (FR-12 N).
@@ -166,6 +171,9 @@ class AutoscalingPlane(pulumi.ComponentResource):
         super().__init__(
             "user-service-infrastructure:autoscaling:Plane", name, None, opts
         )
+        # AD-06: the targets and policies wait for every SecretRotation and
+        # SecretPolicy.
+        self._after = list(secret_gates)
         suspended = scaling.get("scheduled_scaling_suspended", False)
         entries = rendered_entries(scaling)
         for service in SERVICES:
@@ -205,7 +213,9 @@ class AutoscalingPlane(pulumi.ComponentResource):
                 scheduled_scaling_suspended=suspended,
             ),
             opts=pulumi.ResourceOptions(
-                parent=self, ignore_changes=list(TARGET_IGNORED_CHANGES)
+                parent=self,
+                depends_on=list(self._after),
+                ignore_changes=list(TARGET_IGNORED_CHANGES),
             ),
         )
 
@@ -240,7 +250,9 @@ class AutoscalingPlane(pulumi.ComponentResource):
                     scalable_dimension=target.scalable_dimension,
                     service_namespace=target.service_namespace,
                     target_tracking_scaling_policy_configuration=configuration,
-                    opts=pulumi.ResourceOptions(parent=self),
+                    opts=pulumi.ResourceOptions(
+                        parent=self, depends_on=list(self._after)
+                    ),
                 )
             )
         return policies
@@ -281,7 +293,7 @@ class AutoscalingPlane(pulumi.ComponentResource):
                 scale_in_cooldown=backlog["scale_in_cooldown_seconds"],
                 disable_scale_in=False,
             ),
-            opts=pulumi.ResourceOptions(parent=self),
+            opts=pulumi.ResourceOptions(parent=self, depends_on=list(self._after)),
         )
 
     def _action(

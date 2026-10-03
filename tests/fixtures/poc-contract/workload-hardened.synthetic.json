@@ -218,34 +218,6 @@
             "schedule_days": 90
           },
           "value_kind": "hex-256"
-        },
-        "oauth_passphrase": {
-          "kms_key_arn": "arn:aws:kms:eu-central-1:891377212104:key/00000000-0000-4000-8000-000000000010",
-          "owner": "service-seeded",
-          "name": "/user-service-infrastructure/runtime/test/synthetic-oauth_passphrase",
-          "rotation": "non_rotatable",
-          "value_kind": "hex-256"
-        },
-        "two_factor_encryption_key": {
-          "kms_key_arn": "arn:aws:kms:eu-central-1:891377212104:key/00000000-0000-4000-8000-000000000010",
-          "owner": "service-seeded",
-          "name": "/user-service-infrastructure/runtime/test/synthetic-two_factor_encryption_key",
-          "rotation": "non_rotatable",
-          "value_kind": "base64-256"
-        },
-        "oauth_private_key": {
-          "kms_key_arn": "arn:aws:kms:eu-central-1:891377212104:key/00000000-0000-4000-8000-000000000010",
-          "owner": "service-seeded",
-          "name": "/user-service-infrastructure/runtime/test/synthetic-oauth_private_key",
-          "rotation": "non_rotatable",
-          "value_kind": "rsa-4096-private-pem"
-        },
-        "oauth_public_key": {
-          "kms_key_arn": "arn:aws:kms:eu-central-1:891377212104:key/00000000-0000-4000-8000-000000000010",
-          "owner": "service-seeded",
-          "name": "/user-service-infrastructure/runtime/test/synthetic-oauth_public_key",
-          "rotation": "non_rotatable",
-          "value_kind": "rsa-4096-public-pem"
         }
       }
     },

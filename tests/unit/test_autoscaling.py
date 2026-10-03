@@ -435,7 +435,20 @@ def test_step_two_changes_no_step_one_resource(render):
     step_one, step_two = render("none"), render("step2")
     added = set(step_two) - set(step_one)
     assert set(step_one) <= set(step_two)
-    assert added == {"autoscaling"} | set(_of(step_two, *AUTOSCALING))
+    # S1.6 adds the seed Invocation and SecretRotation of each rotated secret.
+    seeded = {
+        f"runtime-{purpose}-{kind}"
+        for purpose in ("app_secret", "oauth_encryption_key")
+        for kind in ("seed", "rotation")
+    }
+    # S1.5 adds the SecretPolicy of each declared and the managed secret.
+    restricted = {
+        f"runtime-{purpose}-policy"
+        for purpose in ("app_secret", "oauth_encryption_key")
+    } | {"documentdb-managed-secret-policy"}
+    assert added == (
+        {"autoscaling"} | set(_of(step_two, *AUTOSCALING)) | seeded | restricted
+    )
     # S2.2 adds only the worker backlog policy to the step-2 set.
     assert set(_of(step_two, POLICY)) == {
         "web-cpu-tracking",

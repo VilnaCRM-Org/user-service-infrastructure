@@ -4,6 +4,7 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -77,3 +78,58 @@ def test_workflow_documents_ordering_hard_stop_and_shared_concurrency():
     assert "test_apply_timeout_budget" in text
     assert "scheduled-drift.yml" in text and "pending" in text
     assert "measured" in text
+
+
+# FR-24 (N-04) gate-2 budget over recorded timing evidence. The bounds are the
+# PRD literals: process <= 3000 s (3300 - 300), window <= 3300 s (3600 - 300).
+def _budget():
+    import poc_workload_runner as runner
+
+    check = getattr(runner, "timing_within_budget", None)
+    assert callable(check), "FR-24 timing budget check is missing"
+    return check
+
+
+def _evidence(oidc, start, end):
+    day = "2026-10-01T"
+    return {
+        "oidc_issued_at": day + oidc + "Z",
+        "runner_started_at": day + start + "Z",
+        "observation_ended_at": day + end + "Z",
+    }
+
+
+def test_measured_times_within_margin_pass():
+    """FR-24 P: a 40 min process inside a 45 min credential window passes."""
+    assert _budget()(_evidence("10:00:00", "10:05:00", "10:45:00")) is True
+
+
+def test_process_time_over_3000_seconds_blocks_gate_2():
+    """FR-24 N: 3001 s process time blocks gate 2."""
+    assert _budget()(_evidence("10:00:00", "10:00:00", "10:50:01")) is False
+
+
+def test_credential_window_over_3300_seconds_blocks_gate_2():
+    """FR-24 N: a 3301 s credential window blocks gate 2."""
+    assert _budget()(_evidence("10:00:00", "10:05:01", "10:55:01")) is False
+
+
+def test_exact_bounds_pass():
+    """FR-24 B: exactly 3000 s process and 3300 s window pass."""
+    assert _budget()(_evidence("10:00:00", "10:05:00", "10:55:00")) is True
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        {"oidc_issued_at": None},
+        {"observation_ended_at": "2026-10-01 10:45:00"},
+        {"runner_started_at": "2026-10-01T09:59:59Z"},
+        {"observation_ended_at": "2026-10-01T10:04:59Z"},
+    ],
+)
+def test_incomplete_or_disordered_evidence_is_refused(fault):
+    record = _evidence("10:00:00", "10:05:00", "10:45:00")
+    record.update(fault)
+    with pytest.raises(ValueError, match="^timing-evidence-"):
+        _budget()(record)

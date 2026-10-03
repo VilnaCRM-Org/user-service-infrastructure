@@ -3,11 +3,17 @@
 Run with isolated Python from .trusted. The child container receives a closed
 environment; Docker credentials, host sockets and Actions command files are never
 mounted. Runtime upgrades must be installed on main before credentialed use.
+
+When the worker fails, the host appends the worker's sanitized operator
+diagnostics (FR-20) from the ``/public`` hand-off file to the job summary, after
+validating every line against the fixed diagnostic line format.
 """
 
 from __future__ import annotations
 
 import os
+import re
+import stat
 import sys
 from pathlib import Path
 
@@ -65,6 +71,22 @@ FIELDS = (
     "GOVERNANCE_PROMOTION_APP_SLUG",
     "POC_REGISTRY_WORKFLOW_SHA",
     "POC_PUBLISHER_WORKFLOW_SHA",
+)
+# FR-20 hand-off from the worker: bounded, and only these line shapes survive.
+DIAGNOSTICS_FILE = "operator-diagnostics.txt"
+DIAGNOSTICS_FILE_BYTES = 64 * 1024
+# Worker fields are at most 300 characters plus the 11-character "[truncated]";
+# no control, separator or bidi characters or backticks, so a line cannot leave
+# the summary fence or reorder its text.
+_BIDI = r"\u202a-\u202e\u2066-\u2069"
+_TEXT = r"[^\x00-\x1f\x7f-\x9f\u2028\u2029" + _BIDI + r"`]{1,311}"
+_FIELD_WORD = r"[^\s\x00-\x1f\x7f-\x9f" + _BIDI + r"`]{1,311}"
+DIAGNOSTIC_LINE = re.compile(
+    r"Operator diagnostics \(allow-listed fields only\):"
+    r"|\[truncated\]"
+    r"|- urn: (?:urn:pulumi:" + _FIELD_WORD + r"|\[redacted\])"
+    r"|  type: " + _FIELD_WORD + r"|  operation: [a-z-]{1,32}"
+    r"|  aws_error_code: " + _FIELD_WORD + r"|  aws_error_message: " + _TEXT
 )
 
 
@@ -210,13 +232,51 @@ def execute():
             job,
         ]
     )
-    _run(command, environment=environment)
+    try:
+        _run(command, environment=environment)
+    except subprocess.CalledProcessError:
+        _summarize(public)
+        raise
     if job.endswith("_preview"):
         destination = ROOT
         for name in ("pulumi-plan", "pulumi-preview"):
             target = destination / ".artifacts" / name
             require(not target.exists())
             shutil.copytree(public / name, target)
+
+
+def _diagnostic_lines(public):
+    """Read the worker's hand-off file without following links, bounded."""
+    try:
+        descriptor = os.open(
+            public / DIAGNOSTICS_FILE, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+        )
+    except OSError:
+        return []
+    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        return []
+    with os.fdopen(descriptor, "rb") as handle:
+        raw = handle.read(DIAGNOSTICS_FILE_BYTES + 1)
+    if len(raw) > DIAGNOSTICS_FILE_BYTES:
+        return []
+    # Split on "\n" only: a line holding CR or another separator is rejected whole.
+    lines = raw.decode(errors="replace").split("\n")
+    return [line for line in lines if DIAGNOSTIC_LINE.fullmatch(line)]
+
+
+def _summarize(public):
+    """Append validated worker diagnostics to the job summary (FR-20)."""
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    lines = _diagnostic_lines(public)
+    if not summary or not lines:
+        return
+    with open(summary, "a", encoding="utf-8") as handle:
+        handle.write(
+            "### Workload failure diagnostics\n\n```text\n"
+            + "".join(line + "\n" for line in lines)
+            + "```\n"
+        )
 
 
 def main(argv=None):

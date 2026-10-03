@@ -320,3 +320,148 @@ def test_role_metadata_crosses_real_host_worker_backend_seam(
         with pytest.raises(ValueError, match="Backend observation precondition failed"):
             host.execute()
         assert calls == (["docker"] if fault == "worker" else [])
+
+
+# FR-20: the host appends only validated worker diagnostics to the job summary.
+# Oracles are literal PRD-shaped lines: a failing ECS service create.
+DIAGNOSTICS = (
+    "Operator diagnostics (allow-listed fields only):\n"
+    "- urn: urn:pulumi:test::user-service-infrastructure::"
+    "aws:ecs/service:Service::user-service-web-service\n"
+    "  type: aws:ecs/service:Service\n"
+    "  operation: create\n"
+    "  aws_error_code: InvalidParameterException\n"
+    "  aws_error_message: The container web does not exist in the task "
+    "definition.\n"
+    "[truncated]\n"
+)
+SUMMARY_BLOCK = "### Workload failure diagnostics\n\n```text\n" + DIAGNOSTICS + "```\n"
+
+
+def failing_worker(installed, monkeypatch, tmp_path, publish, *, status=1):
+    """Run host.execute with a fake docker that seeds the /public hand-off."""
+    monkeypatch.setattr(host, "_trusted", lambda: None)
+    monkeypatch.setenv("GITHUB_JOB", "test_apply")
+    summary = tmp_path / "step-summary.md"
+    summary.write_text("")
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+
+    def run(argv, *, environment):
+        assert "GITHUB_STEP_SUMMARY" not in environment
+        mount = next(value for value in argv if value.endswith("dst=/public"))
+        public = Path(mount.split("src=", 1)[1].split(",dst=")[0])
+        publish(public / "operator-diagnostics.txt")
+        if status:
+            raise host.subprocess.CalledProcessError(status, argv[:2])
+
+    monkeypatch.setattr(host, "_run", run)
+    return summary
+
+
+def test_failed_worker_diagnostics_reach_the_job_summary(
+    installed, monkeypatch, tmp_path
+):
+    """FR-20 P/N: allow-listed lines land in the summary; other lines never do."""
+    secret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+    def publish(path):
+        path.write_text(
+            DIAGNOSTICS.replace(
+                "  operation: create\n",
+                "  operation: create\n"
+                f"private.log: {secret}\n"
+                "  aws_error_message: break ``` out\n"
+                "  type: \n",
+            )
+            + "::add-mask::x\n"
+        )
+
+    summary = failing_worker(installed, monkeypatch, tmp_path, publish)
+    assert host.main(["execute"]) == 1
+    assert summary.read_text() == SUMMARY_BLOCK
+    assert secret not in summary.read_text()
+
+
+def test_control_characters_in_hand_off_lines_are_dropped(
+    installed, monkeypatch, tmp_path
+):
+    """FR-20 N (F-02): a line holding a control character never reaches the summary."""
+
+    def publish(path):
+        path.write_text(
+            DIAGNOSTICS.replace(
+                "  operation: create\n",
+                "  operation: create\n"
+                "- urn: urn:pulumi:a\x1bb\n"
+                "  type: x\x00y\n"
+                "  aws_error_code: A\x9bB\n"
+                "  aws_error_message: a\x85b\n",
+            )
+        )
+
+    summary = failing_worker(installed, monkeypatch, tmp_path, publish)
+    assert host.main(["execute"]) == 1
+    assert summary.read_text() == SUMMARY_BLOCK
+
+
+def test_bidi_controls_in_hand_off_lines_are_dropped(installed, monkeypatch, tmp_path):
+    """FR-20 N (R3-F3): a line holding a bidi control never reaches the summary."""
+
+    def publish(path):
+        path.write_text(
+            DIAGNOSTICS.replace(
+                "  operation: create\n",
+                "  operation: create\n"
+                "- urn: urn:pulumi:a\u202eb\n"
+                "  type: x\u2066y\n"
+                "  aws_error_code: A\u2069B\n"
+                "  aws_error_message: a\u202eb\n",
+            )
+        )
+
+    summary = failing_worker(installed, monkeypatch, tmp_path, publish)
+    assert host.main(["execute"]) == 1
+    assert summary.read_text() == SUMMARY_BLOCK
+
+
+def test_successful_worker_writes_no_summary(installed, monkeypatch, tmp_path):
+    summary = failing_worker(
+        installed,
+        monkeypatch,
+        tmp_path,
+        lambda path: path.write_text(DIAGNOSTICS),
+        status=0,
+    )
+    host.execute()
+    assert summary.read_text() == ""
+
+
+@pytest.mark.parametrize("shape", ["absent", "link", "directory", "oversized"])
+def test_unsafe_diagnostics_hand_off_is_ignored(
+    installed, monkeypatch, tmp_path, shape
+):
+    """FR-20 E: a link, non-file or over-64-KiB hand-off adds nothing."""
+    target = tmp_path / "target.txt"
+    target.write_text(DIAGNOSTICS)
+
+    def publish(path):
+        if shape == "link":
+            path.symlink_to(target)
+        elif shape == "directory":
+            path.mkdir()
+        elif shape == "oversized":
+            path.write_text(DIAGNOSTICS + "[truncated]\n" * 6000)
+
+    summary = failing_worker(installed, monkeypatch, tmp_path, publish)
+    with pytest.raises(host.subprocess.CalledProcessError):
+        host.execute()
+    assert summary.read_text() == ""
+
+
+def test_summary_needs_a_runner_summary_file(installed, monkeypatch, tmp_path):
+    failing_worker(
+        installed, monkeypatch, tmp_path, lambda path: path.write_text(DIAGNOSTICS)
+    )
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY")
+    with pytest.raises(host.subprocess.CalledProcessError):
+        host.execute()

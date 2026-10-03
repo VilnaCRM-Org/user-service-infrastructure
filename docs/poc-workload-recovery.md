@@ -52,23 +52,70 @@ hand, and do not improvise a plan.
 Future procedure (NOT shipped, NOT executable today; hard-stop preconditions in
 `specs/poc/README.md`, N-06): (1) an admission path (resume and abandon) for a
 non-registry TEST checkpoint; (2) sanitized operator-visible failure
-diagnostics; (3) a real import path for fixed-name resources; and (4) a reviewed
+diagnostics, now shipped (section 1: job log and job summary, FR-20); (3) a real
+import path for fixed-name resources; and (4) a reviewed
 CI recovery command, owned by governance (CODEOWNERS), that runs through the
 protected environment and performs stack export, lock release, pending-operation
 clear and imports, and emits evidence (before and after state hashes, the lock
 and pending-operation listings, the import list, run IDs, approver). The runtime
-guard that refuses workload apply independent of the PR-head phase is tracked in
-issue #57. Until all of these exist and are accepted, sections 2, 3 and the
+guard of issue #57 (FR-23) refuses workload `plan` and `up-plan` unless the
+installed `main` contract, not the PR head, has `admission.test: true`
+(`docs/ci-architecture.md`). Until all of these exist and are accepted, sections 2, 3 and the
 import steps of section 5 below are design notes, not procedures.
 
 ## 1. Triage a failed first apply
 
 The Pulumi output of a workload apply stays in a private temporary log inside the
 ephemeral worker (`scripts/service_execution_worker.py`,
-`scripts/service_execution_process.py`, `docs/ci-architecture.md`). It is not in
-the job summary or any artifact. The operator sees only the stage markers and a
-generic failure line, so the failing resource and the AWS error are NOT visible
-in CI. Sanitized failure diagnostics are a hard-stop precondition (N-06).
+`scripts/service_execution_process.py`, `docs/ci-architecture.md`). It is not
+uploaded or copied into any artifact. On failure the worker prints sanitized
+operator diagnostics (FR-20, NFR-01) to the `test_apply` job log, before the
+generic failure line. It also writes the same lines, at most 64 KiB, to a hand-off
+file in its `/public` mount. After the failed `docker run`, the host
+(`scripts/service_execution_host.py`) reads that file without following links,
+keeps only lines in the fixed diagnostic line format below and appends them to
+the `test_apply` job summary. The hand-off file is never copied into an artifact.
+Each Pulumi `preview` and `up` child of the workload runner
+writes a private engine event log next to the saved plan
+(`scripts/poc_workload_runner.py`), and the worker keeps only these fields from it:
+
+- `urn`: the URN of each resource with an error diagnostic or a failed step;
+- `type`: its resource type;
+- `operation`: its step operation (`create`, `update`, `delete`, `replace`, ...);
+- `aws_error_code` and `aws_error_message`: the AWS SDK error code and message,
+  when the provider error carries one.
+
+Everything else in the event log, including engine stdout, non-error
+diagnostics and the private log, is dropped. The worker redacts as `[redacted]`
+its own AWS session values, PEM blocks, JWTs, AWS access key IDs, GitHub tokens,
+URL user info (`scheme://user:password@host`), `Authorization` header schemes and
+credentials, `Bearer` tokens, values of keys whose name contains `password`,
+`passwd`, `secret`, `token`, `api_key`, `private_key`, `access_key` or
+`credential` (also inside identifiers such as `DB_PASSWORD=` and in quoted JSON
+values), base64 runs of 40 or more characters and hex runs of 32 or more
+characters. In the AWS error message it then redacts every token of 20 or more
+characters (split on whitespace, quotes, brackets, `,`, `;`, `=` and backticks)
+unless the token is a whole ARN, a Pulumi URN, a digit-free PascalCase word or
+IAM action (`InvalidParameterException`, `secretsmanager:GetSecretValue`), or a
+lower-case name, host or URL path (lower-case letters, digits, `.`, `-`, `/`, `:`, `@`).
+Inside an ARN, a hyphen-free run of 20 or more characters that mixes upper and
+lower case or holds `+` or `=` is still redacted; session and resource ARNs
+such as `.../gha-pr-test-apply-<run_id>` and
+`...:secret:user-service-test-app-secret-AbC1dE` stay readable. Control
+characters, line and paragraph separators and bidi controls become spaces
+first, and `##[` becomes `# #[`, so every field is exactly one line and cannot
+inject workflow commands into the job log or extra lines into the summary. The
+printed block sits between `::stop-commands::<marker>` and `::<marker>::`, with
+a fresh random marker per run, so the runner processes no workflow command
+inside it. The host drops any hand-off line that still holds a control,
+separator or bidi character. Redaction runs before the worker cuts any field
+longer than 300 characters. The worker
+reads each event log line by line, so a failure late in a long log is still
+reported. It prints at most 10 resources; a cut field, a longer list or an event
+log line over 1 MiB (skipped) ends with `[truncated]`. A value that does
+not have the expected URN, type or operation shape prints as `[redacted]` or
+`unknown`. Failures before the first Pulumi child (admission, coordinates)
+print only the stage markers.
 
 1. Note the run ID, the reviewed PR head SHA and the last stage marker in the
    `test_apply` job log. A job timeout is not proof that AWS stopped: the
@@ -79,7 +126,8 @@ in CI. Sanitized failure diagnostics are a hard-stop precondition (N-06).
    governance; do not wait for a lock, retry, or run `pulumi cancel` or
    `pulumi stack export/import`. Do not run `aws` or console changes to
    investigate out of band.
-3. Record the run ID and stage markers for the escalation.
+3. Record the run ID, the stage markers and the operator diagnostics for the
+   escalation.
 
 ## 2. Resume (FUTURE; not executable with shipped tooling)
 

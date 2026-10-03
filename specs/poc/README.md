@@ -174,9 +174,10 @@ follow-up (issue #57).
   re-created or imported. Hard-stop sub-preconditions, all required before the
   `workload` phase:
   - an admission path (resume and abandon) for a non-registry TEST checkpoint;
-  - sanitized operator-visible failure diagnostics (Pulumi output currently
-    stays in a private temporary log, so the failing resource and AWS error are
-    not visible in CI);
+  - sanitized operator-visible failure diagnostics (shipped for workload runs:
+    the private Pulumi log stays in the worker, and only the FR-20
+    allow-listed fields reach the job log and the job summary,
+    `docs/poc-workload-recovery.md` section 1);
   - a real import path for fixed-name resources (none exists today);
   - a reviewed CI recovery command owned by governance (CODEOWNERS) performing
     stack export, lock release, pending-operation clear and imports, with

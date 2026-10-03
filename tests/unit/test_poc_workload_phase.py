@@ -111,6 +111,13 @@ SCALING_VARIANTS = {
     ),
     # S2.2 FR-12 N: a dead-letter queue configured as a work queue.
     "step2-dlq-backlog": ({"mode": "step2", "sequence": 2}, ("start-1",), (), False),
+    # S1.5 B: the step-2 graph with another managed-secret policy state.
+    "step2-allow-rotation": ({"mode": "step2", "sequence": 2}, ("start-1",), (), False),
+    "step2-tls-only": ({"mode": "step2", "sequence": 2}, ("start-1",), (), False),
+}
+SECRET_POLICY_VARIANTS = {
+    "step2-allow-rotation": "allow-rotation",
+    "step2-tls-only": "tls-only",
 }
 
 
@@ -128,9 +135,23 @@ def _scaling_variant(contract, mode, mutation):
     scaling.update(_entries(*names), consumed=list(consumed))
     if suspended:
         scaling["scheduled_scaling_suspended"] = True
+    if mutation in SECRET_POLICY_VARIANTS:
+        contract["documentdb_secret_policy"] = SECRET_POLICY_VARIANTS[mutation]
     if mutation == "step2-moved":
         # B2: an earlier entry's time changes (S4.9 admission refuses it).
         scaling["starts"][0]["at"] = "2026-10-02T09:00:00"
+
+
+def _jwt_window_variant(contract, mode, mutation):
+    """S1.8 (D-17): a JWT key change window holds a verify-only key."""
+    if mode == "hardened" and mutation == "jwt-previous":
+        contract["workload"]["central"]["cmk"]["jwt_previous"] = {
+            "arn": (
+                "arn:aws:kms:eu-central-1:891377212104:key/"
+                "00000000-0000-4000-8000-000000000013"
+            ),
+            "alias": "alias/synthetic-poc-jwt-previous",
+        }
 
 
 def _mutate(value, registries, mutation):
@@ -162,6 +183,22 @@ def _mutate(value, registries, mutation):
         },
     }
     return replace(value, **changes.get(mutation, {}))
+
+
+SEED_VERSION_ID = "00000000-0000-4000-8000-0000000000a1"
+
+
+def _seed_outputs(args, values):
+    """Answer a seed Invocation as a first seed: no AWSCURRENT yet (AD-06)."""
+    if args.typ == "aws:lambda/invocation:Invocation":
+        values["result"] = json.dumps(
+            {
+                "secret_arn": json.loads(args.inputs["input"])["secret_arn"],
+                "version_id": SEED_VERSION_ID,
+                "status": "seeded",
+            }
+        )
+    return values
 
 
 def _generated_outputs(args, values):
@@ -785,6 +822,7 @@ def _probe(root, mode, mutation, coverage_path):
         def new_resource(self, args):
             resource_id, values = super().new_resource(args)
             values = _redis_outputs(args, _generated_outputs(args, values))
+            values = _seed_outputs(args, values)
             values = _topic_outputs(args, _arn_suffix_outputs(args, values))
             resource_id = XP8_IDS.get(args.name, resource_id)
             return _workload_queue_outputs(args, resource_id, values)
@@ -862,6 +900,7 @@ def _probe(root, mode, mutation, coverage_path):
             root, config, {"hardened": "workload-hardened"}.get(mode, "workload")
         )
         _scaling_variant(contract, mode, mutation)
+        _jwt_window_variant(contract, mode, mutation)
         if mode in {"bridge", "generated-child", "hardened"}:
             _bridge(
                 contract,

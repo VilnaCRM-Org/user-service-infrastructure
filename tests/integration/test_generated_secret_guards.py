@@ -374,6 +374,16 @@ AUTOSCALING_PREFIXES = (
     "aws:appautoscaling/",
     "user-service-infrastructure:autoscaling:",
 )
+# S1.6 allowlists the seed Invocation and SecretRotation and S1.5 the
+# SecretPolicy at step 2, behind property checks that an empty probe fails
+# (AD-06, AD-08, D-5).
+S16_STEP_TWO_TYPES = frozenset(
+    {
+        "aws:lambda/invocation:Invocation",
+        "aws:secretsmanager/secretPolicy:SecretPolicy",
+        "aws:secretsmanager/secretRotation:SecretRotation",
+    }
+)
 
 
 @pytest.mark.parametrize("step", [1, 2])
@@ -396,6 +406,11 @@ def test_step_two_and_elastic_types_are_refused(step):
         _reject_secret_material(args("aws:docdb/elasticCluster:ElasticCluster"), step)
     message = "step-2 resource" if step == 1 else "unreviewed type"
     for kind in STEP_TWO_TYPES:
+        if step == 2 and kind in S16_STEP_TWO_TYPES:
+            assert kind in HARDENED_TYPES
+            with pytest.raises(ValueError, match="unreviewed property"):
+                _reject_secret_material(args(kind), step)
+            continue
         if step == 2 and kind in HARDENED_TYPES:
             # S2.1 allowlists the autoscaling types at step 2 only.
             assert kind.startswith(AUTOSCALING_PREFIXES)

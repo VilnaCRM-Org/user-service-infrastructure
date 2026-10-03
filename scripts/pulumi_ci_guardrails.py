@@ -22,8 +22,13 @@ CRITICAL_TYPE_PATTERNS = (
     "aws:iam/",
     "aws:kms/",
     "aws:s3/bucket:Bucket",
+    # The access-log and flow-log buckets are BucketV2 (S1.6, round 4).
+    "aws:s3/bucketV2:",
     "aws:cloudtrail/trail:Trail",
     "aws:rds/",
+    "aws:docdb/",
+    # A seed Invocation replace or delete is critical (AD-06, FR-05).
+    "aws:lambda/invocation:Invocation",
     "aws:secretsmanager/",
     "aws:route53/",
     "aws:eks/",

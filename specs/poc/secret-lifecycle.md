@@ -35,9 +35,10 @@ observation.
 A contract that carries `workload_step` uses the hardened shape of
 `poc-test-v1` (AD-04). Its `secret_lifecycle.generation` is `rotation-seed`,
 it has no `provider_refresh_actions`, and each reference adds `rotation`
-(`{function_ref, schedule_days: 90}` or, for the interim KMS-bound purposes,
-`non_rotatable`) and `value_kind`. Only `app_secret` and `oauth_encryption_key`
-are rotated; no Redis or DocumentDB purpose may be declared (D-1). The
+(`{function_ref, schedule_days: 90}`) and `value_kind`. Since S1.8 the only
+declared purposes are `app_secret` and `oauth_encryption_key`, both rotated;
+no PEM, passphrase, 2FA, Redis or DocumentDB purpose may be declared (AD-03,
+D-1). The
 DocumentDB-managed secret is observed only, through
 `central.documentdb_managed_secret_arn`, and keeps its service-managed
 rotation. Every `function_ref` must name a key of
@@ -171,6 +172,103 @@ refuses every step-2 type: the seed `Invocation`, `SecretRotation`,
 still refuses each one until its own story adds it to the allowlist; the
 create-only step-2 admission is S4.9.
 
+## Rotation and seed (S1.6, FR-05, AD-06)
+
+Step 2 renders, for each rotated purpose (`app_secret` and
+`oauth_encryption_key`; D-5, decided 2026-09-30), in this order:
+
+1. the seed `aws.lambda.Invocation` (`runtime-<purpose>-seed`) of the reviewed
+   BI function named by `rotation.function_ref` in
+   `central.rotation_function_arns`. Its input is exactly
+   `{secret_arn, purpose}` (checked by `validate_seed_input`) and its
+   `lifecycle_scope` is `CREATE_ONLY`: the function runs only on create or
+   replace, and a delete makes no call (V-18). No qualifier, trigger, tenant
+   or Terraform key is allowed;
+2. the `SecretRotation` (`runtime-<purpose>-rotation`) with
+   `rotate_immediately=False` and `automatically_after_days = 90`. It
+   `depends_on` the seed, because rotation configuration runs `testSecret`,
+   which needs the `AWSCURRENT` version the seed writes;
+3. the autoscaling targets and policies, each of which `depends_on` every
+   `SecretRotation`, so tasks never start before the seed and rotation exist.
+
+`OAUTH_PASSPHRASE` is never rotated: S1.8 retires it from the contract, and
+the program refuses a rotation for it. The seed is idempotent: on a secret
+that already has `AWSCURRENT` it returns `noop` with that version and writes
+nothing. Its result must be exactly `{secret_arn, version_id, status}` with
+`status` `seeded` or `noop` (`runtime_secrets.seed_result`); the component
+registers the checked results as the metadata output `seedResults`. The
+classifier treats a replace or delete of the seed Invocation, a DocumentDB
+resource or a `BucketV2` as critical (`CRITICAL_TYPE_PATTERNS`).
+
+Validation records:
+
+- **V-6 (docs):** `RotateSecret` invokes the rotation function as the caller,
+  so the BI rotation principal needs `lambda:InvokeFunction` on the BI function
+  (AWS Secrets Manager rotation guide, "Permissions for rotation"). The live
+  simulate is S4.6 step 3.
+- **V-7 (provider source):** pulumi-aws 7.23.0 pins the upstream submodule
+  hashicorp/terraform-provider-aws at commit
+  `4981ec2b44ea4892c1ee4f0c1ed23b761a55f44d` ("chore: prepare v6.36.0
+  release"). In `internal/service/lambda/invocation.go` at that commit, create
+  calls lambda `Invoke` once; read is `schema.NoopContext` (no API call, so a
+  refresh never detects drift); update (`resourceInvocationUpdate`) calls
+  `Invoke`; delete calls nothing under `CREATE_ONLY` and `Invoke` (delete
+  action) under `CRUD`. No path calls `GetFunction`, so the
+  apply role needs only `lambda:InvokeFunction`, not `lambda:GetFunction`.
+- **V-18 (provider source):** same commit and file. The default
+  `lifecycle_scope` is `CREATE_ONLY`. `function_name`, `qualifier` and
+  `triggers` force a replace, and under `CREATE_ONLY` a change to `input`
+  forces a replace (`customizeDiffInputChangeWithCreateOnlyScope`). A replace
+  re-invokes the seed, so the seed stays idempotent and the classifier treats
+  a replace or delete as critical. `terraform_key`, `tenant_id` and
+  `lifecycle_scope` do not force a replace: a change to any of them is an
+  in-place update, and the update path calls `Invoke`, which re-seeds. So the
+  seed and the guard pin `lifecycle_scope` to `CREATE_ONLY` and leave
+  `terraform_key`, `tenant_id`, `qualifier` and `triggers` absent. The live
+  check is S4.6 step 19.
+
+## Secret resource policies (S1.5, FR-07, AD-08)
+
+Step 2 gives every declared secret a `SecretPolicy`
+(`runtime-<purpose>-policy`, `block_public_policy=True`) of two `Deny`
+statements for `Principal "*"`:
+
+- `secretsmanager:GetSecretValue` unless `aws:PrincipalArn` is the ECS
+  execution role or the app-rotation role;
+- `secretsmanager:PutSecretValue` and `secretsmanager:UpdateSecretVersionStage`
+  unless `aws:PrincipalArn` is the app-rotation role.
+
+Each allow-list is a non-empty list of exact role ARNs from reviewed central
+metadata; a `*`, an empty or a missing list fails, and a write-deny allow-list
+that holds the execution role fails (`runtime_secrets.declared_secret_policy`).
+
+The DocumentDB-managed secret (ARN from XP-8) gets
+`documentdb-managed-secret-policy`, created in step 2 with `protect=True`, so
+no apply mode deletes it; only the TEST abandon removes it with its cluster.
+Its document is selected by the contract state `documentdb_secret_policy`
+(`runtime_secrets.managed_secret_policy`):
+
+| State | Document |
+| --- | --- |
+| `deny-other-readers` (initial) | `Deny GetSecretValue` unless `aws:PrincipalArn` is the bootstrap-job role |
+| `allow-rotation` | the same deny, which also requires `aws:PrincipalIsAWSService` `false` |
+| `tls-only` | one `Deny GetSecretValue` when `aws:SecureTransport` is `false` |
+
+A state switch changes only the `policy` input of the same URN; the update-only
+`policy-update` admission is S4.9. A replace or delete of any `SecretPolicy`
+is critical (`aws:secretsmanager/` in `CRITICAL_TYPE_PATTERNS`). Every
+autoscaling target and policy `depends_on` every `SecretPolicy` (AD-06). The
+guard admits a `SecretPolicy` only with `blockPublicPolicy` `True` and a
+policy whose every statement is a `Deny` for `Principal "*"`.
+
+- **V-3 (docs):** the managed rotation of an RDS-managed master secret is run
+  by the managing service, not by a customer role, so `allow-rotation` exempts
+  AWS service principals with `aws:PrincipalIsAWSService` (the AD-08 example).
+  The live check, a forced rotation with `deny-other-readers` present, is
+  S4.6 step 8. If it fails, a reviewed contract PR moves the state one step.
+- **Residual risk:** an administrator can still replace a policy; FR-13
+  detects `PutResourcePolicy` outside its closed allow-list.
+
 Residuals the guard does not inspect: free-form inputs of allowed types (for
 example a secret description, a tag value, a queue policy or a DNS record
 value), values passed to `pulumi.export` or `register_outputs`, which are not
@@ -202,7 +300,7 @@ Receipt schemas (`schemas/poc-workload-*-v1.schema.json`) are local shape only.
 A Secrets Manager `VersionId` is the caller's `ClientRequestToken`: 32 to 64
 characters of `[A-Za-z0-9-]`. AWS only recommends a UUID, so the schemas and
 `validate_secret_observation` keep that charset and refuse the hex-256 value
-shape it would otherwise admit. `secret_metadata` keys are the six declared
+shape it would otherwise admit. `secret_metadata` keys are the two declared
 purposes plus `documentdb_primary`. A TEST receipt names only account
 `891377212104` resources and the one gateway certificate parameter; the abandon
 receipt is TEST-only (`urn:pulumi:test::`, mode `recovery-abandon`) and the
@@ -430,11 +528,38 @@ no key input until S4.10 removes that branch (AD-25). The stack-wide guard binds
 `HARDENED_PROPERTY_CHECKS` to the runtime CMK: a log group under
 `/aws/docdb/` without exactly that `kmsKeyId` fails, any other log group may
 carry no key or exactly that key, and a log group whose name or key the guard
-cannot read fails closed. The ECS web and worker groups get the runtime CMK in
-S1.8; the check over every workload log group is S4.10 N3. The DocumentDB
+cannot read fails closed. Since S1.8 a log group under `/aws/ecs/` needs the
+runtime CMK too; the check over every workload log group is S4.10 N3. The DocumentDB
 `Cluster` check also refuses `masterUserSecretKmsKeyId` in either casing, so
 the managed secret stays on the AWS-managed key (A-05). The live checks are
 S4.6 step 7: `DescribeSecret` `KmsKeyId` and `DescribeLogGroups` `kmsKeyId`.
+
+### KMS app keys replace the PEM purposes (S1.8, FR-06, AD-15)
+
+The hardened contract declares only `app_secret` and `oauth_encryption_key`.
+`oauth_private_key`, `oauth_public_key`, `oauth_passphrase` (D-5: retired,
+never rotated) and `two_factor_encryption_key` are gone from the hardened
+schema, so re-adding any of them fails `poc-test-v1`, and no `non_rotatable`
+entry can exist. Gate 1 (FR-31 `admission.test`) is therefore refused while
+any `non_rotatable` purpose exists: such a contract is not schema-valid.
+
+The hardened web and worker containers get the AD-15 key ARNs as plain values
+(`RuntimeSecretsDescriptor.kms_environment`): `JWT_KMS_KEY_ID`
+(`central.cmk.jwt.arn`), `JWT_KMS_PREVIOUS_KEY_ID` (`central.cmk.jwt_previous`,
+empty outside a D-17 key change) and `TWO_FACTOR_KMS_KEY_ID`
+(`central.cmk.two_factor.arn`); `AWS_REGION` is already a plain value (S1.4).
+They carry no `OAUTH_PRIVATE_KEY`/`OAUTH_PUBLIC_KEY` path and no PEM secret,
+and the bootstrap command only prepares the writable directories: it writes
+no PEM.
+
+The ECS web and worker log groups carry `kms_key_id` = the runtime CMK, and
+USI pre-creates `/aws/ecs/containerinsights/<cluster>/performance` with the
+runtime CMK and 30-day retention. The cluster, which enables
+`containerInsights` `enhanced`, `depends_on` that group, so ECS never
+auto-creates it without the CMK (D-4). The pre-hardening shapes keep their PEM
+purposes, bootstrap command and unencrypted groups until S4.10 (AD-25). The
+live check is S4.6 step 7 (login, JWT verification, 2FA, CloudTrail
+`kms:Sign`).
 
 ## Legacy managed path fails closed (S1.10, FR-29, AD-22)
 

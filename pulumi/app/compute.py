@@ -492,28 +492,32 @@ class ComputePlane(pulumi.ComponentResource):
             repository_name=registries.worker.name,
         )
 
+        cluster_name = build_resource_name(settings.stack_tag, "ecs", max_length=255)
+        log_kms_key_id, insights_logs = self._container_insights_logs(cluster_name)
         cluster = aws.ecs.Cluster(
             "user-service-ecs-cluster",
-            name=build_resource_name(settings.stack_tag, "ecs", max_length=255),
+            name=cluster_name,
             settings=[
                 aws.ecs.ClusterSettingArgs(
                     name="containerInsights",
                     value="enhanced",
                 )
             ],
-            opts=pulumi.ResourceOptions(parent=self),
+            opts=pulumi.ResourceOptions(parent=self, depends_on=insights_logs),
         )
 
         web_log_group = aws.cloudwatch.LogGroup(
             "user-service-web-logs",
             name=f"/aws/ecs/{settings.stack_tag}/web",
             retention_in_days=30,
+            kms_key_id=log_kms_key_id,
             opts=pulumi.ResourceOptions(parent=self),
         )
         worker_log_group = aws.cloudwatch.LogGroup(
             "user-service-worker-logs",
             name=f"/aws/ecs/{settings.stack_tag}/worker",
             retention_in_days=30,
+            kms_key_id=log_kms_key_id,
             opts=pulumi.ResourceOptions(parent=self),
         )
 
@@ -949,6 +953,29 @@ class ComputePlane(pulumi.ComponentResource):
             dropped_capabilities=WEB_DROPPED_CAPABILITIES,
         )
 
+    def _container_insights_logs(
+        self, cluster_name: str
+    ) -> tuple[str | None, list[pulumi.Resource]]:
+        """Pre-create the CMK-encrypted Container Insights group (S1.8, D-4).
+
+        ``containerInsights`` ``enhanced`` makes ECS auto-create
+        ``/aws/ecs/containerinsights/<cluster>/performance`` without the
+        runtime CMK unless the group exists first, so the cluster depends on
+        it. Every pre-hardening shape keeps its unencrypted groups (AD-25).
+        """
+        secrets = self._runtime_secrets
+        if secrets is None or not secrets.descriptor.hardened:
+            return None, []
+        runtime_cmk = secrets.descriptor.runtime_cmk_arn
+        group = aws.cloudwatch.LogGroup(
+            "user-service-container-insights-logs",
+            name=f"/aws/ecs/containerinsights/{cluster_name}/performance",
+            retention_in_days=30,
+            kms_key_id=runtime_cmk,
+            opts=pulumi.ResourceOptions(parent=self),
+        )
+        return runtime_cmk, [group]
+
     def _trusted_proxy_environment(self) -> list[dict[str, pulumi.Input[str]]]:
         """Format one validated list for Symfony and Caddy's distinct parsers."""
         if self._runtime_secrets is None:
@@ -1207,10 +1234,15 @@ class ComputePlane(pulumi.ComponentResource):
             )
         if self._runtime_secrets is not None:
             descriptor = self._runtime_secrets.descriptor
+            # S1.8: the hardened shape has no PEM file paths; the app reaches
+            # its keys through KMS.
+            dropped = {"MAIL_SENDER"}
+            if descriptor.hardened:
+                dropped |= {"OAUTH_PRIVATE_KEY", "OAUTH_PUBLIC_KEY"}
             environment = [
                 item
                 for item in environment
-                if item["name"] != "MAIL_SENDER"
+                if item["name"] not in dropped
                 and not cast(str, item["name"]).startswith(
                     (
                         "OAUTH_GITHUB_",
@@ -1226,6 +1258,7 @@ class ComputePlane(pulumi.ComponentResource):
                     {"name": "MAILER_DSN", "value": descriptor.mailer_dsn},
                     {"name": "SOCIAL_OAUTH_ENABLED", "value": "false"},
                     {"name": "OAUTH_ENCRYPTION_KEY_TYPE", "value": "plain"},
+                    *(descriptor.kms_environment if descriptor.hardened else []),
                 ]
             )
         return environment
@@ -1285,7 +1318,18 @@ class ComputePlane(pulumi.ComponentResource):
         ]
 
     def _bootstrap_command(self, runtime_command: str) -> str:
-        """Write PEM material to files before launching the container process."""
+        """Write PEM material to files before launching the container process.
+
+        The hardened shape writes no PEM (S1.8, FR-06): it only prepares the
+        writable directories, because the app signs and encrypts through KMS.
+        """
+        if self._hardened:
+            return (
+                "set -eu; "
+                f"install -d -m 1777 {APPLICATION_TMPDIR}; "
+                f"install -d -m 755 {' '.join(RUNTIME_WRITABLE_DIRECTORIES)}; "
+                f"exec {runtime_command}"
+            )
         return (
             "set -eu; "
             "install -d -m 700 /srv/app/var/run/secrets; "

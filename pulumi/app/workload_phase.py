@@ -69,7 +69,14 @@ from app.observability import (
 )
 from app.registry import RegistryInputs
 from app.registry_phase import RegistryPhaseStack
-from app.runtime_secrets import RuntimeSecrets, RuntimeSecretsDescriptor
+from app.runtime_secrets import (
+    ROTATED_PURPOSES,
+    ROTATION_SCHEDULE_DAYS,
+    SEED_INPUT_KEYS,
+    SEED_LIFECYCLE_SCOPE,
+    RuntimeSecrets,
+    RuntimeSecretsDescriptor,
+)
 
 # Closed taggable resource types used by the installed workload planes.
 # SecretVersion, lifecycle policies and route associations do not accept tags.
@@ -184,7 +191,9 @@ HARDENED_TAGGED_TYPES = frozenset(
         "aws:sqs/queue:Queue",
     }
 )
-# The Application Auto Scaling policy and scheduled action accept no tags.
+# The Application Auto Scaling policy and scheduled action accept no tags,
+# nor do the S1.6 step-2 seed Invocation and SecretRotation (AD-06) and the
+# S1.5 SecretPolicy (AD-08).
 HARDENED_UNTAGGED_TYPES = frozenset(
     {
         "aws:appautoscaling/policy:Policy",
@@ -192,6 +201,7 @@ HARDENED_UNTAGGED_TYPES = frozenset(
         "aws:ec2/routeTableAssociation:RouteTableAssociation",
         "aws:ecr/lifecyclePolicy:LifecyclePolicy",
         "aws:ecr/repository:Repository",
+        "aws:lambda/invocation:Invocation",
         "aws:route53/record:Record",
         "aws:s3/bucketLifecycleConfigurationV2:BucketLifecycleConfigurationV2",
         "aws:s3/bucketOwnershipControls:BucketOwnershipControls",
@@ -200,6 +210,8 @@ HARDENED_UNTAGGED_TYPES = frozenset(
         "aws:s3/bucketServerSideEncryptionConfigurationV2:"
         "BucketServerSideEncryptionConfigurationV2",
         "aws:s3/bucketVersioningV2:BucketVersioningV2",
+        "aws:secretsmanager/secretPolicy:SecretPolicy",
+        "aws:secretsmanager/secretRotation:SecretRotation",
         "aws:sesv2/emailIdentity:EmailIdentity",
         "aws:sns/topicPolicy:TopicPolicy",
     }
@@ -426,10 +438,10 @@ def _no_oidc_action(props, sdk_path: bool) -> bool:
 
 
 def _no_inline_secret_policy(props, _sdk_path: bool) -> bool:
-    """Refuse an inline ``policy``: it would bypass the SecretPolicy refusal.
+    """Refuse an inline ``policy``: it would bypass the SecretPolicy check.
 
-    A resource policy joins only as the step-2 ``SecretPolicy`` with its own
-    story (FR-34 B, AD-08). The key is ``policy`` in both casings.
+    A resource policy joins only as the step-2 deny-only ``SecretPolicy``
+    (S1.5, FR-34 B, AD-08). The key is ``policy`` in both casings.
     """
     return props.get("policy") is None
 
@@ -659,25 +671,27 @@ def _not_a_redis_secret(props, sdk_path: bool) -> bool:
     return type(name) is str and "redis" not in name.lower()
 
 
-# DocumentDB names its audit and profiler export groups under this prefix.
-DOCUMENTDB_LOG_GROUP_PREFIX = "/aws/docdb/"
+# DocumentDB names its audit and profiler export groups under this prefix,
+# and the ECS web, worker and Container Insights groups sit under the other.
+CMK_LOG_GROUP_PREFIXES = ("/aws/docdb/", "/aws/ecs/")
 
 
 def _runtime_cmk_log_group(props, sdk_path: bool, runtime_cmk=None) -> bool:
-    """Bind the DocumentDB log groups to the D-4 runtime CMK (FR-10, S1.9).
+    """Bind the DocumentDB and ECS log groups to the D-4 runtime CMK (FR-10).
 
-    The name must be a plain string. A group under ``/aws/docdb/`` needs
-    ``kmsKeyId`` equal to ``runtime_cmk``, the hardened contract's
-    ``central.cmk.runtime.arn``. Any other group may carry no key or exactly
-    that key: the ECS groups get it in S1.8, and the check over every log
-    group is S4.10 N3. An unbound check accepts no DocumentDB group, and an
-    opaque name or key fails closed.
+    The name must be a plain string. A group under ``/aws/docdb/`` (S1.9) or
+    ``/aws/ecs/`` (S1.8: web, worker and the pre-created Container Insights
+    group) needs ``kmsKeyId`` equal to ``runtime_cmk``, the hardened
+    contract's ``central.cmk.runtime.arn``. Any other group may carry no key
+    or exactly that key; the check over every log group is S4.10 N3. An
+    unbound check accepts no such group, and an opaque name or key fails
+    closed.
     """
     name = _inspectable(props.get("name"), sdk_path)
     key = _read(props, "kms_key_id", "kmsKeyId", sdk_path)
     bound = runtime_cmk is not None and key == runtime_cmk
     return type(name) is str and (
-        bound or (key is None and not name.startswith(DOCUMENTDB_LOG_GROUP_PREFIX))
+        bound or (key is None and not name.startswith(CMK_LOG_GROUP_PREFIXES))
     )
 
 
@@ -716,6 +730,102 @@ def _alarm_topic_actions(props, sdk_path: bool, alarm_topic=None) -> bool:
     )
 
 
+# Invocation inputs that would re-invoke the seed or pick another code version.
+SEED_REFUSED_INPUTS = (("tenant_id", "tenantId"), ("terraform_key", "terraformKey"))
+SEED_REFUSED_PLAIN_INPUTS = ("qualifier", "triggers")
+
+
+def _seed_payload(value: Any) -> bool:
+    """Accept a JSON object of exactly ``{secret_arn, purpose}`` (FR-09)."""
+    try:
+        document = json.loads(value, object_pairs_hook=_unique_keys)
+    except (ValueError, TypeError):
+        return False
+    return (
+        type(document) is dict
+        and set(document) == SEED_INPUT_KEYS
+        and type(document["secret_arn"]) is str
+        and document["purpose"] in ROTATED_PURPOSES
+    )
+
+
+def _seed_invocation(props, sdk_path: bool) -> bool:
+    """Accept only the immutable, create-only seed call (S1.6, AD-06).
+
+    The ``input`` is inspected as ``_plain_task_environment`` inspects its
+    JSON: a deferred value passes to the later layer, and anything other
+    than a string of exactly ``{secret_arn, purpose}`` fails, including a
+    secret-marked input. The lifecycle scope must be the literal
+    ``CREATE_ONLY``; a qualifier, tenant, key or trigger fails.
+    """
+    payload = _inspectable(props.get("input"), sdk_path)
+    return (
+        (payload is DEFERRED or (type(payload) is str and _seed_payload(payload)))
+        and _read(props, "lifecycle_scope", "lifecycleScope", sdk_path)
+        == SEED_LIFECYCLE_SCOPE
+        and all(
+            _either(props, snake, camel, sdk_path) is None
+            for snake, camel in SEED_REFUSED_INPUTS
+        )
+        and all(props.get(key) is None for key in SEED_REFUSED_PLAIN_INPUTS)
+    )
+
+
+def _d5_rotation(props, sdk_path: bool) -> bool:
+    """Accept only the D-5 90-day rotation that waits for its seed (S1.6).
+
+    ``rotateImmediately`` must be the literal ``False`` and the rules a plain
+    map of ``automaticallyAfterDays`` = 90 alone; a schedule expression, a
+    duration or an opaque value fails closed. The engine path deserializes
+    every number as a float, so ``90.0`` is that same day count.
+    """
+    rules = _fields(_either(props, "rotation_rules", "rotationRules", sdk_path))
+    days = "automatically_after_days" if sdk_path else "automaticallyAfterDays"
+    return (
+        _read(props, "rotate_immediately", "rotateImmediately", sdk_path) is False
+        and rules is not None
+        and set(rules) == {days}
+        and type(rules[days]) in (int, float)
+        and rules[days] == ROTATION_SCHEDULE_DAYS
+    )
+
+
+def _deny_only_document(value: Any) -> bool:
+    """Accept a policy JSON whose every statement denies every principal."""
+    try:
+        document = json.loads(value, object_pairs_hook=_unique_keys)
+    except (ValueError, TypeError):
+        return False
+    statements = document.get("Statement") if type(document) is dict else None
+    return (
+        type(statements) is list
+        and bool(statements)
+        and all(
+            type(statement) is dict
+            and statement.get("Effect") == "Deny"
+            and statement.get("Principal") == "*"
+            for statement in statements
+        )
+    )
+
+
+def _deny_only_secret_policy(props, sdk_path: bool) -> bool:
+    """Accept only a deny-only, public-blocking secret policy (S1.5, AD-08).
+
+    ``blockPublicPolicy`` must be the literal ``True``. The ``policy`` is
+    inspected as the seed input is: a deferred value passes to the later
+    layer, and anything but a JSON document whose statements are all
+    ``Deny`` for ``Principal "*"`` fails, so no statement can grant access.
+    """
+    document = _inspectable(props.get("policy"), sdk_path)
+    return _read(
+        props, "block_public_policy", "blockPublicPolicy", sdk_path
+    ) is True and (
+        document is DEFERRED
+        or (type(document) is str and _deny_only_document(document))
+    )
+
+
 def _reviewed_secret(props, sdk_path: bool) -> bool:
     """Apply both secret rules: no inline policy and no Redis secret (S1.3, S1.4)."""
     return _no_inline_secret_policy(props, sdk_path) and _not_a_redis_secret(
@@ -740,7 +850,10 @@ def _reviewed_secret(props, sdk_path: bool) -> bool:
 # sends its actions only to the alarm topic (S2.4 gate I1). The default SG has
 # no secret input; it is checked because FR-16 allows it no rule (S3.2). The
 # flow log and the bucket have no secret input; they are checked because
-# FR-15 allows no IAM role and no ``force_destroy`` (S3.1). Each
+# FR-15 allows no IAM role and no ``force_destroy`` (S3.1). The seed
+# Invocation's ``input`` could carry material, so it must be exactly
+# ``{secret_arn, purpose}`` (FR-09); the rotation is checked because D-5 fixes
+# its schedule (S1.6). A SecretPolicy may only deny (S1.5, FR-07). Each
 # check gets the props and whether they come from the SDK path (snake_case,
 # raw inputs) rather than the engine path (camelCase, deserialized).
 HARDENED_PROPERTY_CHECKS = {
@@ -754,9 +867,12 @@ HARDENED_PROPERTY_CHECKS = {
     "aws:elasticache/replicationGroup:ReplicationGroup": _iam_redis_group,
     "aws:elasticache/user:User": _redis_user,
     "aws:elasticache/userGroup:UserGroup": _redis_user_group,
+    "aws:lambda/invocation:Invocation": _seed_invocation,
     "aws:lb/listener:Listener": _no_oidc_action,
     "aws:s3/bucketV2:BucketV2": _retained_bucket,
     "aws:secretsmanager/secret:Secret": _reviewed_secret,
+    "aws:secretsmanager/secretPolicy:SecretPolicy": _deny_only_secret_policy,
+    "aws:secretsmanager/secretRotation:SecretRotation": _d5_rotation,
     "aws:sesv2/emailIdentity:EmailIdentity": _easy_dkim_only,
     "aws:sns/topic:Topic": _runtime_cmk_topic,
 }
@@ -1009,6 +1125,10 @@ class WorkloadPhaseStack(RegistryPhaseStack):
                 settings=settings,
                 services=self.compute.scalable_services,
                 scaling=secrets.scaling,
+                secret_gates=[
+                    *self.runtime_secrets.rotations,
+                    *self.runtime_secrets.policies,
+                ],
                 opts=opts,
             )
         self._export_xp8()

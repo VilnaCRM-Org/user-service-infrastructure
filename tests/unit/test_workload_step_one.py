@@ -40,6 +40,11 @@ STEP_TWO_ADMITTED = frozenset(
         "aws:appautoscaling/policy:Policy",
         "aws:appautoscaling/scheduledAction:ScheduledAction",
         "aws:appautoscaling/target:Target",
+        # S1.6: the seed Invocation and the SecretRotation (AD-06).
+        "aws:lambda/invocation:Invocation",
+        "aws:secretsmanager/secretRotation:SecretRotation",
+        # S1.5: the deny-only SecretPolicy (AD-08).
+        "aws:secretsmanager/secretPolicy:SecretPolicy",
         "user-service-infrastructure:autoscaling:Plane",
     }
 )
@@ -160,8 +165,7 @@ def _log_group(engine_path, name, key=None, **extra):
     [
         (DOCDB_AUDIT, RUNTIME_CMK),
         (DOCDB_PROFILER, RUNTIME_CMK),
-        # The ECS groups get the runtime CMK in S1.8; S4.10 N3 checks them all.
-        (ECS_WEB, None),
+        # S1.8 binds the ECS groups to the runtime CMK too.
         (ECS_WEB, RUNTIME_CMK),
     ],
 )
@@ -182,6 +186,8 @@ def test_a_log_group_on_the_runtime_cmk_passes_the_guard(engine_path, name, key)
         (DOCDB_AUDIT, JWT_CMK),
         (DOCDB_PROFILER, "alias/aws/logs"),
         (ECS_WEB, JWT_CMK),
+        # S1.8 (D-4): an ECS group without the runtime CMK.
+        (ECS_WEB, None),
         # A name the guard cannot read could be a DocumentDB group.
         (None, RUNTIME_CMK),
         (42, RUNTIME_CMK),
@@ -260,7 +266,12 @@ def test_a_step_two_type_is_refused_at_step_one(engine, kind):
     with pytest.raises(ValueError, match="step-2 resource"):
         _reject_secret_material(args)
     # Step 2 admits each type only once its own story allowlists it: S2.1
-    # adds the autoscaling types; the seed, rotation and policy stay refused.
+    # adds the autoscaling types, S1.6 the seed and rotation and S1.5 the
+    # secret policy, whose empty inputs fail their property checks.
+    if kind in STEP_TWO_ADMITTED and kind in HARDENED_PROPERTY_CHECKS:
+        with pytest.raises(ValueError, match="unreviewed property"):
+            _reject_secret_material(args, step=2)
+        return
     if kind in STEP_TWO_ADMITTED:
         assert _reject_secret_material(args, step=2) is None
         return
@@ -269,7 +280,8 @@ def test_a_step_two_type_is_refused_at_step_one(engine, kind):
 
 
 def test_s2_1_admits_exactly_the_autoscaling_step_two_types():
-    """S2.1: the target, policy, scheduled action and their component."""
+    """S2.1: the target, policy, scheduled action and their component; S1.6:
+    the seed Invocation and the SecretRotation; S1.5: the SecretPolicy."""
     assert STEP_TWO_ADMITTED == STEP_TWO_TYPES & HARDENED_TYPES
 
 
@@ -588,6 +600,12 @@ def test_property_checks_cover_every_secret_bearing_rendered_type():
         # S3.1: no IAM role on the flow log, no force_destroy bucket (FR-15).
         "aws:ec2/flowLog:FlowLog",
         "aws:s3/bucketV2:BucketV2",
+        # S1.6: the seed input is exactly {secret_arn, purpose} (FR-09) and
+        # the rotation is the D-5 90-day schedule.
+        "aws:lambda/invocation:Invocation",
+        "aws:secretsmanager/secretRotation:SecretRotation",
+        # S1.5: a secret policy only denies and blocks public policies (FR-07).
+        "aws:secretsmanager/secretPolicy:SecretPolicy",
     }
     assert set(HARDENED_PROPERTY_CHECKS) <= HARDENED_TYPES
 
